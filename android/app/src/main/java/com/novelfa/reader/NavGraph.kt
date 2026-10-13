@@ -14,6 +14,7 @@ import com.novelfa.reader.data.Importer
 import com.novelfa.reader.data.ReaderDb
 import com.novelfa.reader.library.LibraryScreen
 import com.novelfa.reader.library.LibraryViewModel
+import com.novelfa.reader.reader.ReaderScreen
 
 @Composable
 fun NavGraph() {
@@ -35,7 +36,18 @@ fun NavGraph() {
         composable(
             route = Routes.READER,
             arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
-        ) { Text("Reader") }
+        ) { backStackEntry ->
+            val context = LocalContext.current
+            val db = remember {
+                Room.databaseBuilder(context, ReaderDb::class.java, "reader.db").build()
+            }
+            val bookId = backStackEntry.arguments?.getString("bookId") ?: ""
+            ReaderScreen(
+                bookId = bookId,
+                dao = db.bookDao(),
+                onClose = { navController.popBackStack() }
+            )
+        }
         composable(Routes.SETTINGS) { Text("Settings") }
     }
 }
