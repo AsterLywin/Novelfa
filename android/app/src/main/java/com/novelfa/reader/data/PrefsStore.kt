@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "prefs")
@@ -21,6 +22,10 @@ class PrefsStore(private val context: Context) {
         val CHAR_THEME = stringPreferencesKey("charTheme")
         val FONT_SIZE = intPreferencesKey("fontSize")
         val SUPPORT_ENABLED = booleanPreferencesKey("supportEnabled")
+
+        // Task 7 additive keys (RankService prefs "MaxRank"/"SecretThemes").
+        val MAX_RANK = stringPreferencesKey("MaxRank")
+        val SECRET_THEMES = stringPreferencesKey("SecretThemes")
     }
 
     val theme: Flow<String> = context.dataStore.data.map { it[THEME] ?: "dark" }
@@ -47,5 +52,13 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setSupportEnabled(value: Boolean) {
         context.dataStore.edit { it[SUPPORT_ENABLED] = value }
+    }
+
+    // Task 7 additive generic string access (used by RankService wiring).
+    suspend fun getString(key: Preferences.Key<String>, default: String): String =
+        context.dataStore.data.map { it[key] ?: default }.first()
+
+    suspend fun setString(key: Preferences.Key<String>, value: String) {
+        context.dataStore.edit { it[key] = value }
     }
 }

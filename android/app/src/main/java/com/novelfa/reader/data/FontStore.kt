@@ -16,4 +16,7 @@ class FontStore(private val context: Context) {
     fun list(): List<File> = fontsDir().listFiles()?.toList() ?: emptyList()
 
     fun isAvailable(f: File): Boolean = f.exists()
+
+    // Task 7 additive: remove a user-added font by stored file name.
+    fun deleteFont(name: String): Boolean = File(fontsDir(), name).delete()
 }
