@@ -1,0 +1,238 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Window x:Class="EpubReader.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf" Title="کتاب‌خوان" Height="780" Width="1240" MinWidth="960" MinHeight="600" WindowStartupLocation="CenterScreen" WindowStyle="None" Background="{DynamicResource BgDark}" FlowDirection="RightToLeft" ResizeMode="CanResizeWithGrip" PreviewKeyDown="Window_PreviewKeyDown">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Name="TitleRow" Height="52" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <Border Name="TitleBar" Grid.Row="0" Background="{DynamicResource BgSidebar}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="0,0,0,1" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <DockPanel>
+                <StackPanel Orientation="Horizontal" Margin="20,0,0,0" VerticalAlignment="Center">
+                    <Image Source="Assets/AppLogo.png" Width="36" Height="36" VerticalAlignment="Center" SnapsToDevicePixels="True" RenderOptions.BitmapScalingMode="HighQuality" />
+                    <TextBlock Text="کتاب‌خوان" Foreground="{DynamicResource TextColor}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Margin="10,0,0,0" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Name="btnMinimize" Style="{StaticResource TitleBarButton}" Height="52" Click="btnMinimize_Click">
+                        <Path Style="{StaticResource Ico}" Data="{StaticResource IcoMinimize}" StrokeThickness="1.2" />
+                    </Button>
+                    <Button Name="btnMaximize" Style="{StaticResource TitleBarButton}" Height="52" ToolTip="بزرگ‌نمایی" Click="btnMaximize_Click">
+                        <Path Name="icoMaximize" Style="{StaticResource Ico}" Data="{StaticResource IcoMaximize}" StrokeThickness="1.2" />
+                    </Button>
+                    <Button Name="btnClose" Style="{StaticResource TitleBarCloseButton}" Height="52" Click="btnClose_Click">
+                        <Path Style="{StaticResource Ico}" Data="{StaticResource IcoClose}" StrokeThickness="1.2" />
+                    </Button>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+        <Grid Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Name="SidebarColumn" Width="280" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.ColumnSpan="2" IsHitTestVisible="False" Background="{DynamicResource ThemeAuraA}" />
+            <Border Grid.ColumnSpan="2" IsHitTestVisible="False" Background="{DynamicResource ThemeAuraB}" />
+            <Border Name="SidebarBorder" Grid.Column="0" Background="{DynamicResource BgSidebar}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="0,0,1,0">
+                <Grid>
+                <Path Data="{DynamicResource ThemeEmblem}" Fill="{DynamicResource AccentGradient}" Stretch="Uniform" Width="230" Height="230" Opacity="0.07" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,30" IsHitTestVisible="False" Visibility="{DynamicResource ThemeArtVisibility}"><UIElement.CacheMode><BitmapCache /></UIElement.CacheMode></Path>
+                <DockPanel Margin="18,22,10,12">
+                    <StackPanel DockPanel.Dock="Top" Margin="4,0,8,0">
+                        <TextBlock Text="در حال خواندن" Foreground="{DynamicResource TextMuted}" FontSize="11" FontWeight="SemiBold" />
+                        <TextBlock Name="txtBookTitle" Text="" Foreground="{DynamicResource TextColor}" FontSize="17" FontWeight="Bold" TextWrapping="Wrap" MaxHeight="72" TextTrimming="CharacterEllipsis" Margin="0,8,0,18" />
+                        <Button Name="btnOpen" Style="{StaticResource SoftButton}" HorizontalAlignment="Stretch" Click="btnOpen_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource Ico}" Data="{StaticResource IcoFile}" />
+                                <TextBlock Text="باز کردن فایل EPUB" Margin="8,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <TextBlock Text="فهرست فصل‌ها" Foreground="{DynamicResource TextMuted}" FontSize="11" FontWeight="SemiBold" Margin="0,26,0,8" />
+                    </StackPanel>
+                    <ListBox Name="listBoxChapters" Background="#00FFFFFF" BorderThickness="0" ItemContainerStyle="{StaticResource ChapterListItem}" ScrollViewer.CanContentScroll="False" SelectionChanged="listBoxChapters_SelectionChanged">
+                        <Control.Template>
+                            <ControlTemplate TargetType="{x:Type ListBox}">
+                                <ScrollViewer Style="{StaticResource ModernScrollViewer}" Padding="{TemplateBinding Control.Padding}">
+                                    <ItemsPresenter />
+                                </ScrollViewer>
+                            </ControlTemplate>
+                        </Control.Template>
+                    </ListBox>
+                </DockPanel>
+                </Grid>
+            </Border>
+            <Grid Name="ContentGrid" Column="1" Margin="28,20,28,18">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <DockPanel Name="TopBar" Grid.Row="0" Margin="0,0,0,18">
+                    <StackPanel Name="ChapterTitleBar" DockPanel.Dock="Left" VerticalAlignment="Center" MaxWidth="240">
+                        <TextBlock Text="فصل فعلی" Foreground="{DynamicResource AccentColor}" FontSize="11" FontWeight="SemiBold" />
+                        <TextBlock Name="txtChapterTitle" TextTrimming="CharacterEllipsis" Text="فصلی انتخاب نشده" Foreground="{DynamicResource TextColor}" FontSize="24" FontWeight="Bold" Margin="0,4,0,0" />
+                    </StackPanel>
+                    <Border HorizontalAlignment="Right" VerticalAlignment="Center" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="14" Padding="10,6">
+                        <WrapPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource Ico}" Data="{StaticResource IcoFont}" Stroke="{DynamicResource TextMuted}" Margin="4,0,8,0" />
+                            <Border Width="110" Height="32" CornerRadius="8" Margin="0,0,6,0" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1">
+                                <Grid>
+                                    <Path Style="{StaticResource Ico}" Data="{StaticResource IcoSearch}" Stroke="{DynamicResource TextMuted}" HorizontalAlignment="Left" Margin="10,0,0,0" Width="14" Height="14" Stretch="Uniform" />
+                                    <TextBox Name="txtFontSearch" Background="#00FFFFFF" BorderThickness="0" VerticalAlignment="Center" VerticalContentAlignment="Center" Padding="30,0,8,0" FontSize="12" TextChanged="txtFontSearch_TextChanged" />
+                                    <TextBlock Text="جستجوی فونت..." Foreground="{DynamicResource TextMuted}" FontSize="12" VerticalAlignment="Center" Margin="32,0,0,0" IsHitTestVisible="False">
+      <FrameworkElement.Style>
+        <Style TargetType="{x:Type TextBlock}">
+          <Setter Property="Visibility" Value="Collapsed" />
+          <Style.Triggers>
+            <DataTrigger Value="" Binding="{Binding Text, ElementName=txtFontSearch}">
+              <Setter Property="Visibility" Value="Visible" />
+            </DataTrigger>
+          </Style.Triggers>
+        </Style>
+      </FrameworkElement.Style>
+                                    </TextBlock>
+                                </Grid>
+                            </Border>
+                            <ComboBox Name="cmbFontFamily" Width="150" Height="32" FontSize="12" MaxDropDownHeight="320" SelectionChanged="cmbFontFamily_SelectionChanged" PreviewTextInput="cmbFontFamily_PreviewTextInput" PreviewKeyDown="cmbFontFamily_PreviewKeyDown" />
+                            <Button Name="btnAddFont" Width="32" Height="32" Padding="0" Margin="6,0,0,0" Background="#00FFFFFF" ToolTip="افزودن فونت شخصی" Click="btnAddFont_Click">
+                                <Path Style="{StaticResource Ico}" Data="{StaticResource IcoPlus}" Stroke="{DynamicResource TextColor}" />
+
+                            </Button>
+
+                            <Border Width="1" Height="20" Background="{DynamicResource BorderColor}" Margin="10,0" />
+                            <Button Name="btnFontDecrease" Content="A−" Width="32" Height="32" Padding="0" Background="#00FFFFFF" Click="btnFontDecrease_Click" />
+                            <TextBox Name="txtFontSize" Text="18" Width="40" Height="26" MaxLength="2" Margin="2,0" Padding="0" FontSize="12" FontWeight="SemiBold" TextAlignment="Center" VerticalContentAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource TextColor}" CaretBrush="{DynamicResource TextColor}" Background="#00FFFFFF" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" ToolTip="سایز فونت (۱۰ تا ۷۲): عدد بنویس و Enter بزن" PreviewTextInput="txtFontSize_PreviewTextInput" PreviewKeyDown="txtFontSize_PreviewKeyDown" LostFocus="txtFontSize_LostFocus" />
+                            <Button Name="btnFontIncrease" Content="A+" Width="32" Height="32" Padding="0" Background="#00FFFFFF" Click="btnFontIncrease_Click" />
+                            <Button Name="btnSpacing" Width="32" Height="32" Padding="0" Margin="6,0,0,0" Background="#00FFFFFF" ToolTip="تنظیمات فاصله‌ها" Click="btnSpacing_Click">
+                                <Path Style="{StaticResource Ico}" Data="M5,3 H14 M5,8 H14 M5,13 H14 M2.5,4.5 V11.5 M1,6 L2.5,4.5 L4,6 M1,10 L2.5,11.5 L4,10" Stroke="{DynamicResource TextColor}" />
+                            </Button>
+                            <Popup Name="popupSpacing" PlacementTarget="{Binding ElementName=btnSpacing}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade" Closed="popupSpacing_Closed">
+                                <Border Margin="12,4,12,18" Width="300" Padding="16" CornerRadius="14" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" FlowDirection="RightToLeft">
+                                    <Border.Effect>
+                                        <DropShadowEffect Color="{DynamicResource ShadowColor}" BlurRadius="24" ShadowDepth="4" Opacity="0.4" Direction="270" />
+                                    </Border.Effect>
+                                    <Border.Resources>
+                                        <Style x:Key="SpacingSlider" TargetType="{x:Type Slider}">
+                                            <Setter Property="Height" Value="22" />
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="{x:Type Slider}">
+                                                        <Grid>
+                                                            <Border Height="4" CornerRadius="2" Background="{DynamicResource BorderColor}" VerticalAlignment="Center" />
+                                                            <Track Name="PART_Track" Orientation="Horizontal">
+                                                                <Track.DecreaseRepeatButton>
+                                                                    <RepeatButton Command="Slider.DecreaseLarge" Focusable="False">
+                                                                        <RepeatButton.Template>
+                                                                            <ControlTemplate TargetType="{x:Type RepeatButton}">
+                                                                                <Border Height="4" CornerRadius="2" Background="{DynamicResource AccentColor}" VerticalAlignment="Center" />
+                                                                            </ControlTemplate>
+                                                                        </RepeatButton.Template>
+                                                                    </RepeatButton>
+                                                                </Track.DecreaseRepeatButton>
+                                                                <Track.IncreaseRepeatButton>
+                                                                    <RepeatButton Command="Slider.IncreaseLarge" Focusable="False">
+                                                                        <RepeatButton.Template>
+                                                                            <ControlTemplate TargetType="{x:Type RepeatButton}">
+                                                                                <Border Height="22" Background="#00FFFFFF" />
+                                                                            </ControlTemplate>
+                                                                        </RepeatButton.Template>
+                                                                    </RepeatButton>
+                                                                </Track.IncreaseRepeatButton>
+                                                                <Track.Thumb>
+                                                                    <Thumb Width="16" Height="16">
+                                                                        <Thumb.Template>
+                                                                            <ControlTemplate TargetType="{x:Type Thumb}">
+                                                                                <Ellipse Fill="{DynamicResource AccentColor}" Stroke="{DynamicResource BgCard}" StrokeThickness="2" />
+                                                                            </ControlTemplate>
+                                                                        </Thumb.Template>
+                                                                    </Thumb>
+                                                                </Track.Thumb>
+                                                            </Track>
+                                                        </Grid>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </Border.Resources>
+                                    <StackPanel>
+                                        <TextBlock Text="تنظیمات فاصله‌ها" Foreground="{DynamicResource TextColor}" FontSize="14" FontWeight="Bold" Margin="0,0,0,14" />
+
+                                        <DockPanel Margin="0,0,0,4">
+                                            <TextBlock Name="txtLineHeightVal" DockPanel.Dock="Left" Foreground="{DynamicResource AccentColor}" FontSize="12" FontWeight="SemiBold" />
+                                            <TextBlock Text="فاصله‌ی خطوط" Foreground="{DynamicResource TextMuted}" FontSize="12" />
+                                        </DockPanel>
+                                        <Slider Name="sldLineHeight" Style="{StaticResource SpacingSlider}" Minimum="1.2" Maximum="3" Value="1.8" TickFrequency="0.1" IsSnapToTickEnabled="True" SmallChange="0.1" LargeChange="0.2" ValueChanged="Spacing_ValueChanged" Margin="0,0,0,14" />
+
+                                        <DockPanel Margin="0,0,0,4">
+                                            <TextBlock Name="txtSideMarginVal" DockPanel.Dock="Left" Foreground="{DynamicResource AccentColor}" FontSize="12" FontWeight="SemiBold" />
+                                            <TextBlock Text="حاشیه‌ی کناری متن" Foreground="{DynamicResource TextMuted}" FontSize="12" />
+                                        </DockPanel>
+                                        <Slider Name="sldSideMargin" Style="{StaticResource SpacingSlider}" Minimum="0" Maximum="160" Value="24" TickFrequency="4" IsSnapToTickEnabled="True" SmallChange="4" LargeChange="12" ValueChanged="Spacing_ValueChanged" Margin="0,0,0,14" />
+
+                                        <DockPanel Margin="0,0,0,4">
+                                            <TextBlock Name="txtParagraphVal" DockPanel.Dock="Left" Foreground="{DynamicResource AccentColor}" FontSize="12" FontWeight="SemiBold" />
+                                            <TextBlock Text="فاصله‌ی بین پاراگراف‌ها" Foreground="{DynamicResource TextMuted}" FontSize="12" />
+                                        </DockPanel>
+                                        <Slider Name="sldParagraph" Style="{StaticResource SpacingSlider}" Minimum="0" Maximum="2.5" Value="0" TickFrequency="0.1" IsSnapToTickEnabled="True" SmallChange="0.1" LargeChange="0.3" ValueChanged="Spacing_ValueChanged" Margin="0,0,0,16" />
+
+                                        <Button Content="بازگشت به پیش‌فرض" Style="{StaticResource SoftButton}" HorizontalAlignment="Stretch" Click="btnSpacingReset_Click" />
+                                    </StackPanel>
+                                </Border>
+                            </Popup>
+                            <Border Width="1" Height="20" Background="{DynamicResource BorderColor}" Margin="10,0" />
+                            <StackPanel Name="ThemePanel" Orientation="Horizontal" VerticalAlignment="Center" Margin="4,0" />
+                            <Button Name="btnFullScreen" Background="#00FFFFFF" Padding="10,6" ToolTip="{Binding Text, ElementName=txtFullScreen}" Click="btnFullScreen_Click">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Name="icoFullScreen" Style="{StaticResource Ico}" Data="{StaticResource IcoFullscreen}" />
+                                    <TextBlock Name="txtFullScreen" Text="تمام صفحه" Visibility="Collapsed" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                        </WrapPanel>
+                    </Border>
+                </DockPanel>
+                <Border Name="ReaderCard" Grid.Row="1" Background="{DynamicResource BgCard}" CornerRadius="18" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" Padding="6">
+                    <UIElement.Effect>
+                        <DropShadowEffect Color="{DynamicResource ShadowColor}" BlurRadius="30" ShadowDepth="6" Opacity="0.45" Direction="270" />
+                    </UIElement.Effect>
+                    <Grid FlowDirection="LeftToRight">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="14" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Name="sbTrack" Grid.Column="0" Background="#01000000" SizeChanged="sbTrack_SizeChanged" MouseLeftButtonDown="sbTrack_MouseLeftButtonDown" MouseMove="sbTrack_MouseMove" MouseLeftButtonUp="sbTrack_MouseLeftButtonUp" LostMouseCapture="sbTrack_LostMouseCapture" MouseEnter="sbTrack_MouseEnter" MouseLeave="sbTrack_MouseLeave">
+                            <Border Name="sbThumb" Width="6" Height="40" CornerRadius="3" HorizontalAlignment="Center" VerticalAlignment="Top" Opacity="0.75" Visibility="Collapsed" Background="{DynamicResource AccentColor}" />
+                        </Border>
+                        <wv2:WebView2 Name="webBrowser1" Grid.Column="1" />
+                    </Grid>
+                </Border>
+                <Grid Name="BottomBar" Row="2" Margin="0,18,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button Name="btnPrevChapter" Grid.Column="0" HorizontalAlignment="Left" Padding="18,11" BorderBrush="{DynamicResource BorderColor}" Click="btnPrevChapter_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource Ico}" Data="{StaticResource IcoArrowBack}" />
+                            <TextBlock Text="فصل قبلی" Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Border Grid.Column="1" Background="{DynamicResource BgCard}" CornerRadius="22" Padding="6" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Name="txtChapterPosition" Text="" Foreground="{DynamicResource TextMuted}" FontSize="12" VerticalAlignment="Center" Margin="14,0,12,0" />
+                            <Button Name="btnContinuousMode" Padding="12,7" Background="{DynamicResource HoverColor}" Foreground="{DynamicResource TextMuted}" Click="btnContinuousMode_Click">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Style="{StaticResource Ico}" Data="{StaticResource IcoScroll}" />
+                                    <TextBlock Name="txtContinuous" Text="حالت پیوسته: خاموش" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </Border>
+                    <Button Name="btnNextChapter" Grid.Column="2" HorizontalAlignment="Right" Style="{StaticResource ModernButton}" Padding="20,11" Click="btnNextChapter_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="فصل بعدی" VerticalAlignment="Center" />
+                            <Path Style="{StaticResource Ico}" Data="{StaticResource IcoArrowForward}" Margin="8,0,0,0" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

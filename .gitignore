@@ -1,0 +1,23 @@
+# Visual Studio / MSBuild
+.vs/
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+TestResults/
+# Build outputs
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]uild/
+# NuGet
+*.nupkg
+packages/
+# OS
+Thumbs.db
+Desktop.ini
+# Archives
+*.zip

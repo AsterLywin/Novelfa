@@ -1,0 +1,37 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Window x:Class="EpubReader.CollectionPickerWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="افزودن به مجموعه" Height="460" Width="380" WindowStartupLocation="CenterScreen" WindowStyle="None" AllowsTransparency="True" Background="#00FFFFFF" FlowDirection="RightToLeft" ResizeMode="NoResize" ShowInTaskbar="False">
+  <Border Background="{DynamicResource BgDark}" Margin="16" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="14" MouseLeftButtonDown="Border_MouseLeftButtonDown">
+    <UIElement.Effect>
+      <DropShadowEffect Color="{DynamicResource ShadowColor}" BlurRadius="24" ShadowDepth="4" Opacity="0.6" />
+    </UIElement.Effect>
+    <Grid Margin="22">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+      <TextBlock Grid.Row="0" Text="انتخاب یا ساخت مجموعه" Foreground="{DynamicResource TextColor}" FontSize="15" FontWeight="Bold" Margin="0,0,0,14" />
+      <TextBlock Grid.Row="1" Text="مجموعه‌های موجود" Foreground="{DynamicResource TextMuted}" FontSize="11" Margin="0,0,0,6" />
+      <Border Grid.Row="2" Background="{DynamicResource BgCard}" CornerRadius="10" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" Margin="0,0,0,14" Padding="2,4">
+        <ListBox Name="listExisting" Background="#00FFFFFF" BorderThickness="0" Foreground="{DynamicResource TextColor}">
+          <Control.Template>
+            <ControlTemplate TargetType="{x:Type ListBox}">
+              <ScrollViewer Style="{StaticResource ModernScrollViewer}">
+                <ItemsPresenter />
+              </ScrollViewer>
+            </ControlTemplate>
+          </Control.Template>
+        </ListBox>
+      </Border>
+      <TextBlock Grid.Row="3" Text="یا اسم یه مجموعه جدید بنویس:" Foreground="{DynamicResource TextMuted}" FontSize="11" Margin="0,0,0,6" />
+      <TextBox Name="txtNewName" Grid.Row="4" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" Padding="10,8" FontSize="13" Margin="0,0,0,18" />
+      <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Center">
+        <Button Name="btnOk" Content="تایید" Width="110" Margin="0,0,10,0" Style="{StaticResource ModernButton}" IsDefault="True" Click="btnOk_Click" />
+        <Button Name="btnCancel" Content="انصراف" Width="110" Padding="16,10" IsCancel="True" Click="btnCancel_Click" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</Window>
