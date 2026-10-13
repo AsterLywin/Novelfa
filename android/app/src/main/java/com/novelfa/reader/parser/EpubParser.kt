@@ -39,7 +39,10 @@ object EpubParser {
             val el = metas.item(i)
             if (el.attributes.getNamedItem("name")?.nodeValue == "cover") {
                 val cid = el.attributes.getNamedItem("content")?.nodeValue
-                if (cid != null && manifest.containsKey(cid)) coverHref = manifest[cid]!!.first
+                if (cid != null && manifest.containsKey(cid)) {
+                    coverHref = manifest[cid]!!.first
+                    break
+                }
             }
         }
         if (coverHref == null) {
