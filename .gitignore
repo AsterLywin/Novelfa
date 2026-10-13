@@ -21,3 +21,11 @@ Thumbs.db
 Desktop.ini
 # Archives
 *.zip
+# SDD working scratch (ledgers, briefs, reports) — never commit
+.superpowers/
+# Gradle / Android local state
+.gradle/
+local.properties
+*.iml
+.idea/
+captures/
