@@ -34,6 +34,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,6 +87,10 @@ fun ReaderScreen(
     var webView by remember { mutableStateOf<android.webkit.WebView?>(null) }
     var spacingOpen by remember { mutableStateOf(false) }
     var supportOpen by remember { mutableStateOf(false) }
+    // Task 9: continuous survives rotation/process death (index is restored
+    // from the DB via saveProgress, which is authoritative; a fresh entry
+    // without saved state opens in single-chapter mode).
+    var continuousUi by rememberSaveable { mutableStateOf(false) }
 
     val chapterErr = stringResource(R.string.couldn_t_display_the_chapter)
     val openErr = stringResource(R.string.couldn_t_open_the_book)
@@ -131,6 +136,7 @@ fun ReaderScreen(
                 dao, bookId, entity.copy(totalChapters = parsed.chapters.size),
                 parsed.chapters, fontFiles = files
             )
+            v.continuous = continuousUi
             val target = entity.lastChapterIndex.coerceIn(0, parsed.chapters.size - 1)
             if (!v.loadChapter(target)) {
                 throw IOException(v.lastError ?: "")
@@ -271,6 +277,7 @@ fun ReaderScreen(
                                 onCheckedChange = {
                                     val vv = vm ?: return@Switch
                                     vv.continuous = it
+                                    continuousUi = it
                                     rev++
                                 }
                             )

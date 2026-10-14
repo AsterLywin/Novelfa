@@ -197,4 +197,43 @@ class ReaderViewModelTest {
         assertEquals(1.2, saved.lineHeight, 0.001)
         assertEquals(0, saved.sideMargin)
     }
+
+    private fun manyChapters(n: Int): List<Chapter> {
+        val dir = tmp.newFolder("many")
+        return (0 until n).map { i ->
+            val f = dir.resolve("ch$i.xhtml").apply {
+                writeText("<html><body><p>Body[$i]</p></body></html>", Charsets.UTF_8)
+            }
+            Chapter("فصل ${i + 1}", f)
+        }
+    }
+
+    @Test
+    fun continuousWindow_capsSpanAt7_onAppend() = runBlocking {
+        val dao = FakeReaderDao(listOf(book()))
+        val v = vm(dao, manyChapters(12))
+        v.continuous = true
+        assertTrue(v.loadChapter(0))
+        repeat(10) { assertTrue(v.appendNext()) }
+        assertEquals(10, v.contLast)
+        assertTrue(v.contLast - v.contFirst + 1 <= ReaderViewModel.MAX_WINDOW_SPAN)
+        // Overflow rebuilds the window: WebView must reload, not append.
+        assertEquals("full", v.lastChunkKind)
+        assertTrue(v.html.contains("Body[10]"))
+        assertFalse(v.html.contains("Body[0]"))
+    }
+
+    @Test
+    fun continuousWindow_capsSpanAt7_onPrepend() = runBlocking {
+        val dao = FakeReaderDao(listOf(book()))
+        val v = vm(dao, manyChapters(12))
+        v.continuous = true
+        assertTrue(v.loadChapter(11))
+        repeat(10) { assertTrue(v.prependPrev()) }
+        assertEquals(1, v.contFirst)
+        assertTrue(v.contLast - v.contFirst + 1 <= ReaderViewModel.MAX_WINDOW_SPAN)
+        assertEquals("full", v.lastChunkKind)
+        assertTrue(v.html.contains("Body[1]"))
+        assertFalse(v.html.contains("Body[11]"))
+    }
 }

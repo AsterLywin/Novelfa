@@ -33,6 +33,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,8 +71,10 @@ fun LibraryScreen(
     onOpenBook: (String) -> Unit,
     viewModel: LibraryViewModel
 ) {
-    var tab by remember { mutableStateOf(Tab.ALL) }
-    var query by remember { mutableStateOf("") }
+    // Task 9: tab + query survive rotation/process death (DB is NOT
+    // involved here — this is pure UI state).
+    var tab by rememberSaveable { mutableStateOf(Tab.ALL) }
+    var query by rememberSaveable { mutableStateOf("") }
     val books by viewModel.filtered(tab, query).collectAsState(initial = emptyList())
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()

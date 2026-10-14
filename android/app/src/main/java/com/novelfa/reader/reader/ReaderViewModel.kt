@@ -74,6 +74,16 @@ class ReaderViewModel(
     val chapterTitle: String
         get() = chapters.getOrNull(index)?.title ?: ""
 
+    companion object {
+        /**
+         * Rendered-window cap for continuous mode (Task 9): unbounded appends
+         * grow the WebView DOM until it ANRs on long books. Overflow drops the
+         * far end and rebuilds [html] from the window with [lastChunkKind]
+         * "full" so the WebView reloads instead of appending.
+         */
+        const val MAX_WINDOW_SPAN = 7
+    }
+
     private var lastSaveMs: Long = 0L
 
     init {
@@ -146,6 +156,7 @@ class ReaderViewModel(
             lastChunk = chunk
             lastChunkKind = "append"
             lastError = null
+            trimWindow(keepTail = true)
             return true
         } catch (e: Exception) {
             lastError = e.message
@@ -178,6 +189,7 @@ class ReaderViewModel(
             lastPrependDivider = divider
             lastChunkKind = "prepend"
             lastError = null
+            trimWindow(keepTail = false)
             return true
         } catch (e: Exception) {
             lastError = e.message
@@ -188,11 +200,54 @@ class ReaderViewModel(
     }
 
     /**
+     * Caps the rendered window at [MAX_WINDOW_SPAN] chapters. [keepTail] is
+     * true when appending (user scrolls down: drop from the top) and false
+     * when prepending (drop from the bottom). Rebuilds [html] from the window
+     * so the WebView reloads ([lastChunkKind] "full") instead of growing the
+     * DOM forever. No-op while the span fits.
+     */
+    private fun trimWindow(keepTail: Boolean) {
+        if (contLast - contFirst + 1 <= MAX_WINDOW_SPAN) return
+        if (keepTail) {
+            contFirst = contLast - MAX_WINDOW_SPAN + 1
+        } else {
+            contLast = contFirst + MAX_WINDOW_SPAN - 1
+        }
+        html = rebuildWindowHtml()
+        lastChunk = null
+        lastPrependDivider = ""
+        lastChunkKind = "full"
+    }
+
+    /**
+     * Rebuilds the full page from [contFirst]..[contLast] with the same
+     * wrapping/divider conventions as [loadChapter]/[appendNext]: the first
+     * window chapter is plain, later ones carry their own-title divider.
+     */
+    private fun rebuildWindowHtml(): String {
+        val sb = StringBuilder()
+        for (i in contFirst..contLast) {
+            val body = readPrepared(i)
+            val inner = if (i == contFirst) {
+                body
+            } else {
+                ChapterDivider.divider(chapters[i].title, theme) + body
+            }
+            sb.append("<div class=\"rdr-chap\" data-idx=\"").append(i).append("\"")
+                .append(HtmlText.chapterDirAttr(body)).append(">").append(inner).append("</div>")
+        }
+        return HtmlBuilder.build(
+            baseUrl, sb.toString(), theme, fontFamily, fontSize,
+            lineHeight, sideMargin, paragraphSpacing, isEnglish,
+            HtmlBuilder.fontFaceCss(fontFamily, fontFiles), docGen
+        )
+    }
+
+    /**
      * Scroll-bridge entry: near-bottom (top+client >= height-300) appends,
      * else top == 0 prepends. Only in continuous mode.
      */
-    suspend fun onScroll(top: Int, height: Int, client: Int) {
-        if (!continuous || isAppending) {
+    suspend fun onScroll(top: Int, height: Int, client: Int) {        if (!continuous || isAppending) {
             return
         }
         if (top + client >= height - 300) {
