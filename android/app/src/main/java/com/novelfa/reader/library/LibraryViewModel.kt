@@ -7,6 +7,7 @@ import com.novelfa.reader.data.Importer
 import com.novelfa.reader.data.SortFa
 import com.novelfa.reader.data.isCompleted
 import com.novelfa.reader.data.isInProgress
+import com.novelfa.reader.settings.CollectionManager
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -58,6 +59,9 @@ class LibraryViewModel(
 ) {
     val books: Flow<List<BookEntity>> = dao.allBooks()
 
+    /** Task 8 collection/book ops (pure logic in CollectionManager). */
+    val collections = CollectionManager(dao)
+
     fun filtered(tab: Tab, query: String): Flow<List<BookEntity>> =
         dao.allBooks().map { applyFilter(it, tab, query) }
 
@@ -73,6 +77,24 @@ class LibraryViewModel(
     suspend fun setCollection(book: BookEntity, name: String?) {
         dao.update(book.copy(collectionName = name?.takeIf { it.isNotBlank() }))
     }
+
+    // Task 8 delegates (rename/delete collections, reset progress, remove
+    // book incl. files, private toggle, collection membership).
+    suspend fun renameCollection(old: String, new: String) =
+        collections.renameCollection(old, new)
+
+    suspend fun deleteCollection(name: String) = collections.deleteCollection(name)
+
+    suspend fun allCollectionNames(): List<String> = collections.allCollectionNames()
+
+    suspend fun resetProgress(book: BookEntity) = collections.resetProgress(book.id)
+
+    suspend fun removeBook(book: BookEntity) = collections.removeBook(book.id)
+
+    suspend fun togglePrivate(book: BookEntity) = collections.togglePrivate(book.id)
+
+    suspend fun removeFromCollection(book: BookEntity) =
+        collections.removeFromCollection(book.id)
 }
 
 internal fun applyFilter(

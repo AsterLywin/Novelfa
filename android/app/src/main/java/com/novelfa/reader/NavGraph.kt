@@ -1,6 +1,5 @@
 package com.novelfa.reader
 
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
@@ -10,11 +9,20 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.room.Room
+import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.Importer
+import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.ReaderDb
 import com.novelfa.reader.library.LibraryScreen
 import com.novelfa.reader.library.LibraryViewModel
 import com.novelfa.reader.reader.ReaderScreen
+import com.novelfa.reader.settings.PinManager
+import com.novelfa.reader.settings.PrefsStorePinPrefs
+import com.novelfa.reader.settings.PrefsStoreSupportPrefs
+import com.novelfa.reader.settings.SettingsRoute
+import com.novelfa.reader.settings.SettingsViewModel
+import com.novelfa.reader.settings.SupportTracker
+import com.novelfa.reader.theme.PrefsStoreRankPrefs
 
 @Composable
 fun NavGraph() {
@@ -25,8 +33,14 @@ fun NavGraph() {
             val db = remember {
                 Room.databaseBuilder(context, ReaderDb::class.java, "reader.db").build()
             }
+            val prefs = remember { PrefsStore(context) }
+            // Task 8: real PIN gate (was NoPinGate) + rank/support prefs.
             val viewModel = remember {
-                LibraryViewModel(db.bookDao(), Importer(context, db))
+                LibraryViewModel(
+                    db.bookDao(),
+                    Importer(context, db),
+                    PinManager(PrefsStorePinPrefs(prefs))
+                )
             }
             LibraryScreen(
                 onOpenBook = { id -> navController.navigate("reader/$id") },
@@ -48,6 +62,27 @@ fun NavGraph() {
                 onClose = { navController.popBackStack() }
             )
         }
-        composable(Routes.SETTINGS) { Text("Settings") }
+        composable(Routes.SETTINGS) {
+            val context = LocalContext.current
+            val db = remember {
+                Room.databaseBuilder(context, ReaderDb::class.java, "reader.db").build()
+            }
+            val prefs = remember { PrefsStore(context) }
+            val settingsVm = remember {
+                SettingsViewModel(
+                    prefs = prefs,
+                    pinManager = PinManager(PrefsStorePinPrefs(prefs)),
+                    dao = db.bookDao(),
+                    rankPrefs = PrefsStoreRankPrefs(prefs),
+                    support = SupportTracker(PrefsStoreSupportPrefs(prefs))
+                )
+            }
+            val fonts = remember { FontStore(context) }
+            SettingsRoute(
+                viewModel = settingsVm,
+                fontStore = fonts,
+                onClose = { navController.popBackStack() }
+            )
+        }
     }
 }

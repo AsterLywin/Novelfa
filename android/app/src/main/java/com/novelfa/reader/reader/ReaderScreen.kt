@@ -45,7 +45,10 @@ import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.parser.EpubParser
+import com.novelfa.reader.settings.SupportDialog
+import com.novelfa.reader.settings.SupportTracker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -64,7 +67,11 @@ import androidx.compose.material3.rememberDrawerState
 fun ReaderScreen(
     bookId: String,
     dao: BookDao,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    // Task 8: optional support-reminder tracker. While a book is open, every
+    // 10s of foreground reading accumulates (like the WPF DispatcherTimer);
+    // at the 30min threshold the dialog shows once and the counter resets.
+    support: SupportTracker? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -78,6 +85,7 @@ fun ReaderScreen(
     var rev by remember { mutableIntStateOf(0) }
     var webView by remember { mutableStateOf<android.webkit.WebView?>(null) }
     var spacingOpen by remember { mutableStateOf(false) }
+    var supportOpen by remember { mutableStateOf(false) }
 
     val chapterErr = stringResource(R.string.couldn_t_display_the_chapter)
     val openErr = stringResource(R.string.couldn_t_open_the_book)
@@ -133,6 +141,20 @@ fun ReaderScreen(
         } catch (e: Exception) {
             loadError = true
             snackbar.showSnackbar(openErr)
+        }
+    }
+
+    // Task 8 support reminder: 10s foreground ticks while the reader route is
+    // composed (WPF additionally required active + unminimized window).
+    LaunchedEffect(bookId, support) {
+        val tracker = support ?: return@LaunchedEffect
+        while (true) {
+            delay(10_000)
+            tracker.addForegroundSeconds(10)
+            if (tracker.shouldPrompt()) {
+                tracker.onPromptShown()
+                supportOpen = true
+            }
         }
     }
 
@@ -341,6 +363,10 @@ fun ReaderScreen(
                 }
             )
         }
+    }
+
+    if (supportOpen) {
+        SupportDialog(onDismiss = { supportOpen = false })
     }
 }
 

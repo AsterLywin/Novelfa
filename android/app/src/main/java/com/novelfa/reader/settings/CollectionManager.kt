@@ -1,0 +1,81 @@
+package com.novelfa.reader.settings
+
+import com.novelfa.reader.data.BookDao
+import java.io.File
+import kotlinx.coroutines.flow.first
+
+/** Thrown for collection validation failures; message is user-facing fa text. */
+class CollectionException(messageFa: String) : IllegalArgumentException(messageFa)
+
+/**
+ * Collection + book-removal ops ported from LibraryService.cs
+ * (RenameCollection, RemoveFromCollection/SetCollection, ResetProgress,
+ * RemoveBook + CleanupUnusedCovers minimally, TogglePrivate).
+ *
+ * Pure logic over [BookDao] (suspend, no Android APIs) so it is unit-testable
+ * with a fake dao. LibraryViewModel delegates to this class.
+ */
+class CollectionManager(private val dao: BookDao) {
+
+    /** Rename a collection: updates every book carrying [old] (blank -> throw). */
+    suspend fun renameCollection(old: String, new: String) {
+        val clean = new.trim()
+        if (clean.isEmpty()) throw CollectionException("اسم مجموعه نمی‌تونه خالی باشه.")
+        dao.allBooks().first()
+            .filter { it.collectionName == old }
+            .forEach { dao.update(it.copy(collectionName = clean)) }
+    }
+
+    /** Delete a collection: nulls out the name on every member book. */
+    suspend fun deleteCollection(name: String) {
+        dao.allBooks().first()
+            .filter { it.collectionName == name }
+            .forEach { dao.update(it.copy(collectionName = null)) }
+    }
+
+    /** Distinct non-blank collection names (port of GetAllCollectionNames). */
+    suspend fun allCollectionNames(): List<String> =
+        dao.allBooks().first()
+            .mapNotNull { it.collectionName?.takeIf { n -> n.isNotBlank() } }
+            .distinct()
+
+    /**
+     * Port of ResetProgress: index back to 0 (LastChapterDisplay = index+1, so
+     * back to 1) and lastOpenedDate cleared so progressPercent reports 0
+     * ("not started"). WPF stores "" — Kotlin stores null, which
+     * progressPercent/isCompleted treat identically (isNullOrEmpty).
+     */
+    suspend fun resetProgress(id: String) {
+        val book = dao.getById(id) ?: return
+        dao.update(book.copy(lastChapterIndex = 0, lastOpenedDate = null))
+    }
+
+    /**
+     * Port of RemoveBook (+ CleanupUnusedCovers minimally): deletes the row,
+     * the EPUB file, and the cover file when no remaining book references it.
+     * (WPF keeps the file on disk; mobile deletes it to free app storage —
+     * the confirm dialog text reflects this.)
+     */
+    suspend fun removeBook(id: String) {
+        val book = dao.getById(id) ?: return
+        dao.delete(book)
+        runCatching { File(book.filePath).takeIf { it.isFile }?.delete() }
+        val cover = book.coverPath?.takeIf { it.isNotBlank() } ?: return
+        val stillUsed = dao.allBooks().first().any { it.coverPath == cover }
+        if (!stillUsed) {
+            runCatching { File(cover).takeIf { it.isFile }?.delete() }
+        }
+    }
+
+    /** Port of TogglePrivate. */
+    suspend fun togglePrivate(id: String) {
+        val book = dao.getById(id) ?: return
+        dao.update(book.copy(isPrivate = !book.isPrivate))
+    }
+
+    /** Remove a single book from its collection (port of RemoveFromCollection). */
+    suspend fun removeFromCollection(id: String) {
+        val book = dao.getById(id) ?: return
+        dao.update(book.copy(collectionName = null))
+    }
+}
