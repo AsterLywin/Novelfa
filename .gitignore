@@ -25,6 +25,8 @@ Desktop.ini
 .superpowers/
 # Gradle / Android local state
 .gradle/
+android/.kotlin/
+android/.gradle/
 local.properties
 *.iml
 .idea/

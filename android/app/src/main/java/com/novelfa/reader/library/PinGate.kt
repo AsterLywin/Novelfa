@@ -5,9 +5,9 @@ package com.novelfa.reader.library
  * private-tab gating here depends ONLY on [hasPin]. Default is locked-off.
  */
 fun interface PinGate {
-    fun hasPin(): Boolean
+    suspend fun hasPin(): Boolean
 }
 
 object NoPinGate : PinGate {
-    override fun hasPin(): Boolean = false
+    override suspend fun hasPin(): Boolean = false
 }

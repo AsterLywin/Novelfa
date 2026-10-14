@@ -1,5 +1,6 @@
 package com.novelfa.reader.settings
 
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -9,6 +10,8 @@ import org.junit.Test
 /**
  * Task 8 RED: PinManager (port of SettingsService.cs HashPin/HasPin/SetPin/
  * VerifyPin + PinWindow.xaml.cs set/verify/change flow).
+ * Manager + prefs are suspend (never block main); tests drive them with
+ * runBlocking on the test thread.
  */
 class PinManagerTest {
 
@@ -25,14 +28,14 @@ class PinManagerTest {
     }
 
     @Test
-    fun noPin_hasPinFalse_verifyFalse() {
+    fun noPin_hasPinFalse_verifyFalse() = runBlocking {
         val m = manager()
         assertFalse(m.hasPin())
         assertFalse(m.verify("1234"))
     }
 
     @Test
-    fun setPin_verifyRoundTrip() {
+    fun setPin_verifyRoundTrip() = runBlocking {
         val m = manager()
         m.setPin("1234")
         assertTrue(m.hasPin())
@@ -41,7 +44,7 @@ class PinManagerTest {
     }
 
     @Test
-    fun setPin_shortPin_throwsFaMessage() {
+    fun setPin_shortPin_throwsFaMessage() = runBlocking {
         val m = manager()
         try {
             m.setPin("12")
@@ -53,7 +56,7 @@ class PinManagerTest {
     }
 
     @Test
-    fun changePin_requiresOldPin() {
+    fun changePin_requiresOldPin() = runBlocking {
         val m = manager()
         m.setPin("1234")
         try {
@@ -69,12 +72,22 @@ class PinManagerTest {
     }
 
     @Test
-    fun clearPin_removesPin() {
+    fun clearPin_removesPin() = runBlocking {
         val m = manager()
         m.setPin("1234")
         assertTrue(m.hasPin())
         m.clearPin()
         assertFalse(m.hasPin())
+        assertFalse(m.verify("1234"))
+    }
+
+    @Test
+    fun pin_hashedRaw_likeCSharp_noTrim() = runBlocking {
+        // C# HashPin hashes the raw input (SettingsService.cs: SetPin/VerifyPin
+        // do not trim); a padded PIN must NOT verify as the bare PIN.
+        val m = manager()
+        m.setPin(" 1234 ")
+        assertTrue(m.verify(" 1234 "))
         assertFalse(m.verify("1234"))
     }
 }

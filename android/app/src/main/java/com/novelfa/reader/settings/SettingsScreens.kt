@@ -345,7 +345,11 @@ private fun SupportSection(viewModel: SettingsViewModel) {
 
 @Composable
 private fun PinSection(viewModel: SettingsViewModel, notify: (String) -> Unit) {
-    var hasPin by remember { mutableStateOf(viewModel.pinManager.hasPin()) }
+    val scope = rememberCoroutineScope()
+    var hasPin by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        hasPin = viewModel.pinManager.hasPin()
+    }
     var setupOpen by remember { mutableStateOf(false) }
     var changeOpen by remember { mutableStateOf(false) }
     var removeConfirm by remember { mutableStateOf(false) }
@@ -401,10 +405,12 @@ private fun PinSection(viewModel: SettingsViewModel, notify: (String) -> Unit) {
             text = { Text("پین حذف بشه و بخش خصوصی بدون قفل باز بشه؟") },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.pinManager.clearPin()
-                    PinSession.unlocked = false
-                    hasPin = false
-                    removeConfirm = false
+                    scope.launch {
+                        viewModel.pinManager.clearPin()
+                        PinSession.unlocked = false
+                        hasPin = false
+                        removeConfirm = false
+                    }
                 }) {
                     Text(stringResource(R.string.yes))
                 }

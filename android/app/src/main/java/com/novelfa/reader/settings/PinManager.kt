@@ -3,7 +3,6 @@ package com.novelfa.reader.settings
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.library.PinGate
 import java.security.MessageDigest
-import kotlinx.coroutines.runBlocking
 
 /** Thrown for PIN validation failures; message is user-facing fa text. */
 class PinException(messageFa: String) : IllegalArgumentException(messageFa)
@@ -15,26 +14,26 @@ class PinException(messageFa: String) : IllegalArgumentException(messageFa)
  * unit-testable on plain JVM).
  */
 interface PinPrefs {
-    fun pinHash(): String?
-    fun setPinHash(hash: String?)
+    suspend fun pinHash(): String?
+    suspend fun setPinHash(hash: String?)
 }
 
 /** In-memory PinPrefs for tests and previews. */
 class InMemoryPinPrefs : PinPrefs {
     private var hash: String? = null
-    override fun pinHash(): String? = hash
-    override fun setPinHash(hash: String?) {
+    override suspend fun pinHash(): String? = hash
+    override suspend fun setPinHash(hash: String?) {
         this.hash = hash
     }
 }
 
-/** Production PinPrefs backed by Task 3 PrefsStore (DataStore). */
+/** Production PinPrefs backed by Task 3 PrefsStore (DataStore). Suspend: never blocks the main thread. */
 class PrefsStorePinPrefs(private val store: PrefsStore) : PinPrefs {
-    override fun pinHash(): String? =
-        runBlocking { store.getString(PrefsStore.PIN_HASH, "") }.takeIf { it.isNotBlank() }
+    override suspend fun pinHash(): String? =
+        store.getString(PrefsStore.PIN_HASH, "").takeIf { it.isNotBlank() }
 
-    override fun setPinHash(hash: String?) {
-        runBlocking { store.setString(PrefsStore.PIN_HASH, hash ?: "") }
+    override suspend fun setPinHash(hash: String?) {
+        store.setString(PrefsStore.PIN_HASH, hash ?: "")
     }
 }
 
@@ -47,29 +46,31 @@ class PrefsStorePinPrefs(private val store: PrefsStore) : PinPrefs {
  */
 class PinManager(private val prefs: PinPrefs) : PinGate {
 
-    override fun hasPin(): Boolean = !prefs.pinHash().isNullOrBlank()
+    override suspend fun hasPin(): Boolean = !prefs.pinHash().isNullOrBlank()
 
-    /** SHA-256 hex compare (stored hash is trimmed, like C# `.Trim()`). */
-    fun verify(pin: String): Boolean {
+    /**
+     * SHA-256 hex compare. The stored hash is trimmed (C# `.Trim()` on read);
+     * the input PIN is hashed RAW, exactly like C# VerifyPin/HashPin — no trim.
+     */
+    suspend fun verify(pin: String): Boolean {
         val saved = prefs.pinHash()?.trim()
         if (saved.isNullOrEmpty()) return false
-        return saved == hashPin(pin.trim())
+        return saved == hashPin(pin)
     }
 
-    /** Stores a new PIN; rejects PINs shorter than 4 chars (fa message). */
-    fun setPin(pin: String) {
-        val clean = pin.trim()
-        if (clean.length < 4) throw PinException("پین باید حداقل ۴ کاراکتر باشه")
-        prefs.setPinHash(hashPin(clean))
+    /** Stores a new PIN; rejects PINs shorter than 4 chars (fa message). Raw input, like C#. */
+    suspend fun setPin(pin: String) {
+        if (pin.length < 4) throw PinException("پین باید حداقل ۴ کاراکتر باشه")
+        prefs.setPinHash(hashPin(pin))
     }
 
     /** Verifies the old PIN first, then stores the new one. */
-    fun changePin(old: String, new: String) {
+    suspend fun changePin(old: String, new: String) {
         if (!verify(old)) throw PinException("پین اشتباهه")
         setPin(new)
     }
 
-    fun clearPin() {
+    suspend fun clearPin() {
         prefs.setPinHash(null)
     }
 

@@ -1,31 +1,40 @@
 package com.novelfa.reader.settings
 
 import com.novelfa.reader.data.PrefsStore
-import kotlinx.coroutines.runBlocking
 
 /**
  * Foreground-seconds store. Production bridges Task 3 PrefsStore (DataStore)
  * via [PrefsStoreSupportPrefs]; tests use [InMemorySupportPrefs].
+ * All access is suspend: never blocks the main thread.
  */
 interface SupportPrefs {
-    var supportSeconds: Int
-    var supportEnabled: Boolean
+    suspend fun getSeconds(): Int
+    suspend fun setSeconds(value: Int)
+    suspend fun isEnabled(): Boolean
+    suspend fun setEnabled(value: Boolean)
 }
 
 /** In-memory SupportPrefs for tests and previews. */
 class InMemorySupportPrefs(
-    override var supportSeconds: Int = 0,
-    override var supportEnabled: Boolean = true
-) : SupportPrefs
+    private var seconds: Int = 0,
+    private var enabled: Boolean = true
+) : SupportPrefs {
+    override suspend fun getSeconds(): Int = seconds
+    override suspend fun setSeconds(value: Int) {
+        seconds = value
+    }
+    override suspend fun isEnabled(): Boolean = enabled
+    override suspend fun setEnabled(value: Boolean) {
+        enabled = value
+    }
+}
 
 /** Production SupportPrefs backed by Task 3 PrefsStore (DataStore). */
 class PrefsStoreSupportPrefs(private val store: PrefsStore) : SupportPrefs {
-    override var supportSeconds: Int
-        get() = runBlocking { store.getInt(PrefsStore.SUPPORT_SECONDS, 0) }
-        set(value) = runBlocking { store.setInt(PrefsStore.SUPPORT_SECONDS, value) }
-    override var supportEnabled: Boolean
-        get() = runBlocking { store.supportEnabledNow() }
-        set(value) = runBlocking { store.setSupportEnabled(value) }
+    override suspend fun getSeconds(): Int = store.getInt(PrefsStore.SUPPORT_SECONDS, 0)
+    override suspend fun setSeconds(value: Int) = store.setInt(PrefsStore.SUPPORT_SECONDS, value)
+    override suspend fun isEnabled(): Boolean = store.supportEnabledNow()
+    override suspend fun setEnabled(value: Boolean) = store.setSupportEnabled(value)
 }
 
 /**
@@ -48,7 +57,7 @@ class SupportTracker(
         resumeMs = timeSource()
     }
 
-    fun notifyPaused() {
+    suspend fun notifyPaused() {
         val resumed = resumeMs
         resumeMs = null
         if (resumed != null) {
@@ -57,20 +66,20 @@ class SupportTracker(
         }
     }
 
-    fun addForegroundSeconds(n: Int) {
+    suspend fun addForegroundSeconds(n: Int) {
         if (n <= 0) return
-        prefs.supportSeconds = prefs.supportSeconds + n
+        prefs.setSeconds(prefs.getSeconds() + n)
     }
 
-    fun shouldPrompt(): Boolean =
-        prefs.supportEnabled && prefs.supportSeconds >= SUPPORT_INTERVAL_SECONDS
+    suspend fun shouldPrompt(): Boolean =
+        prefs.isEnabled() && prefs.getSeconds() >= SUPPORT_INTERVAL_SECONDS
 
-    fun onPromptShown() {
-        prefs.supportSeconds = 0
+    suspend fun onPromptShown() {
+        prefs.setSeconds(0)
     }
 
-    fun setEnabled(enabled: Boolean) {
-        prefs.supportEnabled = enabled
+    suspend fun setEnabled(enabled: Boolean) {
+        prefs.setEnabled(enabled)
     }
 
     companion object {

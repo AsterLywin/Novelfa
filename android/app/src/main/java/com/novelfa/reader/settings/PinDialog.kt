@@ -15,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -22,6 +23,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.novelfa.reader.R
+import kotlinx.coroutines.launch
 
 /** PinDialog modes, mirroring PinWindow.xaml.cs setup/verify/change flow. */
 enum class PinMode { SETUP, VERIFY, CHANGE }
@@ -50,6 +52,9 @@ fun PinDialog(
     var second by remember { mutableStateOf("") }
     var oldPin by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    // DataStore-backed manager calls are suspend: run them off the main thread.
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     val emptyErr = stringResource(R.string.the_pin_can_t_be_empty)
     val shortErr = stringResource(R.string.the_pin_must_be_at_least_4_characters)
@@ -71,39 +76,64 @@ fun PinDialog(
         }
     )
 
-    fun confirmSetup(pin: String, confirm: String): String? {
+    /** Synchronous field validation; returns an error string or null. Raw input (no trim), like C#. */
+    fun validateSetup(pin: String, confirm: String): String? {
         if (pin.isEmpty()) return emptyErr
-        if (pin.trim().length < 4) return shortErr
+        if (pin.length < 4) return shortErr
         if (pin != confirm) return mismatchErr
-        return try {
-            manager.setPin(pin)
-            null
-        } catch (e: PinException) {
-            e.message
-        }
+        return null
     }
 
     fun onConfirm() {
-        error = when (mode) {
-            PinMode.VERIFY -> {
-                if (first.isEmpty()) {
-                    emptyErr
-                } else if (manager.verify(first)) {
-                    onSuccess()
-                    null
-                } else {
-                    first = ""
-                    wrongErr
+        if (busy) return
+        scope.launch {
+            busy = true
+            try {
+                when (mode) {
+                    PinMode.VERIFY -> {
+                        if (first.isEmpty()) {
+                            error = emptyErr
+                        } else if (manager.verify(first)) {
+                            onSuccess()
+                        } else {
+                            first = ""
+                            error = wrongErr
+                        }
+                    }
+                    PinMode.SETUP -> {
+                        val err = validateSetup(first, second)
+                        if (err != null) {
+                            error = err
+                        } else {
+                            try {
+                                manager.setPin(first)
+                                onSuccess()
+                            } catch (e: PinException) {
+                                error = e.message
+                            }
+                        }
+                    }
+                    PinMode.CHANGE -> {
+                        if (!manager.verify(oldPin)) {
+                            oldPin = ""
+                            error = wrongErr
+                        } else {
+                            val err = validateSetup(first, second)
+                            if (err != null) {
+                                error = err
+                            } else {
+                                try {
+                                    manager.changePin(oldPin, first)
+                                    onSuccess()
+                                } catch (e: PinException) {
+                                    error = e.message
+                                }
+                            }
+                        }
+                    }
                 }
-            }
-            PinMode.SETUP -> confirmSetup(first, second).also { if (it == null) onSuccess() }
-            PinMode.CHANGE -> {
-                if (!manager.verify(oldPin)) {
-                    oldPin = ""
-                    wrongErr
-                } else {
-                    confirmSetup(first, second).also { if (it == null) onSuccess() }
-                }
+            } finally {
+                busy = false
             }
         }
     }
@@ -147,7 +177,7 @@ fun PinDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = ::onConfirm) {
+            TextButton(onClick = ::onConfirm, enabled = !busy) {
                 Text(stringResource(R.string.ok))
             }
         },

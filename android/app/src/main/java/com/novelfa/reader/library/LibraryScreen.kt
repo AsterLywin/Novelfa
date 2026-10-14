@@ -134,7 +134,10 @@ fun LibraryScreen(
             )
             @Suppress("UNUSED_EXPRESSION")
             gateTick // re-read the gate below when Settings changes the PIN
-            val pinSet = viewModel.pinGate.hasPin()
+            var pinSet by remember { mutableStateOf(false) }
+            LaunchedEffect(gateTick) {
+                pinSet = viewModel.pinGate.hasPin()
+            }
             if (tab == Tab.PRIVATE && pinSet) {
                 if (!unlocked) {
                     // Locked: PIN dialog on demand (Task 8 PinDialog VERIFY).

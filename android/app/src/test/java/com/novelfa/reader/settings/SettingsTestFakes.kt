@@ -64,14 +64,25 @@ internal fun testBook(
 /** In-memory PinPrefs fake. */
 internal class FakePinPrefs : PinPrefs {
     var hash: String? = null
-    override fun pinHash(): String? = hash
-    override fun setPinHash(hash: String?) {
+    override suspend fun pinHash(): String? = hash
+    override suspend fun setPinHash(hash: String?) {
         this.hash = hash
     }
 }
 
 /** In-memory SupportPrefs fake. */
 internal class FakeSupportPrefs(
-    override var supportSeconds: Int = 0,
-    override var supportEnabled: Boolean = true
-) : SupportPrefs
+    private var seconds: Int = 0,
+    private var enabled: Boolean = true
+) : SupportPrefs {
+    override suspend fun getSeconds(): Int = seconds
+    override suspend fun setSeconds(value: Int) {
+        seconds = value
+    }
+    override suspend fun isEnabled(): Boolean = enabled
+    override suspend fun setEnabled(value: Boolean) {
+        enabled = value
+    }
+    /** Test-only direct access (replaces former property reads). */
+    fun currentSeconds(): Int = seconds
+}
