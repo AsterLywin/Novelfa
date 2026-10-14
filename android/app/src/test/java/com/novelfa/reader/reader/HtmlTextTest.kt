@@ -97,4 +97,46 @@ class HtmlTextTest {
         assertTrue(got.contains("سلام"))
         assertTrue(got.contains("file:"))
     }
+
+    // --- Render-pipeline hardening (ported from AI Studio defect pass) ---
+
+    @Test
+    fun stripScripts_removesNoscriptAndInlineHandlers() {
+        val html = "<p onclick=\"evil()\">hi</p><noscript>no</noscript><img src=\"a.png\" onload='x()'>"
+        val got = HtmlText.stripScripts(html)
+        assertFalse(got.contains("evil"))
+        assertFalse(got.contains("noscript"))
+        assertFalse(got.contains("onload"))
+        assertFalse(got.contains("onclick"))
+        assertTrue(got.contains("hi"))
+        assertTrue(got.contains("src=\"a.png\""))
+    }
+
+    @Test
+    fun convertSvgImages_standaloneSvg_responsive() {
+        val got = HtmlText.convertSvgImages("<svg width=\"600\" height=\"400\"><rect/></svg>")
+        assertTrue(got.contains("max-width:100%"))
+        assertTrue(got.contains("<rect/>"))
+    }
+
+    @Test
+    fun makeImageSourcesAbsolute_srcsetResolved() {
+        val folder = tmp.newFolder("chap4")
+        val got = HtmlText.makeImageSourcesAbsolute(
+            "<img src=\"a.png\" srcset=\"a.png 1x, big/b.png 2x\">", folder
+        )
+        assertFalse(got.contains("\"a.png 1x\""))
+        assertTrue(got.contains("file:"))
+        assertTrue(got.contains("2x"))
+    }
+
+    @Test
+    fun makeImageSourcesAbsolute_cssUrlResolved() {
+        val folder = tmp.newFolder("chap5")
+        val got = HtmlText.makeImageSourcesAbsolute(
+            "<div style=\"background:url(bg.png)\">x</div>", folder
+        )
+        assertTrue(got.contains("file:"))
+        assertTrue(got.contains("bg.png"))
+    }
 }

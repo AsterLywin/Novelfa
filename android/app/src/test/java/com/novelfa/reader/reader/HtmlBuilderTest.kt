@@ -150,4 +150,42 @@ class HtmlBuilderTest {
         assertTrue(js.contains("__rdrGen!==3"))
         assertFalse(js.contains("\n"))
     }
+
+    // --- Render-pipeline hardening (ported from AI Studio defect pass) ---
+
+    @Test
+    fun build_containsViewportMeta() {
+        assertTrue(build().contains("name=\"viewport\""))
+        assertTrue(build().contains("width=device-width"))
+    }
+
+    @Test
+    fun build_noColorInheritKill() {
+        assertFalse(build().contains("color:inherit"))
+    }
+
+    @Test
+    fun build_linkColorReadable() {
+        // DARK theme link color must be present and distinguishable.
+        assertTrue(build().contains("color:#A78BFA"))
+    }
+
+    @Test
+    fun build_tableAndPreContained() {
+        val html = build()
+        assertTrue(html.contains("overflow-x:auto"))
+        assertTrue(html.contains("pre-wrap"))
+        assertTrue(html.contains("max-width:100%"))
+    }
+
+    @Test
+    fun build_darkThemeAttrPresent() {
+        assertTrue(build().contains("data-theme=\"dark\""))
+    }
+
+    @Test
+    fun fontFaceCss_hasFontDisplaySwap() {
+        val f = File(tmp.newFolder(), "F.ttf").apply { writeBytes(byteArrayOf(1)) }
+        assertTrue(HtmlBuilder.fontFaceCss("F", listOf(f)).contains("font-display:swap"))
+    }
 }

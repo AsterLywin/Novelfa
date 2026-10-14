@@ -38,17 +38,39 @@ fun ReaderWebView(
     baseUrl: String?,
     bridge: ScrollBridge,
     onError: (String) -> Unit,
-    onWebView: (WebView) -> Unit = {}
+    onWebView: (WebView) -> Unit = {},
+    onPageFinished: () -> Unit = {}
 ) {
     val loaded = remember { mutableStateOf<String?>(null) }
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                // Local file: subresources (chapter images/fonts) must load
+                // under loadDataWithBaseURL; the app is fully offline.
+                settings.allowFileAccess = true
+                settings.allowContentAccess = true
+                @Suppress("DEPRECATION")
+                settings.allowFileAccessFromFileURLs = true
+                @Suppress("DEPRECATION")
+                settings.allowUniversalAccessFromFileURLs = true
+                // Responsive scaling (pairs with the viewport meta tag) +
+                // pinch zoom for accessibility; no on-screen zoom buttons.
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
+                settings.setSupportZoom(true)
                 settings.builtInZoomControls = false
                 settings.displayZoomControls = false
+                settings.defaultTextEncodingName = "utf-8"
                 addJavascriptInterface(bridge, "Android")
                 webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        onPageFinished()
+                    }
+
                     override fun onReceivedError(
                         view: WebView,
                         request: WebResourceRequest,
@@ -56,6 +78,12 @@ fun ReaderWebView(
                     ) {
                         if (request.isForMainFrame) {
                             onError(error.description?.toString() ?: "")
+                        } else {
+                            android.util.Log.w(
+                                "ReaderWebView",
+                                "subresource failed: " + request.url +
+                                    " code=" + error.errorCode
+                            )
                         }
                     }
                 }

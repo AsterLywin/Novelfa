@@ -35,12 +35,22 @@ object HtmlText {
         return html
     }
 
-    fun stripScripts(html: String): String =
-        Regex("<script[\\s\\S]*?</script\\s*>", RegexOption.IGNORE_CASE)
+    fun stripScripts(html: String): String {
+        var out = Regex("<script[\\s\\S]*?</script\\s*>", RegexOption.IGNORE_CASE)
             .replace(html, "")
+        out = Regex("<noscript[\\s\\S]*?</noscript\\s*>", RegexOption.IGNORE_CASE)
+            .replace(out, "")
+        // Inline event handlers (onclick=..., onload=..., ...) cannot run offline
+        // and are a classic XSS vector in imported books.
+        out = Regex(
+            "\\s+on[a-zA-Z]+\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)",
+            RegexOption.IGNORE_CASE
+        ).replace(out, "")
+        return out
+    }
 
-    fun convertSvgImages(html: String): String =
-        Regex(
+    fun convertSvgImages(html: String): String {
+        var out = Regex(
             "<svg\\b[^>]*>\\s*(?:<g\\b[^>]*>\\s*)?<image\\b[^>]*?>" +
                 "\\s*(?:</image>\\s*)?(?:</g>\\s*)?</svg>",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
@@ -51,6 +61,33 @@ object HtmlText {
             ).find(m.value)
             if (href == null) m.value else "<img src=\"" + href.groupValues[1] + "\" />"
         }
+        // Remaining standalone <svg> (vector art, not image wrappers): force
+        // responsive scaling so fixed width/height attributes cannot overflow
+        // the phone viewport. Merges into an existing style attribute when present.
+        out = Regex("<svg\\b([^>]*)>", RegexOption.IGNORE_CASE).replace(out) { m ->
+            val attrs = m.groupValues[1]
+            if (attrs.contains("max-width", ignoreCase = true)) {
+                m.value
+            } else {
+                val styleMatch = Regex(
+                    "style\\s*=\\s*([\"'])(.*?)\\1",
+                    RegexOption.IGNORE_CASE
+                ).find(attrs)
+                if (styleMatch == null) {
+                    "<svg" + attrs + " style=\"max-width:100%;height:auto;\">"
+                } else {
+                    val quote = styleMatch.groupValues[1]
+                    val merged = (styleMatch.groupValues[2].trim().trimEnd(';') +
+                        ";max-width:100%;height:auto;")
+                    "<svg" + attrs.replaceRange(
+                        styleMatch.range,
+                        "style=" + quote + merged + quote
+                    ) + ">"
+                }
+            }
+        }
+        return out
+    }
 
     private val tagPattern = Regex("<(?![/!?])([a-zA-Z][a-zA-Z0-9:_-]*)[^>]*>")
     private val sizeAttrPattern = Regex(
@@ -73,30 +110,69 @@ object HtmlText {
         RegexOption.IGNORE_CASE
     )
 
+    private val srcsetPattern = Regex(
+            "(<\\w+\\b[^>]*?\\ssrcset\\s*=\\s*)([\"'])([^\"']*)\\2",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val cssUrlPattern = Regex(
+        "url\\(\\s*([\"']?)([^\"')\\s][^\"')]*)\\1\\s*\\)",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** URL-decodes a path while preserving literal '+' (URLDecoder turns it into a space). */
+    private fun decodePath(raw: String): String = try {
+        java.net.URLDecoder.decode(raw.replace("+", "%2B"), "UTF-8")
+    } catch (e: Exception) {
+        raw
+    }
+
+    private fun isAbsoluteRef(lower: String): Boolean =
+        lower.isEmpty() || lower.startsWith("data:") ||
+            lower.startsWith("http:") || lower.startsWith("https:") ||
+            lower.startsWith("file:") || lower.startsWith("//") ||
+            lower.startsWith("about:")
+
     fun makeImageSourcesAbsolute(html: String, folder: File): String {
         val base = try {
             File(folder.path + File.separatorChar).toURI()
         } catch (e: Exception) {
             return html
         }
-        return imgSrcPattern.replace(html) { m ->
-            val src = m.groupValues[3]
-            val lower = src.lowercase(Locale.ROOT)
-            if (lower.isEmpty() || lower.startsWith("data:") ||
-                lower.startsWith("http:") || lower.startsWith("https:") ||
-                lower.startsWith("file:") || lower.startsWith("//") ||
-                lower.startsWith("about:")
-            ) {
-                m.value
-            } else {
-                try {
-                    m.groupValues[1] + m.groupValues[2] +
-                        base.resolve(src).toASCIIString() + m.groupValues[2]
-                } catch (e: Exception) {
-                    m.value
-                }
+        fun absolutize(src: String): String? {
+            if (isAbsoluteRef(src.lowercase(Locale.ROOT))) return null
+            return try {
+                base.resolve(decodePath(src)).toASCIIString()
+            } catch (e: Exception) {
+                null
             }
         }
+        var out = imgSrcPattern.replace(html) { m ->
+            val abs = absolutize(m.groupValues[3]) ?: return@replace m.value
+            m.groupValues[1] + m.groupValues[2] + abs + m.groupValues[2]
+        }
+        // srcset="a.png 1x, b.png 2x": resolve each candidate URL, keep descriptors.
+        out = srcsetPattern.replace(out) { m ->
+            val resolved = m.groupValues[3].split(",").joinToString(", ") { candidate ->
+                val t = candidate.trim()
+                if (t.isEmpty()) {
+                    candidate
+                } else {
+                    val sp = t.indexOfAny(charArrayOf(' ', '\t'))
+                    val url = if (sp < 0) t else t.substring(0, sp)
+                    val desc = if (sp < 0) "" else t.substring(sp)
+                    val abs = absolutize(url) ?: return@joinToString candidate
+                    abs + desc
+                }
+            }
+            m.groupValues[1] + m.groupValues[2] + resolved + m.groupValues[2]
+        }
+        // CSS url(...) in inline styles / embedded <style>: resolve relative refs.
+        out = cssUrlPattern.replace(out) { m ->
+            val abs = absolutize(m.groupValues[2]) ?: return@replace m.value
+            "url('" + abs + "')"
+        }
+        return out
     }
 
     fun htmlToPlainText(html: String): String {

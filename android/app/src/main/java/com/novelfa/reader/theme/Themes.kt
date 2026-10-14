@@ -14,7 +14,9 @@ data class ReaderTheme(
     val thumb: String,
     val track: String,
     val divider: String,
-    val isDark: Boolean
+    val isDark: Boolean,
+    /** Link/accent-foreground color, guaranteed readable on [bg]. Defaults to [thumb]. */
+    val link: String = thumb
 )
 
 object Themes {
@@ -25,7 +27,8 @@ object Themes {
         thumb = "#A78BFA",
         track = "#1C1A29",
         divider = "#2A2838",
-        isDark = true
+        isDark = true,
+        link = "#A78BFA"
     )
 
     /**
@@ -39,7 +42,8 @@ object Themes {
         thumb = "#C0C0C0",
         track = "#F0F0F0",
         divider = "#EEEEEE",
-        isDark = false
+        isDark = false,
+        link = "#1D4ED8"
     )
     val CREAM = ReaderTheme(
         key = "cream",
@@ -48,7 +52,8 @@ object Themes {
         thumb = "#C9B48A",
         track = "#EADFC4",
         divider = "#D9CCAA",
-        isDark = false
+        isDark = false,
+        link = "#1D4ED8"
     )
     val BLACK = ReaderTheme(
         key = "black",
@@ -57,7 +62,8 @@ object Themes {
         thumb = "#555555",
         track = "#111111",
         divider = "#222222",
-        isDark = true
+        isDark = true,
+        link = "#8AB4F8"
     )
     val GRAY = ReaderTheme(
         key = "gray",
@@ -66,7 +72,8 @@ object Themes {
         thumb = "#7A7F87",
         track = "#26282C",
         divider = "#41454B",
-        isDark = true
+        isDark = true,
+        link = "#8AB4F8"
     )
     val GREEN = ReaderTheme(
         key = "green",
@@ -75,7 +82,8 @@ object Themes {
         thumb = "#9DB594",
         track = "#CFDDC7",
         divider = "#BCCFB2",
-        isDark = false
+        isDark = false,
+        link = "#1D4ED8"
     )
 
     val ALL: List<ReaderTheme> = listOf(DARK, WHITE, CREAM, BLACK, GRAY, GREEN)

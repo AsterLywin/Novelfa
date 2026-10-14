@@ -23,4 +23,39 @@ class EpubParserTest {
         assertEquals("cover.jpg", book.coverFile?.name)
         assertEquals("My Title", book.title)
     }
+
+    // --- Parser hardening (ported from AI Studio defect pass) ---
+
+    @Test
+    fun parse_missingContainer_fallsBackToOpfScan() {
+        // Same book as book1 but WITHOUT META-INF/container.xml.
+        val dir = tempFolder.newFolder("nocontainer")
+        val oebps = File(dir, "OEBPS").apply { mkdirs() }
+        val src = File("src/test/resources/book1/OEBPS")
+        File(oebps, "content.opf").writeText(File(src, "content.opf").readText())
+        File(oebps, "ch1.xhtml").writeText(File(src, "ch1.xhtml").readText())
+        File(oebps, "ch2.xhtml").writeText(File(src, "ch2.xhtml").readText())
+        File(oebps, "cover.jpg").writeBytes(File(src, "cover.jpg").readBytes())
+        val book = EpubParser.parse(dir, "nocontainer.epub")
+        assertEquals(listOf("فصل 1", "فصل 2"), book.chapters.map { it.title })
+        assertEquals("My Title", book.title)
+        assertEquals("cover.jpg", book.coverFile?.name)
+    }
+
+    @Test
+    fun parse_namespaceLessOpf_stillParses() {
+        val dir = tempFolder.newFolder("nons")
+        val oebps = File(dir, "OEBPS").apply { mkdirs() }
+        val src = File("src/test/resources/book1/OEBPS")
+        File(oebps, "content.opf").writeText(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><package version=\"3.0\">" +
+                "<metadata><title>NS Title</title></metadata>" +
+                "<manifest><item id=\"c1\" href=\"ch1.xhtml\" media-type=\"application/xhtml+xml\"/></manifest>" +
+                "<spine><itemref idref=\"c1\"/></spine></package>"
+        )
+        File(oebps, "ch1.xhtml").writeText(File(src, "ch1.xhtml").readText())
+        val book = EpubParser.parse(dir, "nons.epub")
+        assertEquals(listOf("فصل 1"), book.chapters.map { it.title })
+        assertEquals("NS Title", book.title)
+    }
 }
