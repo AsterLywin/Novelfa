@@ -14,6 +14,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -27,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -42,12 +45,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.parser.EpubParser
 import com.novelfa.reader.settings.SupportDialog
 import com.novelfa.reader.settings.SupportTracker
+import com.novelfa.reader.theme.Themes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -87,6 +93,9 @@ fun ReaderScreen(
     var webView by remember { mutableStateOf<android.webkit.WebView?>(null) }
     var spacingOpen by remember { mutableStateOf(false) }
     var supportOpen by remember { mutableStateOf(false) }
+    var themeOpen by remember { mutableStateOf(false) }
+    var fontOpen by remember { mutableStateOf(false) }
+    var fullscreenUi by rememberSaveable { mutableStateOf(false) }
     // Task 9: continuous survives rotation/process death (index is restored
     // from the DB via saveProgress, which is authoritative; a fresh entry
     // without saved state opens in single-chapter mode).
@@ -174,6 +183,21 @@ fun ReaderScreen(
         }
     }
 
+    // Fullscreen reading: hide system bars while on, always restore on exit.
+    val activity = context as? android.app.Activity
+    DisposableEffect(fullscreenUi) {
+        val window = activity?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        if (fullscreenUi) {
+            controller?.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose {
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -212,6 +236,7 @@ fun ReaderScreen(
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },
             topBar = {
+                if (!fullscreenUi) {
                 val v = vm
                 @Suppress("UNUSED_EXPRESSION")
                 rev
@@ -238,11 +263,22 @@ fun ReaderScreen(
                         }
                     },
                     actions = {
+                        TextButton(onClick = { themeOpen = true }, enabled = vm != null) {
+                            Text("◑")
+                        }
+                        TextButton(onClick = { fontOpen = true }, enabled = vm != null) {
+                            Text("F")
+                        }
+                        TextButton(onClick = { fullscreenUi = true }, enabled = vm != null) {
+                            Text("⛶")
+                        }
                         TextButton(onClick = onClose) { Text("✕") }
                     }
                 )
+                }
             },
             bottomBar = {
+                if (!fullscreenUi) {
                 val v = vm
                 BottomAppBar {
                     Row(
@@ -310,6 +346,7 @@ fun ReaderScreen(
                         ) { Text("Aa") }
                     }
                 }
+                }
             }
         ) { padding ->
             Box(
@@ -335,6 +372,12 @@ fun ReaderScreen(
                         },
                         onWebView = { webView = it }
                     )
+                }
+                if (fullscreenUi) {
+                    TextButton(
+                        onClick = { fullscreenUi = false },
+                        modifier = Modifier.align(Alignment.TopEnd)
+                    ) { Text(stringResource(R.string.exit_fullscreen)) }
                 }
             }
         }
@@ -374,6 +417,90 @@ fun ReaderScreen(
 
     if (supportOpen) {
         SupportDialog(onDismiss = { supportOpen = false })
+    }
+
+    if (themeOpen) {
+        val v = vm
+        AlertDialog(
+            onDismissRequest = { themeOpen = false },
+            title = { Text(stringResource(R.string.choose_theme)) },
+            text = {
+                LazyColumn {
+                    items(Themes.ALL.size) { i ->
+                        val t = Themes.ALL[i]
+                        TextButton(onClick = {
+                            scope.launch {
+                                if (v?.applyTheme(t) == true) {
+                                    pageHtml = v.html
+                                    pageBase = v.baseUrl
+                                    rev++
+                                }
+                                themeOpen = false
+                            }
+                        }) {
+                            Text(Themes.NAMES_FA[t.key] ?: t.key)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { themeOpen = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    if (fontOpen) {
+        val v = vm
+        val families = remember {
+            val store = FontStore(context)
+            listOf("Tahoma") + store.list()
+                .map { it.nameWithoutExtension }
+                .filter { it.isNotBlank() }
+                .distinct()
+        }
+        AlertDialog(
+            onDismissRequest = { fontOpen = false },
+            title = { Text(stringResource(R.string.choose_font)) },
+            text = {
+                LazyColumn {
+                    items(families.size) { i ->
+                        val family = families[i]
+                        TextButton(onClick = {
+                            scope.launch {
+                                val store = FontStore(context)
+                                val files = withContext(Dispatchers.IO) {
+                                    if (family == "Tahoma") {
+                                        emptyList()
+                                    } else {
+                                        store.list().filter {
+                                            it.nameWithoutExtension.contains(family, ignoreCase = true)
+                                        }
+                                    }
+                                }
+                                if (v?.changeFontFamily(family, files) == true) {
+                                    pageHtml = v.html
+                                    pageBase = v.baseUrl
+                                    rev++
+                                }
+                                fontOpen = false
+                            }
+                        }) {
+                            Text(
+                                if (family == "Tahoma") stringResource(R.string.font_system_tahoma)
+                                else family
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { fontOpen = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
     }
 }
 

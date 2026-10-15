@@ -11,6 +11,8 @@ import com.novelfa.reader.R
  *
  * 311 entries: 263 en from Loc.En.cs EnglishMap, 48 en from LocStrings values,
  * 0 fa-text fallbacks. values/strings.xml = en, values-fa/strings.xml = fa.
+ * UI pass (library header/hero/sort, reader theme/font/fullscreen, about):
+ * +15 entries (326 total).
  * WPF "{0}" placeholders were converted to Android "%1$s" in BOTH locales;
  * WPF "a|b" plural forms are stored verbatim (split at runtime, like Loc.FN).
  * Pure-JVM lookup (no Context); t() is the only @Composable entry point.
@@ -329,6 +331,21 @@ object Strings {
         "اکیدنا" to R.string.echidna,
         "اکیدنا، جادوگرِ طمع" to R.string.echidna_the_witch_of_greed,
         "سبزِ زهرآگین و چایِ نیمه‌شب؛ طمعِ سیری‌ناپذیر برای دانستن" to R.string.venomous_green_and_midnight_tea_an_insatiable_greed_for,
+        "تنظیمات" to R.string.app_settings,
+        "مجموعه‌ها" to R.string.library_collections,
+        "درباره ناولفا" to R.string.about_title,
+        "کتاب‌خوان فارسی، کاملاً آفلاین و بدون هیچ دسترسی. هیچ داده‌ای جمع یا ارسال نمی‌شود." to R.string.about_body,
+        "نسخه {0}" to R.string.app_version,
+        "اینجا هنوز کتابی نیست" to R.string.empty_library,
+        "دکمه + رو بزن و یه EPUB اضافه کن" to R.string.empty_library_hint,
+        "خصوصی کن" to R.string.make_private,
+        "عمومی کن" to R.string.make_public,
+        "گزینه‌ها" to R.string.book_menu,
+        "تم مطالعه" to R.string.choose_theme,
+        "فونت مطالعه" to R.string.choose_font,
+        "Tahoma (سیستمی)" to R.string.font_system_tahoma,
+        "تمام‌صفحه" to R.string.fullscreen,
+        "خروج از تمام‌صفحه" to R.string.exit_fullscreen,
     )
 
     /** Number of ported Loc entries (excludes the app_name fallback id). */

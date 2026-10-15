@@ -13,6 +13,7 @@ import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.Importer
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.ReaderDb
+import com.novelfa.reader.library.CollectionsScreen
 import com.novelfa.reader.library.LibraryScreen
 import com.novelfa.reader.library.LibraryViewModel
 import com.novelfa.reader.reader.ReaderScreen
@@ -44,7 +45,28 @@ fun NavGraph() {
             }
             LibraryScreen(
                 onOpenBook = { id -> navController.navigate("reader/$id") },
-                viewModel = viewModel
+                viewModel = viewModel,
+                onOpenCollections = { navController.navigate(Routes.COLLECTIONS) },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) }
+            )
+        }
+        composable(Routes.COLLECTIONS) {
+            val context = LocalContext.current
+            val db = remember {
+                Room.databaseBuilder(context, ReaderDb::class.java, "reader.db").build()
+            }
+            val prefs = remember { PrefsStore(context) }
+            val viewModel = remember {
+                LibraryViewModel(
+                    db.bookDao(),
+                    Importer(context, db),
+                    PinManager(PrefsStorePinPrefs(prefs))
+                )
+            }
+            CollectionsScreen(
+                viewModel = viewModel,
+                onOpenBook = { id -> navController.navigate("reader/$id") },
+                onBack = { navController.popBackStack() }
             )
         }
         composable(

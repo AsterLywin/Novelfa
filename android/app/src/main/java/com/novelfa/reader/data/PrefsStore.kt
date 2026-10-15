@@ -35,6 +35,7 @@ class PrefsStore(private val context: Context) {
         val READER_LINE_HEIGHT = stringPreferencesKey("readerLineHeight")
         val READER_MARGIN = stringPreferencesKey("readerMargin")
         val READER_SPACING = stringPreferencesKey("readerSpacing")
+        val PROFILE_NAME = stringPreferencesKey("profileName")
     }
 
     val theme: Flow<String> = context.dataStore.data.map { it[THEME] ?: "dark" }
@@ -50,6 +51,7 @@ class PrefsStore(private val context: Context) {
     val readerLineHeight: Flow<String> = context.dataStore.data.map { it[READER_LINE_HEIGHT] ?: "1.8" }
     val readerMargin: Flow<String> = context.dataStore.data.map { it[READER_MARGIN] ?: "16" }
     val readerSpacing: Flow<String> = context.dataStore.data.map { it[READER_SPACING] ?: "0.6" }
+    val profileName: Flow<String> = context.dataStore.data.map { it[PROFILE_NAME] ?: "" }
 
     suspend fun setTheme(value: String) {
         context.dataStore.edit { it[THEME] = value }
@@ -90,6 +92,10 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setReaderSpacing(value: String) {
         context.dataStore.edit { it[READER_SPACING] = value }
+    }
+
+    suspend fun setProfileName(value: String) {
+        context.dataStore.edit { it[PROFILE_NAME] = value }
     }
 
     // Task 7 additive generic string access (used by RankService wiring).

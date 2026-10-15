@@ -129,4 +129,39 @@ class LibraryViewModelTest {
         val only = book("u1", "Unique Title", filePath = "/books/unique.epub")
         assertEquals("Unique Title", displayTitle(only, listOf(only)))
     }
+
+    @Test
+    fun favoritesTab_returnsOnlyFavorites() = runBlocking {
+        val v = vm(
+            listOf(
+                book("f1", "Fav One", isFavorite = true),
+                book("f2", "Plain One"),
+                // Private favorites stay out of the public favorites tab.
+                book("f3", "Secret Fav", isFavorite = true, isPrivate = true)
+            )
+        )
+        assertEquals(listOf("f1"), v.filtered(Tab.FAVORITES, "").first().map { it.id })
+    }
+
+    @Test
+    fun sortBooks_modes() {
+        val all = listOf(
+            book("s1", "ب", lastChapterIndex = 1, lastOpenedDate = "2026-01-02T00:00:00Z")
+                .copy(dateAdded = "2026-01-01T00:00:00Z"),
+            book("s2", "الف", lastChapterIndex = 9, lastOpenedDate = "2026-01-03T00:00:00Z")
+                .copy(dateAdded = "2026-01-05T00:00:00Z"),
+            book("s3", "ج", lastChapterIndex = 0, lastOpenedDate = null)
+                .copy(dateAdded = "2026-01-03T00:00:00Z")
+        )
+        // DEFAULT preserves incoming order.
+        assertEquals(listOf("s1", "s2", "s3"), sortBooks(all, all, SortMode.DEFAULT).map { it.id })
+        // NAME_AZ uses the Persian natural comparison.
+        assertEquals(listOf("s2", "s1", "s3"), sortBooks(all, all, SortMode.NAME_AZ).map { it.id })
+        // RECENT_ADDED is dateAdded-desc.
+        assertEquals(listOf("s2", "s3", "s1"), sortBooks(all, all, SortMode.RECENT_ADDED).map { it.id })
+        // LAST_READ is lastOpenedDate-desc (never-opened last).
+        assertEquals(listOf("s2", "s1", "s3"), sortBooks(all, all, SortMode.LAST_READ).map { it.id })
+        // MOST_PROGRESS: s2 done (100), s1 in progress, s3 untouched.
+        assertEquals(listOf("s2", "s1", "s3"), sortBooks(all, all, SortMode.MOST_PROGRESS).map { it.id })
+    }
 }

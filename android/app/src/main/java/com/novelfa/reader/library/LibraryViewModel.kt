@@ -7,6 +7,7 @@ import com.novelfa.reader.data.Importer
 import com.novelfa.reader.data.SortFa
 import com.novelfa.reader.data.isCompleted
 import com.novelfa.reader.data.isInProgress
+import com.novelfa.reader.data.progressPercent
 import com.novelfa.reader.settings.CollectionManager
 import java.io.File
 import kotlinx.coroutines.flow.Flow
@@ -18,7 +19,36 @@ enum class Tab {
     READING,
     COMPLETED,
     RECENT,
+    FAVORITES,
     PRIVATE
+}
+
+/**
+ * Library sort modes, mirroring the WPF sort dropdown (default/title,
+ * recently added, last read, name A–Y, most progress). Pure function so it
+ * stays unit-testable; applied in the UI layer after [applyFilter].
+ */
+enum class SortMode {
+    DEFAULT,
+    RECENT_ADDED,
+    LAST_READ,
+    NAME_AZ,
+    MOST_PROGRESS
+}
+
+fun sortBooks(
+    list: List<BookEntity>,
+    all: List<BookEntity>,
+    mode: SortMode
+): List<BookEntity> = when (mode) {
+    // DEFAULT preserves the filter's own order (e.g. RECENT stays
+    // lastOpenedDate-desc); NAME_AZ is the explicit title sort.
+    SortMode.DEFAULT -> list
+    SortMode.NAME_AZ ->
+        list.sortedWith { a, b -> SortFa.compare(displayTitle(a, all), displayTitle(b, all)) }
+    SortMode.RECENT_ADDED -> list.sortedByDescending { it.dateAdded }
+    SortMode.LAST_READ -> list.sortedByDescending { it.lastOpenedDate ?: "" }
+    SortMode.MOST_PROGRESS -> list.sortedByDescending { progressPercent(it) }
 }
 
 /**
@@ -109,6 +139,7 @@ internal fun applyFilter(
         when (tab) {
             Tab.READING -> visible.filter { isInProgress(it) }
             Tab.COMPLETED -> visible.filter { isCompleted(it) }
+            Tab.FAVORITES -> visible.filter { it.isFavorite }
             Tab.RECENT -> visible
                 .filter { !it.lastOpenedDate.isNullOrEmpty() }
                 .sortedByDescending { it.lastOpenedDate }

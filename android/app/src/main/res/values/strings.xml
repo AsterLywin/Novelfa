@@ -341,4 +341,19 @@ Drag your EPUB files here and drop them</string>
     <string name="echidna_the_witch_of_greed">Echidna, the Witch of Greed</string>
     <string name="venomous_green_and_midnight_tea_an_insatiable_greed_for">Venomous green and midnight tea; an insatiable greed for knowledge</string>
     <string name="app_name">Novelfa Reader</string>
+    <string name="app_settings">Settings</string>
+    <string name="library_collections">Collections</string>
+    <string name="about_title">About Novelfa</string>
+    <string name="about_body">Persian reader, fully offline with zero permissions. No data is collected or sent.</string>
+    <string name="app_version">Version %1$s</string>
+    <string name="empty_library">No books here yet</string>
+    <string name="empty_library_hint">Tap + to add an EPUB</string>
+    <string name="make_private">Make private</string>
+    <string name="make_public">Make public</string>
+    <string name="book_menu">Options</string>
+    <string name="choose_theme">Reading theme</string>
+    <string name="choose_font">Reading font</string>
+    <string name="font_system_tahoma">Tahoma (system)</string>
+    <string name="fullscreen">Fullscreen</string>
+    <string name="exit_fullscreen">Exit fullscreen</string>
 </resources>

@@ -236,4 +236,29 @@ class ReaderViewModelTest {
         assertTrue(v.html.contains("Body[1]"))
         assertFalse(v.html.contains("Body[11]"))
     }
+
+    @Test
+    fun changeFontFamily_persistsAndRebuilds() = runBlocking {
+        val dao = FakeReaderDao(listOf(book()))
+        val v = vm(dao, twoChapters())
+        assertTrue(v.loadChapter(0))
+        val fake = tmp.newFile("Vazir.ttf")
+        assertTrue(v.changeFontFamily("Vazir", listOf(fake)))
+        assertEquals("Vazir", v.fontFamily)
+        assertTrue(v.html.contains("Vazir"))
+        assertEquals("Vazir", dao.getById("b1")?.fontFamily)
+        assertFalse(v.changeFontFamily("  ", emptyList()))
+    }
+
+    @Test
+    fun applyTheme_rebuildsWithNewColors() = runBlocking {
+        val dao = FakeReaderDao(listOf(book()))
+        val v = vm(dao, twoChapters())
+        assertTrue(v.loadChapter(0))
+        assertTrue(v.html.contains("#1C1A2A"))
+        assertTrue(v.applyTheme(com.novelfa.reader.theme.Themes.WHITE))
+        assertEquals(com.novelfa.reader.theme.Themes.WHITE, v.theme)
+        assertTrue(v.html.contains("#FFFFFF"))
+        assertFalse(v.html.contains("#1C1A2A"))
+    }
 }

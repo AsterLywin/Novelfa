@@ -46,7 +46,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun CollectionsScreen(
     viewModel: LibraryViewModel,
-    onOpenBook: (String) -> Unit
+    onOpenBook: (String) -> Unit,
+    onBack: (() -> Unit)? = null
 ) {
     val books by viewModel.books.collectAsState(initial = emptyList())
     val collections = remember(books) {
@@ -63,6 +64,15 @@ fun CollectionsScreen(
     val scope = rememberCoroutineScope()
 
     Column {
+        if (onBack != null) {
+            Row(modifier = Modifier.padding(horizontal = 4.dp)) {
+                TextButton(onClick = onBack) { Text("→") }
+                Text(
+                    stringResource(R.string.library_collections),
+                    modifier = Modifier.align(Alignment.CenterVertically)
+                )
+            }
+        }
         if (selected == null) {
             LazyColumn {
                 items(collections) { name ->

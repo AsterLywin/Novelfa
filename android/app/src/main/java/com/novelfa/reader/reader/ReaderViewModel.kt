@@ -294,6 +294,29 @@ class ReaderViewModel(
         }
     }
 
+    /**
+     * Per-book font family (reader top-bar picker). Persists to the entity
+     * and rebuilds the current chapter so @font-face + family apply.
+     */
+    suspend fun changeFontFamily(family: String, files: List<File>): Boolean {
+        val clean = family.trim()
+        if (clean.isEmpty()) return false
+        fontFamily = clean
+        fontFiles = files
+        book = book.copy(fontFamily = clean)
+        dao.update(book)
+        return if (html.isNotEmpty()) loadChapter(index) else true
+    }
+
+    /**
+     * Reader theme switch (reader top-bar menu). Rebuilds the current
+     * chapter so background/text/link colors apply.
+     */
+    suspend fun applyTheme(t: ReaderTheme): Boolean {
+        theme = t
+        return if (html.isNotEmpty()) loadChapter(index) else true
+    }
+
     fun spacingCss(): String =
         HtmlBuilder.spacingCss(lineHeight, sideMargin, paragraphSpacing)
 

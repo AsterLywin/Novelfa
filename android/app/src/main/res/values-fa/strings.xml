@@ -341,4 +341,19 @@
     <string name="echidna_the_witch_of_greed">اکیدنا، جادوگرِ طمع</string>
     <string name="venomous_green_and_midnight_tea_an_insatiable_greed_for">سبزِ زهرآگین و چایِ نیمه‌شب؛ طمعِ سیری‌ناپذیر برای دانستن</string>
     <string name="app_name">ناول‌فا ریدر</string>
+    <string name="app_settings">تنظیمات</string>
+    <string name="library_collections">مجموعه‌ها</string>
+    <string name="about_title">درباره ناولفا</string>
+    <string name="about_body">کتاب‌خوان فارسی، کاملاً آفلاین و بدون هیچ دسترسی. هیچ داده‌ای جمع یا ارسال نمی‌شود.</string>
+    <string name="app_version">نسخه %1$s</string>
+    <string name="empty_library">اینجا هنوز کتابی نیست</string>
+    <string name="empty_library_hint">دکمه + رو بزن و یه EPUB اضافه کن</string>
+    <string name="make_private">خصوصی کن</string>
+    <string name="make_public">عمومی کن</string>
+    <string name="book_menu">گزینه‌ها</string>
+    <string name="choose_theme">تم مطالعه</string>
+    <string name="choose_font">فونت مطالعه</string>
+    <string name="font_system_tahoma">Tahoma (سیستمی)</string>
+    <string name="fullscreen">تمام‌صفحه</string>
+    <string name="exit_fullscreen">خروج از تمام‌صفحه</string>
 </resources>

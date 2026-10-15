@@ -17,7 +17,9 @@ class StringsTest {
     @Test
     fun mapSize_equalsFaEntryCount() {
         // 311 fa entries parsed from EpubReader/Services/LocStrings.cs
-        assertEquals(311, Strings.size)
+        // + 15 UI-pass entries (library header/hero/sort, reader
+        // theme/font/fullscreen, about) = 326.
+        assertEquals(326, Strings.size)
     }
 
     @Test
