@@ -508,7 +508,7 @@ private fun LazyGridScope.libraryHeaderSpan(
             HeroCard(
                 book = hero,
                 title = displayTitle(hero, allBooks),
-                onContinue = { openBookSafe(hero.id) }
+                onContinue = { onOpenBook(hero.id) }
             )
         }
     }
@@ -567,7 +567,7 @@ private fun LazyListScope.libraryHeaderList(
             HeroCard(
                 book = hero,
                 title = displayTitle(hero, allBooks),
-                onContinue = { openBookSafe(hero.id) }
+                onContinue = { onOpenBook(hero.id) }
             )
         }
     }
