@@ -866,7 +866,7 @@ private fun ProfileHeader(
                     )
                 } else {
                     Image(
-                        painter = painterResource(id = R.mipmap.ic_launcher),
+                        painter = painterResource(id = R.drawable.app_logo),
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize()
                     )
