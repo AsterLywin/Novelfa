@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
@@ -45,6 +46,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.novelfa.reader.R
@@ -108,6 +110,33 @@ fun ReaderScreen(
         snackbar.showSnackbar(chapterErr + (v.lastError ?: ""))
     }
 
+    /**
+     * Applies a ViewModel append/prepend to the WebView without a full
+     * reload: evaluates the chunk JS, then removes chapters dropped by the
+     * window trim via [HtmlBuilder.dropJs] (scroll-compensated, no jump).
+     */
+    suspend fun applyIncrementalJs(v: ReaderViewModel, prevLast: Int, prevFirst: Int) {
+        val drop = v.lastDropped
+        val dropJs = if (drop != null && !drop.isEmpty()) {
+            HtmlBuilder.dropJs(v.docGen, drop.first, drop.last)
+        } else ""
+        when {
+            v.lastChunkKind == "append" && v.contLast != prevLast -> {
+                webView?.evaluateJavascript(
+                    HtmlBuilder.appendJs(v.docGen, v.lastChunk ?: "") + dropJs, null
+                )
+            }
+            v.lastChunkKind == "prepend" && v.contFirst != prevFirst -> {
+                webView?.evaluateJavascript(
+                    HtmlBuilder.prependJs(v.docGen, v.lastChunk ?: "", v.lastPrependDivider) +
+                        dropJs,
+                    null
+                )
+            }
+        }
+        v.clearDropped()
+    }
+
     val bridge = remember {
         ScrollBridge { t, h, c ->
             scope.launch {
@@ -115,16 +144,7 @@ fun ReaderScreen(
                 val last = v.contLast
                 val first = v.contFirst
                 v.onScroll(t, h, c)
-                if (v.contLast != last && v.lastChunkKind == "append") {
-                    webView?.evaluateJavascript(
-                        HtmlBuilder.appendJs(v.docGen, v.lastChunk ?: ""), null
-                    )
-                } else if (v.contFirst != first && v.lastChunkKind == "prepend") {
-                    webView?.evaluateJavascript(
-                        HtmlBuilder.prependJs(v.docGen, v.lastChunk ?: "", v.lastPrependDivider),
-                        null
-                    )
-                }
+                applyIncrementalJs(v, last, first)
                 rev++
             }
         }
@@ -200,12 +220,28 @@ fun ReaderScreen(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        // Single open path: the top-bar menu button. No edge-swipe.
+        gesturesEnabled = false,
         drawerContent = {
-            ModalDrawerSheet {
-                Text(
-                    stringResource(R.string.chapters),
-                    modifier = Modifier.padding(16.dp)
-                )
+            ModalDrawerSheet(
+                modifier = Modifier.widthIn(max = 300.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // RTL: the first child lands at the right — the menu icon
+                    // sits to the right of the title; tapping it closes.
+                    TextButton(onClick = { scope.launch { drawerState.close() } }) {
+                        Text("\u2630")
+                    }
+                    Text(
+                        stringResource(R.string.chapters),
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+                }
                 val v = vm
                 if (v == null) {
                     Text(
@@ -242,20 +278,20 @@ fun ReaderScreen(
                 rev
                 TopAppBar(
                     title = {
-                        Column {
-                            Text(
-                                text = v?.chapterTitle ?: "",
-                                textAlign = if (v != null &&
-                                    HtmlText.detectDirection(v.chapterTitle) == 1
-                                ) {
-                                    TextAlign.Left
-                                } else {
-                                    TextAlign.Right
-                                },
-                                modifier = Modifier.fillMaxWidth()
+                        val titleText = if (v != null && v.chapters.isNotEmpty()) {
+                            stringResource(
+                                R.string.section_x_of_y, v.index + 1, v.chapters.size
                             )
-                            Text(text = v?.positionText ?: "")
-                        }
+                        } else ""
+                        Text(
+                            text = titleText,
+                            textAlign = if (HtmlText.detectDirection(titleText) == 1) {
+                                TextAlign.Left
+                            } else {
+                                TextAlign.Right
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     },
                     navigationIcon = {
                         TextButton(onClick = { scope.launch { drawerState.open() } }) {
@@ -264,7 +300,7 @@ fun ReaderScreen(
                     },
                     actions = {
                         TextButton(onClick = { themeOpen = true }, enabled = vm != null) {
-                            Text("◑")
+                            Text("◑", fontSize = 22.sp)
                         }
                         TextButton(onClick = { fontOpen = true }, enabled = vm != null) {
                             Text("F")
@@ -314,6 +350,22 @@ fun ReaderScreen(
                                     val vv = vm ?: return@Switch
                                     vv.continuous = it
                                     continuousUi = it
+                                    if (it) {
+                                        // Show the continuous layout right away:
+                                        // append the next chapter now instead of
+                                        // waiting for a scroll-to-bottom.
+                                        scope.launch {
+                                            val last = vv.contLast
+                                            val first = vv.contFirst
+                                            if (vv.appendNext()) {
+                                                applyIncrementalJs(vv, last, first)
+                                            }
+                                            rev++
+                                        }
+                                    } else {
+                                        // Back to the single-chapter view.
+                                        scope.launch { gotoChapter(vv, vv.index) }
+                                    }
                                     rev++
                                 }
                             )
@@ -370,7 +422,22 @@ fun ReaderScreen(
                         onError = { details ->
                             scope.launch { snackbar.showSnackbar(chapterErr + details) }
                         },
-                        onWebView = { webView = it }
+                        onWebView = { webView = it },
+                        onSwipeLeft = {
+                            // RTL: a leftward swipe turns to the next section.
+                            val v = vm
+                            if (v != null && !v.continuous &&
+                                v.index + 1 < v.chapters.size
+                            ) {
+                                scope.launch { gotoChapter(v, v.index + 1) }
+                            }
+                        },
+                        onSwipeRight = {
+                            val v = vm
+                            if (v != null && !v.continuous && v.index > 0) {
+                                scope.launch { gotoChapter(v, v.index - 1) }
+                            }
+                        }
                     )
                 }
                 if (fullscreenUi) {

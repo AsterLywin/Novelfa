@@ -8,6 +8,8 @@ import com.novelfa.reader.theme.Themes
 import java.io.File
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 /**
  * Reader state machine ported from MainWindow.xaml.cs: LoadChapterContent
@@ -69,6 +71,17 @@ class ReaderViewModel(
         private set
     var lastPrependDivider: String = ""
         private set
+    /**
+     * Index range dropped by the last [trimWindow] (null when nothing was
+     * trimmed). The UI removes these divs from the WebView DOM via
+     * [HtmlBuilder.dropJs] so no full reload (and no scroll jump) is needed.
+     */
+    var lastDropped: IntRange? = null
+        private set
+
+    fun clearDropped() {
+        lastDropped = null
+    }
 
     val positionText: String
         get() = "${index + 1} از ${chapters.size}"
@@ -151,16 +164,18 @@ class ReaderViewModel(
         }
         isAppending = true
         try {
-            val body = readPrepared(next)
+            val body = withContext(Dispatchers.IO) { readPrepared(next) }
             val chunk = "<div class=\"rdr-chap\" data-idx=\"" + next + "\"" +
                 HtmlText.chapterDirAttr(body) + ">" +
                 ChapterDivider.divider(chapters[next].title, theme) + body + "</div>"
             html = html.replace("</body>", chunk + "</body>")
             contLast = next
+            index = next
             lastChunk = chunk
             lastChunkKind = "append"
             lastError = null
             trimWindow(keepTail = true)
+            saveProgress(next)
             return true
         } catch (e: Exception) {
             lastError = e.message
@@ -185,17 +200,19 @@ class ReaderViewModel(
         }
         isAppending = true
         try {
-            val body = readPrepared(prev)
+            val body = withContext(Dispatchers.IO) { readPrepared(prev) }
             val chunk = "<div class=\"rdr-chap\" data-idx=\"" + prev + "\"" +
                 HtmlText.chapterDirAttr(body) + ">" + body + "</div>"
             val divider = ChapterDivider.divider(chapters[contFirst].title, theme)
             html = html.replace("<body>", "<body>" + chunk + divider)
             contFirst = prev
+            index = prev
             lastChunk = chunk
             lastPrependDivider = divider
             lastChunkKind = "prepend"
             lastError = null
             trimWindow(keepTail = false)
+            saveProgress(prev)
             return true
         } catch (e: Exception) {
             lastError = e.message
@@ -209,21 +226,26 @@ class ReaderViewModel(
     /**
      * Caps the rendered window at [MAX_WINDOW_SPAN] chapters. [keepTail] is
      * true when appending (user scrolls down: drop from the top) and false
-     * when prepending (drop from the bottom). Rebuilds [html] from the window
-     * so the WebView reloads ([lastChunkKind] "full") instead of growing the
-     * DOM forever. No-op while the span fits.
+     * when prepending (drop from the bottom). [html] is rebuilt from the
+     * surviving window so it stays in sync with the DOM, and the dropped
+     * index range is published in [lastDropped] for the UI to remove via
+     * [HtmlBuilder.dropJs] — no full reload, no scroll jump. [lastChunkKind]
+     * is intentionally left as "append"/"prepend" so the incremental JS path
+     * (chunk + drop) runs. No-op while the span fits.
      */
     private fun trimWindow(keepTail: Boolean) {
+        lastDropped = null
         if (contLast - contFirst + 1 <= MAX_WINDOW_SPAN) return
         if (keepTail) {
-            contFirst = contLast - MAX_WINDOW_SPAN + 1
+            val newFirst = contLast - MAX_WINDOW_SPAN + 1
+            lastDropped = contFirst..newFirst - 1
+            contFirst = newFirst
         } else {
-            contLast = contFirst + MAX_WINDOW_SPAN - 1
+            val newLast = contFirst + MAX_WINDOW_SPAN - 1
+            lastDropped = newLast + 1..contLast
+            contLast = newLast
         }
         html = rebuildWindowHtml()
-        lastChunk = null
-        lastPrependDivider = ""
-        lastChunkKind = "full"
     }
 
     /**
@@ -312,16 +334,54 @@ class ReaderViewModel(
         fontFiles = files
         book = book.copy(fontFamily = clean)
         dao.update(book)
-        return if (html.isNotEmpty()) loadChapter(index) else true
+        return if (html.isNotEmpty()) reloadForSettings() else true
+    }
+
+    /**
+     * Rebuilds the current view after a theme/font change without losing
+     * continuous mode: when [continuous] with a multi-chapter window, the
+     * whole window is rebuilt; otherwise the single current chapter is
+     * rebuilt. The caller must push [html] to the WebView (full reload);
+     * [lastChunkKind] is "full" afterwards.
+     */
+    suspend fun reloadForSettings(): Boolean {
+        if (html.isEmpty()) return true
+        return try {
+            docGen++
+            html = withContext(Dispatchers.IO) {
+                if (continuous && contLast > contFirst) {
+                    rebuildWindowHtml()
+                } else {
+                    val body = readPrepared(index)
+                    val wrapped = "<div class=\"rdr-chap\" data-idx=\"" + index + "\"" +
+                        HtmlText.chapterDirAttr(body) + ">" + body + "</div>"
+                    baseUrl = baseUrl(index)
+                    HtmlBuilder.build(
+                        baseUrl, wrapped, theme, fontFamily, fontSize,
+                        lineHeight, sideMargin, paragraphSpacing, isEnglish,
+                        HtmlBuilder.fontFaceCss(fontFamily, fontFiles), docGen
+                    )
+                }
+            }
+            lastChunk = null
+            lastDropped = null
+            lastChunkKind = "full"
+            lastError = null
+            true
+        } catch (e: Exception) {
+            lastError = e.message
+            false
+        }
     }
 
     /**
      * Reader theme switch (reader top-bar menu). Rebuilds the current
-     * chapter so background/text/link colors apply.
+     * view so background/text/link colors apply (keeps the continuous
+     * window when active).
      */
     suspend fun applyTheme(t: ReaderTheme): Boolean {
         theme = t
-        return if (html.isNotEmpty()) loadChapter(index) else true
+        return if (html.isNotEmpty()) reloadForSettings() else true
     }
 
     fun spacingCss(): String =

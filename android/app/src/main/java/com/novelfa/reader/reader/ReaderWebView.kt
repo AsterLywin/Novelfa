@@ -1,10 +1,13 @@
 package com.novelfa.reader.reader
 
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import kotlin.math.abs
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,7 +42,9 @@ fun ReaderWebView(
     bridge: ScrollBridge,
     onError: (String) -> Unit,
     onWebView: (WebView) -> Unit = {},
-    onPageFinished: () -> Unit = {}
+    onPageFinished: () -> Unit = {},
+    onSwipeLeft: () -> Unit = {},
+    onSwipeRight: () -> Unit = {}
 ) {
     val loaded = remember { mutableStateOf<String?>(null) }
     AndroidView(
@@ -65,6 +70,30 @@ fun ReaderWebView(
                 settings.builtInZoomControls = false
                 settings.displayZoomControls = false
                 settings.defaultTextEncodingName = "utf-8"
+                // Horizontal fling -> previous/next page. Observed only, never
+                // consumed, so vertical scrolling and pinch zoom keep working.
+                val swipeDetector = GestureDetector(ctx,
+                    object : GestureDetector.SimpleOnGestureListener() {
+                        override fun onFling(
+                            e1: MotionEvent?, e2: MotionEvent,
+                            velocityX: Float, velocityY: Float
+                        ): Boolean {
+                            if (e1 == null) return false
+                            val dx = e2.x - e1.x
+                            val dy = e2.y - e1.y
+                            if (abs(dx) > abs(dy) * 1.5f &&
+                                abs(dx) > 80f && abs(velocityX) > 400f
+                            ) {
+                                if (dx < 0) onSwipeLeft() else onSwipeRight()
+                                return true
+                            }
+                            return false
+                        }
+                    })
+                setOnTouchListener { _, event ->
+                    swipeDetector.onTouchEvent(event)
+                    false
+                }
                 addJavascriptInterface(bridge, "Android")
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) {
