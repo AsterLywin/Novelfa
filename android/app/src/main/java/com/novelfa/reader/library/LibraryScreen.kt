@@ -99,7 +99,6 @@ private fun greetingRes(): Int {
 fun LibraryScreen(
     onOpenBook: (String) -> Unit,
     viewModel: LibraryViewModel,
-    onOpenCollections: () -> Unit = {},
     onOpenSettings: () -> Unit = {}
 ) {
     // Task 9: tab + query survive rotation/process death (DB is NOT
@@ -208,13 +207,12 @@ fun LibraryScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.app_name)) },
                 actions = {
-                    TextButton(onClick = onOpenCollections) {
-                        Text(stringResource(R.string.library_collections))
+                    TextButton(onClick = { aboutOpen = true }) {
+                        Text(stringResource(R.string.about_us))
                     }
                     TextButton(onClick = onOpenSettings) {
                         Text(stringResource(R.string.app_settings))
                     }
-                    TextButton(onClick = { aboutOpen = true }) { Text("ⓘ") }
                 }
             )
         },
