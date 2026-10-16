@@ -150,6 +150,7 @@
     <string name="opening">در حال باز کردن «%1$s»...</string>
     <string name="couldn_t_open_the_book">"خطا در باز کردن کتاب:
 "</string>
+    <string name="book_file_missing">"فایل کتاب پیدا نشد — با بک‌آپ برنگشته. لطفاً دوباره ایمپورتش کن."</string>
     <string name="open_collection">باز کردن مجموعه</string>
     <string name="add_to_collection">افزودن به مجموعه</string>
     <string name="change_collection">تغییر مجموعه</string>

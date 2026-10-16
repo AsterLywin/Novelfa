@@ -150,6 +150,7 @@ No: continue from chapter %1$s"</string>
     <string name="opening">Opening “%1$s”...</string>
     <string name="couldn_t_open_the_book">"Couldn\'t open the book:
 "</string>
+    <string name="book_file_missing">"Book file not found — it was not restored by backup. Please import it again."</string>
     <string name="open_collection">Open collection</string>
     <string name="add_to_collection">Add to collection</string>
     <string name="change_collection">Change collection</string>
