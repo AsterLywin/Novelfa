@@ -139,7 +139,13 @@ fun LibraryScreen(
                 try {
                     viewModel.import(uri)
                 } catch (e: ImportException) {
-                    snackbar.showSnackbar(e.messageFa)
+                    // DIAGNOSTIC (temporary): surface the real cause in the UI so a
+                    // failing import can be root-caused from a screenshot alone.
+                    // Remove once the import failure is understood and fixed.
+                    val cause = e.cause
+                    val detail = (cause?.javaClass?.simpleName ?: "no-cause") +
+                        ": " + (cause?.message ?: e.message)
+                    snackbar.showSnackbar(e.messageFa + "\n" + detail)
                 }
             }
         }

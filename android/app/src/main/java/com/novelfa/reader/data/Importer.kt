@@ -9,6 +9,7 @@ import java.io.IOException
 import java.time.Instant
 import java.util.UUID
 import java.util.zip.ZipFile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -47,6 +48,12 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             )
             tmpDir.deleteRecursively()
             id
+        } catch (e: CancellationException) {
+            // Never swallow coroutine cancellation: clean up and rethrow so the
+            // caller's scope cancels properly instead of faking an import error.
+            tmpDir.deleteRecursively()
+            dest.delete()
+            throw e
         } catch (e: ImportException) {
             Log.e("NovelfaImporter", "import failed: ${e.message}", e)
             tmpDir.deleteRecursively()
