@@ -358,4 +358,10 @@ Drag your EPUB files here and drop them</string>
     <string name="font_system_tahoma">Tahoma (system)</string>
     <string name="fullscreen">Fullscreen</string>
     <string name="exit_fullscreen">Exit fullscreen</string>
+
+    <string name="n_selected">%1$d selected</string>
+    <string name="delete_n_books">Delete %1$d books?</string>
+    <string name="choose_avatar">Choose avatar</string>
+    <string name="default_avatar">Default Novelfa avatar</string>
+    <string name="pick_from_gallery">Choose from gallery</string>
 </resources>

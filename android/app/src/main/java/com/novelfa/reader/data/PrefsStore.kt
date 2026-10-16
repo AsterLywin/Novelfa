@@ -36,6 +36,7 @@ class PrefsStore(private val context: Context) {
         val READER_MARGIN = stringPreferencesKey("readerMargin")
         val READER_SPACING = stringPreferencesKey("readerSpacing")
         val PROFILE_NAME = stringPreferencesKey("profileName")
+        val AVATAR = stringPreferencesKey("avatarPath")
     }
 
     val theme: Flow<String> = context.dataStore.data.map { it[THEME] ?: "dark" }
@@ -52,6 +53,8 @@ class PrefsStore(private val context: Context) {
     val readerMargin: Flow<String> = context.dataStore.data.map { it[READER_MARGIN] ?: "16" }
     val readerSpacing: Flow<String> = context.dataStore.data.map { it[READER_SPACING] ?: "0.6" }
     val profileName: Flow<String> = context.dataStore.data.map { it[PROFILE_NAME] ?: "" }
+    /** Custom avatar file path; blank = default Novelfa icon. */
+    val avatarPath: Flow<String> = context.dataStore.data.map { it[AVATAR] ?: "" }
 
     suspend fun setTheme(value: String) {
         context.dataStore.edit { it[THEME] = value }
@@ -96,6 +99,10 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setProfileName(value: String) {
         context.dataStore.edit { it[PROFILE_NAME] = value }
+    }
+
+    suspend fun setAvatarPath(value: String) {
+        context.dataStore.edit { it[AVATAR] = value }
     }
 
     // Task 7 additive generic string access (used by RankService wiring).
