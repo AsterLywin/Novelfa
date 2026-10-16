@@ -44,6 +44,7 @@ fun NavGraph() {
             LibraryScreen(
                 onOpenBook = { id -> navController.navigate("reader/$id") },
                 viewModel = viewModel,
+                onOpenCollections = { navController.navigate(Routes.COLLECTIONS) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) }
             )
         }
