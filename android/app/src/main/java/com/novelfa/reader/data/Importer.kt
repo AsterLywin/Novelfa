@@ -2,6 +2,7 @@ package com.novelfa.reader.data
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
 import com.novelfa.reader.parser.EpubParser
 import java.io.File
@@ -32,7 +33,10 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             } ?: throw IOException("Cannot open input stream: $sourceUri")
             tmpDir.mkdirs()
             unzip(dest, tmpDir)
-            val parsed = EpubParser.parse(tmpDir, "$id.epub")
+            // Keep the original file name: when the EPUB has no <dc:title>,
+            // the parser falls back to the file name — the UUID name would
+            // show up as the book title otherwise.
+            val parsed = EpubParser.parse(tmpDir, queryDisplayName(sourceUri) ?: "$id.epub")
             val coverPath = parsed.coverFile
                 ?.takeIf { it.exists() }
                 ?.let { CoverStore(context).saveCover(it, dest.absolutePath).absolutePath }
@@ -66,6 +70,15 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             throw ImportException(e.message ?: "import failed", cause = e)
         }
     }
+
+    /** Original file name from the SAF picker (null when unavailable). */
+    private fun queryDisplayName(uri: Uri): String? = runCatching {
+        context.contentResolver.query(
+            uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+        )?.use { c ->
+            if (c.moveToFirst()) c.getString(0)?.takeIf { it.isNotBlank() } else null
+        }
+    }.getOrNull()
 
     private fun unzip(zip: File, outDir: File) {
         ZipFile(zip).use { zf ->

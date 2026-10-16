@@ -35,11 +35,11 @@
     <string name="locked">قفل</string>
     <string name="theme_activated">تم «%1$s» فعال شد.</string>
     <string name="to_unlock_you_need_to_reach_rank_finish_more_book_to_un">برای باز شدن «%1$s» باید به رتبه‌ی «%2$s» برسی؛ %3$s کتاب دیگه تا آخر بخون.</string>
-    <string name="chapter_not_started_chapters_not_started">%1$s فصل · شروع نشده</string>
-    <string name="chapter_of">فصل %1$s از %2$s</string>
+    <string name="chapter_not_started_chapters_not_started">%1$s بخش · شروع نشده</string>
+    <string name="chapter_of">بخش %1$s از %2$s</string>
     <string name="choose_an_existing_collection_or_type_a_new_collection">یک مجموعه موجود را انتخاب کنید یا نام مجموعه جدید را بنویسید.</string>
     <string name="volume">جلد %1$s</string>
-    <string name="volumes_chapters_volumes_finished">%1$s جلد  ·  %2$s فصل  ·  %3$s جلد تموم شده</string>
+    <string name="volumes_chapters_volumes_finished">%1$s جلد  ·  %2$s بخش  ·  %3$s جلد تموم شده</string>
     <string name="new_collection_name">اسم جدید مجموعه:</string>
     <string name="rename_collection">تغییر نام مجموعه</string>
     <string name="the_book_file_wasn_t_found_it_may_have_been_moved_or_de">فایل کتاب پیدا نشد. ممکنه جابجا یا حذف شده باشه.
@@ -114,7 +114,7 @@
     <string name="recently_opened">اخیراً بازشده</string>
     <string name="private_books">کتاب‌های خصوصی</string>
     <string name="my_books">کتاب‌های من</string>
-    <string name="chapter_chapters">%1$s فصل</string>
+    <string name="chapter_chapters">%1$s بخش</string>
     <string name="theme_has_been_unlocked_activate_it_right_now">تم %1$s برات باز شد ✦
 
 همین الان فعالش کنم؟</string>
@@ -140,12 +140,12 @@
     <string name="and_more">" و …"</string>
     <string name="item_was_not_an_epub_and_was_ignored_items_were_not_epu">%1$s مورد EPUB نبود و نادیده گرفته شد.</string>
     <string name="you_ve_finished_this_book">این کتاب رو تموم کردی.</string>
-    <string name="you_have_read_up_to_chapter_of">تا فصل %1$s از %2$s خوندی.</string>
+    <string name="you_have_read_up_to_chapter_of">تا بخش %1$s از %2$s خوندی.</string>
     <string name="do_you_want_to_read_it_from_the_beginning_yes_from_the">"
 می‌خوای از اول بخونیش؟
 
 بله: از اول (پیشرفت صفر میشه)
-خیر: ادامه از فصل %1$s"</string>
+خیر: ادامه از بخش %1$s"</string>
     <string name="start_over">شروع دوباره؟</string>
     <string name="opening">در حال باز کردن «%1$s»...</string>
     <string name="couldn_t_open_the_book">"خطا در باز کردن کتاب:
@@ -172,7 +172,7 @@
     <string name="day">%1$s (روز)</string>
     <string name="couldn_t_add_the_book_to_the_library">افزودن کتاب به کتابخونه انجام نشد.</string>
     <string name="of">%1$s از %2$s</string>
-    <string name="couldn_t_display_the_chapter">"خطا در نمایش فصل:
+    <string name="couldn_t_display_the_chapter">"خطا در نمایش بخش:
 "</string>
     <string name="system_fonts">فونت‌های سیستمی</string>
     <string name="custom_fonts">فونت شخصی</string>
@@ -193,9 +193,9 @@
     <string name="full_screen">تمام صفحه</string>
     <string name="continuous_mode_on">حالت پیوسته: روشن</string>
     <string name="continuous_mode_off">حالت پیوسته: خاموش</string>
-    <string name="couldn_t_load_the_next_chapter">"خطا در بارگذاری فصل بعدی:
+    <string name="couldn_t_load_the_next_chapter">"خطا در بارگذاری بخش بعدی:
 "</string>
-    <string name="couldn_t_load_the_previous_chapter">"خطا در بارگذاری فصل قبلی:
+    <string name="couldn_t_load_the_previous_chapter">"خطا در بارگذاری بخش قبلی:
 "</string>
     <string name="the_book_viewer_couldn_t_start">"نمایشگر کتاب شروع نشد.
 
@@ -231,8 +231,8 @@
     <string name="maximize_restore_window">بزرگ‌نمایی / بازگرداندن پنجره</string>
     <string name="minimize_window">کوچک کردن پنجره</string>
     <string name="close_the_app">بستن برنامه</string>
-    <string name="next_chapter">فصل بعدی</string>
-    <string name="previous_chapter">فصل قبلی</string>
+    <string name="next_chapter">بخش بعدی</string>
+    <string name="previous_chapter">بخش قبلی</string>
     <string name="increase_font_size">بزرگ‌تر کردن فونت</string>
     <string name="decrease_font_size">کوچک‌تر کردن فونت</string>
     <string name="spacing_settings">تنظیمات فاصله‌ها</string>
@@ -261,7 +261,8 @@
     <string name="couldn_t_copy_the_font_file">کپی کردن فایل فونت انجام نشد.</string>
     <string name="couldn_t_save_the_font">ذخیره فونت انجام نشد.</string>
     <string name="windows_rejected_this_font_the_file_may_be_corrupted">ویندوز این فونت رو نپذیرفت. فایل ممکنه خراب باشه.</string>
-    <string name="chapter">فصل %1$s</string>
+    <string name="chapter">بخش %1$s</string>
+    <string name="section_x_of_y">بخش %1$d از %2$d</string>
     <string name="newcomer">تازه‌وارد</string>
     <string name="bookworm">کتاب‌باز</string>
     <string name="avid_reader">کتاب‌خور</string>
@@ -322,9 +323,9 @@
     <string name="book_reader">کتاب‌خوان</string>
     <string name="now_reading">در حال خواندن</string>
     <string name="open_epub_file">باز کردن فایل EPUB</string>
-    <string name="chapters">فهرست فصل‌ها</string>
-    <string name="current_chapter">فصل فعلی</string>
-    <string name="no_chapter_selected">فصلی انتخاب نشده</string>
+    <string name="chapters">فهرست بخش‌ها</string>
+    <string name="current_chapter">بخش فعلی</string>
+    <string name="no_chapter_selected">بخشی انتخاب نشده</string>
     <string name="search_fonts">جستجوی فونت...</string>
     <string name="font_size_10_to_72_type_a_number_and_press_enter">سایز فونت (۱۰ تا ۷۲): عدد بنویس و Enter بزن</string>
     <string name="line_spacing">فاصله‌ی خطوط</string>

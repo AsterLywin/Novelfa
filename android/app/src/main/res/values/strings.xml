@@ -35,11 +35,11 @@ Details were saved in this file:
     <string name="locked">Locked</string>
     <string name="theme_activated">Theme “%1$s” activated.</string>
     <string name="to_unlock_you_need_to_reach_rank_finish_more_book_to_un">To unlock “%1$s” you need to reach rank “%2$s”; finish %3$s more book.|To unlock “%1$s” you need to reach rank “%2$s”; finish %3$s more books.</string>
-    <string name="chapter_not_started_chapters_not_started">%1$s chapter · not started|%1$s chapters · not started</string>
-    <string name="chapter_of">Chapter %1$s of %2$s</string>
+    <string name="chapter_not_started_chapters_not_started">%1$s section · not started|%1$s sections · not started</string>
+    <string name="chapter_of">Section %1$s of %2$s</string>
     <string name="choose_an_existing_collection_or_type_a_new_collection">Choose an existing collection or type a new collection name.</string>
     <string name="volume">Volume %1$s</string>
-    <string name="volumes_chapters_volumes_finished">%1$s volumes  ·  %2$s chapters  ·  %3$s volumes finished</string>
+    <string name="volumes_chapters_volumes_finished">%1$s volumes  ·  %2$s sections  ·  %3$s volumes finished</string>
     <string name="new_collection_name">New collection name:</string>
     <string name="rename_collection">Rename collection</string>
     <string name="the_book_file_wasn_t_found_it_may_have_been_moved_or_de">The book file wasn\'t found. It may have been moved or deleted.
@@ -114,7 +114,7 @@ Activate theme %3$s right now?</string>
     <string name="recently_opened">Recently opened</string>
     <string name="private_books">Private books</string>
     <string name="my_books">My books</string>
-    <string name="chapter_chapters">%1$s chapter|%1$s chapters</string>
+    <string name="chapter_chapters">%1$s section|%1$s sections</string>
     <string name="theme_has_been_unlocked_activate_it_right_now">Theme %1$s has been unlocked ✦
 
 Activate it right now?</string>
@@ -140,12 +140,12 @@ Activate it right now?</string>
     <string name="and_more">" and more…"</string>
     <string name="item_was_not_an_epub_and_was_ignored_items_were_not_epu">%1$s item was not an EPUB and was ignored.|%1$s items were not EPUBs and were ignored.</string>
     <string name="you_ve_finished_this_book">You\'ve finished this book.</string>
-    <string name="you_have_read_up_to_chapter_of">You have read up to chapter %1$s of %2$s.</string>
+    <string name="you_have_read_up_to_chapter_of">You have read up to section %1$s of %2$s.</string>
     <string name="do_you_want_to_read_it_from_the_beginning_yes_from_the">"
 Do you want to read it from the beginning?
 
 Yes: from the start (progress resets to zero)
-No: continue from chapter %1$s"</string>
+No: continue from section %1$s"</string>
     <string name="start_over">Start over?</string>
     <string name="opening">Opening “%1$s”...</string>
     <string name="couldn_t_open_the_book">"Couldn\'t open the book:
@@ -172,7 +172,7 @@ No: continue from chapter %1$s"</string>
     <string name="day">%1$s (Day)</string>
     <string name="couldn_t_add_the_book_to_the_library">Couldn\'t add the book to the library.</string>
     <string name="of">%1$s of %2$s</string>
-    <string name="couldn_t_display_the_chapter">"Couldn\'t display the chapter:
+    <string name="couldn_t_display_the_chapter">"Couldn\'t display the section:
 "</string>
     <string name="system_fonts">System fonts</string>
     <string name="custom_fonts">Custom fonts</string>
@@ -193,9 +193,9 @@ This cannot be undone.</string>
     <string name="full_screen">Full screen</string>
     <string name="continuous_mode_on">Continuous mode: On</string>
     <string name="continuous_mode_off">Continuous mode: Off</string>
-    <string name="couldn_t_load_the_next_chapter">"Couldn\'t load the next chapter:
+    <string name="couldn_t_load_the_next_chapter">"Couldn\'t load the next section:
 "</string>
-    <string name="couldn_t_load_the_previous_chapter">"Couldn\'t load the previous chapter:
+    <string name="couldn_t_load_the_previous_chapter">"Couldn\'t load the previous section:
 "</string>
     <string name="the_book_viewer_couldn_t_start">"The book viewer couldn\'t start.
 
@@ -231,8 +231,8 @@ Open its download page?</string>
     <string name="maximize_restore_window">Maximize / restore window</string>
     <string name="minimize_window">Minimize window</string>
     <string name="close_the_app">Close the app</string>
-    <string name="next_chapter">Next chapter</string>
-    <string name="previous_chapter">Previous chapter</string>
+    <string name="next_chapter">Next section</string>
+    <string name="previous_chapter">Previous section</string>
     <string name="increase_font_size">Increase font size</string>
     <string name="decrease_font_size">Decrease font size</string>
     <string name="spacing_settings">Spacing settings</string>
@@ -261,7 +261,8 @@ Open its download page?</string>
     <string name="couldn_t_copy_the_font_file">Couldn\'t copy the font file.</string>
     <string name="couldn_t_save_the_font">Couldn\'t save the font.</string>
     <string name="windows_rejected_this_font_the_file_may_be_corrupted">Windows rejected this font. The file may be corrupted.</string>
-    <string name="chapter">Chapter %1$s</string>
+    <string name="chapter">Section %1$s</string>
+    <string name="section_x_of_y">Section %1$d of %2$d</string>
     <string name="newcomer">Newcomer</string>
     <string name="bookworm">Bookworm</string>
     <string name="avid_reader">Avid reader</string>
@@ -322,9 +323,9 @@ Drag your EPUB files here and drop them</string>
     <string name="book_reader">Book Reader</string>
     <string name="now_reading">Now reading</string>
     <string name="open_epub_file">Open EPUB file</string>
-    <string name="chapters">Chapters</string>
-    <string name="current_chapter">Current chapter</string>
-    <string name="no_chapter_selected">No chapter selected</string>
+    <string name="chapters">Sections</string>
+    <string name="current_chapter">Current section</string>
+    <string name="no_chapter_selected">No section selected</string>
     <string name="search_fonts">Search fonts...</string>
     <string name="font_size_10_to_72_type_a_number_and_press_enter">Font size (10 to 72): type a number and press Enter</string>
     <string name="line_spacing">Line spacing</string>
