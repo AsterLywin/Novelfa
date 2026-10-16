@@ -70,7 +70,10 @@ import com.novelfa.reader.settings.PinSession
 import com.novelfa.reader.settings.RankHook
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.Calendar
 
 private val TABS = listOf(
@@ -111,6 +114,24 @@ fun LibraryScreen(
     val shown = remember(books, allBooks, sort) { sortBooks(books, allBooks, sort) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val missingFileMsg = stringResource(R.string.book_file_missing)
+    // Books whose EPUB file is gone (e.g. Auto Backup restored the DB but not
+    // files/books/): show a warning badge and explain instead of opening the
+    // reader into an error.
+    var missingIds by remember { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(shown) {
+        missingIds = withContext(Dispatchers.IO) {
+            shown.filter { it.filePath.isBlank() || !File(it.filePath).isFile }
+                .map { it.id }.toSet()
+        }
+    }
+    val openBookSafe: (String) -> Unit = { id ->
+        if (id in missingIds) {
+            scope.launch { snackbar.showSnackbar(missingFileMsg) }
+        } else {
+            onOpenBook(id)
+        }
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -214,7 +235,7 @@ fun LibraryScreen(
                     fav = visible.count { it.isFavorite },
                     hero = if (tab == Tab.ALL && query.isBlank()) hero else null,
                     allBooks = allBooks,
-                    onOpenBook = onOpenBook,
+                    onOpenBook = openBookSafe,
                     sort = sort,
                     onSort = { sort = it },
                     gridView = true,
@@ -249,8 +270,9 @@ fun LibraryScreen(
                         BookCard(
                             book = book,
                             title = displayTitle(book, allBooks),
-                            onClick = { onOpenBook(book.id) },
-                            onMenuClick = { menuFor = book }
+                            onClick = { openBookSafe(book.id) },
+                            onMenuClick = { menuFor = book },
+                            missingFile = book.id in missingIds
                         )
                     }
                 }
@@ -274,7 +296,7 @@ fun LibraryScreen(
                     fav = visible.count { it.isFavorite },
                     hero = if (tab == Tab.ALL && query.isBlank()) hero else null,
                     allBooks = allBooks,
-                    onOpenBook = onOpenBook,
+                    onOpenBook = openBookSafe,
                     sort = sort,
                     onSort = { sort = it },
                     gridView = false,
@@ -305,8 +327,9 @@ fun LibraryScreen(
                         BookRow(
                             book = book,
                             title = displayTitle(book, allBooks),
-                            onClick = { onOpenBook(book.id) },
-                            onMenuClick = { menuFor = book }
+                            onClick = { openBookSafe(book.id) },
+                            onMenuClick = { menuFor = book },
+                            missingFile = book.id in missingIds
                         )
                     }
                 }
@@ -481,7 +504,7 @@ private fun LazyGridScope.libraryHeaderSpan(
             HeroCard(
                 book = hero,
                 title = displayTitle(hero, allBooks),
-                onContinue = { onOpenBook(hero.id) }
+                onContinue = { openBookSafe(hero.id) }
             )
         }
     }
@@ -540,7 +563,7 @@ private fun LazyListScope.libraryHeaderList(
             HeroCard(
                 book = hero,
                 title = displayTitle(hero, allBooks),
-                onContinue = { onOpenBook(hero.id) }
+                onContinue = { openBookSafe(hero.id) }
             )
         }
     }
@@ -775,7 +798,8 @@ fun BookCard(
     book: BookEntity,
     title: String,
     onClick: () -> Unit,
-    onMenuClick: (() -> Unit)? = null
+    onMenuClick: (() -> Unit)? = null,
+    missingFile: Boolean = false
 ) {
     Card(onClick = onClick) {
         Column {
@@ -799,6 +823,14 @@ fun BookCard(
                         text = "★",
                         modifier = Modifier
                             .align(Alignment.TopEnd)
+                            .padding(6.dp)
+                    )
+                }
+                if (missingFile) {
+                    Text(
+                        text = "⚠",
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
                             .padding(6.dp)
                     )
                 }
@@ -852,7 +884,8 @@ private fun BookRow(
     book: BookEntity,
     title: String,
     onClick: () -> Unit,
-    onMenuClick: () -> Unit
+    onMenuClick: () -> Unit,
+    missingFile: Boolean = false
 ) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -886,6 +919,7 @@ private fun BookRow(
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
                 )
             }
+            if (missingFile) Text("⚠")
             if (book.isFavorite) Text("★")
             TextButton(onClick = onMenuClick) { Text("⋯") }
         }
