@@ -7,6 +7,7 @@ import com.novelfa.reader.theme.ReaderTheme
 import com.novelfa.reader.theme.Themes
 import java.io.File
 import java.time.Instant
+import kotlinx.coroutines.sync.Mutex
 
 /**
  * Reader state machine ported from MainWindow.xaml.cs: LoadChapterContent
@@ -57,6 +58,7 @@ class ReaderViewModel(
         private set
     var isAppending: Boolean = false
         private set
+    private val appendMutex = Mutex()
     var lastError: String? = null
         private set
 
@@ -135,7 +137,9 @@ class ReaderViewModel(
     }
 
     suspend fun appendNext(expectedGen: Int = docGen): Boolean {
-        if (isAppending) {
+        // The JS scroll bridge fires on a WebView background thread; two rapid
+        // scroll events could both pass a plain Boolean check and double-append.
+        if (!appendMutex.tryLock()) {
             return false
         }
         val next = contLast + 1
@@ -163,11 +167,13 @@ class ReaderViewModel(
             return false
         } finally {
             isAppending = false
+            appendMutex.unlock()
         }
     }
 
     suspend fun prependPrev(expectedGen: Int = docGen): Boolean {
-        if (isAppending) {
+        // Same race as appendNext (see above): guard with the mutex, not a Boolean.
+        if (!appendMutex.tryLock()) {
             return false
         }
         val prev = contFirst - 1
@@ -196,6 +202,7 @@ class ReaderViewModel(
             return false
         } finally {
             isAppending = false
+            appendMutex.unlock()
         }
     }
 

@@ -11,7 +11,7 @@ object EpubParser {
     private const val CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 
     fun parse(extractDir: File, epubFileName: String): ParsedBook {
-        val dbf = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+        val dbf = secureDocumentBuilderFactory()
         val opfFile = findOpfFile(dbf, extractDir)
             ?: throw IllegalArgumentException("No OPF package document found in EPUB")
         val opfFolder = opfFile.parentFile!!
@@ -101,11 +101,38 @@ object EpubParser {
                 if (rootfiles.length == 0) return@runCatching null
                 val rel = rootfiles.item(0).attributes.getNamedItem("full-path")
                     ?.nodeValue?.trim() ?: return@runCatching null
-                File(extractDir, rel.replace('/', File.separatorChar)).takeIf { it.isFile }
+                val candidate = File(extractDir, rel.replace('/', File.separatorChar))
+                // Confine the OPF to the extraction dir (crafted full-path
+                // values like ../../databases/reader.db must not escape).
+                val canonicalDir = extractDir.canonicalPath
+                val canonicalOpf = candidate.canonicalPath
+                if (!canonicalOpf.startsWith(canonicalDir + File.separatorChar)) {
+                    return@runCatching null
+                }
+                candidate.takeIf { it.isFile }
             }.getOrNull()
             if (found != null) return found
         }
         return extractDir.walkTopDown()
             .firstOrNull { it.isFile && it.extension.equals("opf", ignoreCase = true) }
     }
+
+    /**
+     * XXE-hardened factory: EPUB XML (container.xml, OPF) is untrusted input.
+     * DOCTYPE is rejected outright (stops external entities AND billion-laughs
+     * style internal-entity bombs); external DTD/entity resolution and
+     * XInclude are disabled as defense in depth. Note: a tiny minority of
+     * ancient OEB 1.2 books declare a DOCTYPE in the OPF — those now fail
+     * import with a clean user-facing error instead of parsing unsafely.
+     */
+    private fun secureDocumentBuilderFactory(): DocumentBuilderFactory =
+        DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setFeature("http://xml.org/sax/features/external-general-entities", false)
+            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+            setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+            isXIncludeAware = false
+            isExpandEntityReferences = false
+        }
 }

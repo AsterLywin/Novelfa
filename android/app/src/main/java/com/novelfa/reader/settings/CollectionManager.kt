@@ -15,7 +15,10 @@ class CollectionException(messageFa: String) : IllegalArgumentException(messageF
  * Pure logic over [BookDao] (suspend, no Android APIs) so it is unit-testable
  * with a fake dao. LibraryViewModel delegates to this class.
  */
-class CollectionManager(private val dao: BookDao) {
+class CollectionManager(
+    private val dao: BookDao,
+    private val cacheDir: File? = null
+) {
 
     /** Rename a collection: updates every book carrying [old] (blank -> throw). */
     suspend fun renameCollection(old: String, new: String) {
@@ -60,6 +63,14 @@ class CollectionManager(private val dao: BookDao) {
         val book = dao.getById(id) ?: return
         dao.delete(book)
         runCatching { File(book.filePath).takeIf { it.isFile }?.delete() }
+        // Drop this book's extracted chapter cache (ReaderScreen re-extracts on
+        // demand; the startup prune in NovelfaApplication is the backstop).
+        cacheDir?.let { dir ->
+            runCatching {
+                File(dir, "epub_open" + File.separatorChar + id)
+                    .takeIf { it.isDirectory }?.deleteRecursively()
+            }
+        }
         val cover = book.coverPath?.takeIf { it.isNotBlank() } ?: return
         val stillUsed = dao.allBooks().first().any { it.coverPath == cover }
         if (!stillUsed) {

@@ -8,7 +8,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import androidx.room.Room
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.Importer
 import com.novelfa.reader.data.PrefsStore
@@ -31,16 +30,15 @@ fun NavGraph() {
     NavHost(navController = navController, startDestination = Routes.LIBRARY) {
         composable(Routes.LIBRARY) {
             val context = LocalContext.current
-            val db = remember {
-                Room.databaseBuilder(context, ReaderDb::class.java, "reader.db").build()
-            }
+            val db = remember { (context.applicationContext as NovelfaApplication).db }
             val prefs = remember { PrefsStore(context) }
             // Task 8: real PIN gate (was NoPinGate) + rank/support prefs.
             val viewModel = remember {
                 LibraryViewModel(
                     db.bookDao(),
                     Importer(context, db),
-                    PinManager(PrefsStorePinPrefs(prefs))
+                    PinManager(PrefsStorePinPrefs(prefs)),
+                    cacheDir = context.cacheDir
                 )
             }
             LibraryScreen(
@@ -52,15 +50,14 @@ fun NavGraph() {
         }
         composable(Routes.COLLECTIONS) {
             val context = LocalContext.current
-            val db = remember {
-                Room.databaseBuilder(context, ReaderDb::class.java, "reader.db").build()
-            }
+            val db = remember { (context.applicationContext as NovelfaApplication).db }
             val prefs = remember { PrefsStore(context) }
             val viewModel = remember {
                 LibraryViewModel(
                     db.bookDao(),
                     Importer(context, db),
-                    PinManager(PrefsStorePinPrefs(prefs))
+                    PinManager(PrefsStorePinPrefs(prefs)),
+                    cacheDir = context.cacheDir
                 )
             }
             CollectionsScreen(
@@ -74,21 +71,20 @@ fun NavGraph() {
             arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
         ) { backStackEntry ->
             val context = LocalContext.current
-            val db = remember {
-                Room.databaseBuilder(context, ReaderDb::class.java, "reader.db").build()
-            }
+            val db = remember { (context.applicationContext as NovelfaApplication).db }
+            val prefs = remember { PrefsStore(context) }
+            val supportTracker = remember { SupportTracker(PrefsStoreSupportPrefs(prefs)) }
             val bookId = backStackEntry.arguments?.getString("bookId") ?: ""
             ReaderScreen(
                 bookId = bookId,
                 dao = db.bookDao(),
-                onClose = { navController.popBackStack() }
+                onClose = { navController.popBackStack() },
+                support = supportTracker
             )
         }
         composable(Routes.SETTINGS) {
             val context = LocalContext.current
-            val db = remember {
-                Room.databaseBuilder(context, ReaderDb::class.java, "reader.db").build()
-            }
+            val db = remember { (context.applicationContext as NovelfaApplication).db }
             val prefs = remember { PrefsStore(context) }
             val settingsVm = remember {
                 SettingsViewModel(

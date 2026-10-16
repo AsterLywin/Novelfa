@@ -1,9 +1,37 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android"); id("com.google.devtools.ksp"); id("org.jetbrains.kotlin.plugin.compose") }
+
+// Release signing (docs/PLAY-RELEASE.md §3): the keystore is NEVER committed.
+// Configure it via environment variables or ~/.gradle/gradle.properties:
+//   NOVELFA_KEYSTORE_PATH / novelfa.keystore.path         -> path to the .jks / .keystore file
+//   NOVELFA_KEYSTORE_PASSWORD / novelfa.keystore.password -> keystore password
+//   NOVELFA_KEY_ALIAS / novelfa.key.alias                 -> key alias
+//   NOVELFA_KEY_PASSWORD / novelfa.key.password            -> key password
+// Without a keystore, :app:assembleRelease keeps emitting app-release-unsigned.apk
+// (which Android refuses to install — it must be signed before sideloading).
+val releaseKeystorePath: String? =
+    System.getenv("NOVELFA_KEYSTORE_PATH") ?: findProperty("novelfa.keystore.path") as String?
+val releaseKeystorePassword: String? =
+    System.getenv("NOVELFA_KEYSTORE_PASSWORD") ?: findProperty("novelfa.keystore.password") as String?
+val releaseKeyAlias: String? =
+    System.getenv("NOVELFA_KEY_ALIAS") ?: findProperty("novelfa.key.alias") as String?
+val releaseKeyPassword: String? =
+    System.getenv("NOVELFA_KEY_PASSWORD") ?: findProperty("novelfa.key.password") as String?
+
 android {
     namespace = "com.novelfa.reader"
     compileSdk = 35
     defaultConfig { applicationId = "com.novelfa.reader"; minSdk = 29; targetSdk = 35; versionCode = 1; versionName = "1.0.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
-    buildTypes { release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
+    if (releaseKeystorePath != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+    buildTypes { release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"); if (releaseKeystorePath != null) { signingConfig = signingConfigs.getByName("release") } } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }

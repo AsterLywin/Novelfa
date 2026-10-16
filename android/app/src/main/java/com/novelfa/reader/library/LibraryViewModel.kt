@@ -85,12 +85,13 @@ private fun isGenericTitle(title: String): Boolean {
 class LibraryViewModel(
     val dao: BookDao,
     private val importer: Importer? = null,
-    val pinGate: PinGate = NoPinGate
+    val pinGate: PinGate = NoPinGate,
+    cacheDir: File? = null
 ) {
     val books: Flow<List<BookEntity>> = dao.allBooks()
 
     /** Task 8 collection/book ops (pure logic in CollectionManager). */
-    val collections = CollectionManager(dao)
+    val collections = CollectionManager(dao, cacheDir)
 
     fun filtered(tab: Tab, query: String): Flow<List<BookEntity>> =
         dao.allBooks().map { applyFilter(it, tab, query) }

@@ -50,12 +50,13 @@ fun ReaderWebView(
                 settings.domStorageEnabled = true
                 // Local file: subresources (chapter images/fonts) must load
                 // under loadDataWithBaseURL; the app is fully offline.
+                // NOTE: allowFileAccessFromFileURLs / allowUniversalAccessFromFileURLs
+                // are deliberately OFF (they were on before): they let JS from a
+                // file:// page read ANY file:// URL, so a malicious EPUB's script
+                // could read app-private files. allowFileAccess + the chapter-dir
+                // base URL is all the reader needs.
                 settings.allowFileAccess = true
                 settings.allowContentAccess = true
-                @Suppress("DEPRECATION")
-                settings.allowFileAccessFromFileURLs = true
-                @Suppress("DEPRECATION")
-                settings.allowUniversalAccessFromFileURLs = true
                 // Responsive scaling (pairs with the viewport meta tag) +
                 // pinch zoom for accessibility; no on-screen zoom buttons.
                 settings.useWideViewPort = true

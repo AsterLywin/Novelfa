@@ -69,9 +69,14 @@ Smoke-check the R8 output after every release build:
      keytool -genkeypair -alias novelfa-upload -keyalg RSA -keysize 2048 `
        -validity 9125 -keystore novelfa-upload.jks
      ```
-     and add a `signingConfigs.release` block reading the passwords from
-     environment variables / `~/.gradle/gradle.properties` (never commit
-     the `.jks` or passwords).
+     `android/app/build.gradle.kts` already wires a `signingConfigs.release`
+     block — point it at the keystore via environment variables (or the same
+     keys in `~/.gradle/gradle.properties`, never committed):
+     `NOVELFA_KEYSTORE_PATH` / `novelfa.keystore.path`,
+     `NOVELFA_KEYSTORE_PASSWORD` / `novelfa.keystore.password`,
+     `NOVELFA_KEY_ALIAS` / `novelfa.key.alias`,
+     `NOVELFA_KEY_PASSWORD` / `novelfa.key.password`.
+     Without these, `assembleRelease` still emits the unsigned APK.
 3. The unsigned `app-release-unsigned.apk` in `outputs/apk/release/` is a
    **local R8 smoke artifact only** — never upload an unsigned APK to Play.
 
@@ -130,3 +135,4 @@ Smoke-check the R8 output after every release build:
 - Installing/launching the release APK on hardware.
 - Manual gate above (§7) — must be done on a real device before the first
   production rollout; prefer Internal testing → Production promotion.
+

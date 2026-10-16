@@ -90,4 +90,50 @@ class PinManagerTest {
         assertTrue(m.verify(" 1234 "))
         assertFalse(m.verify("1234"))
     }
+
+    // v2 salted PBKDF2 scheme (new installs / setPin output).
+
+    @Test
+    fun secureHash_hasV2Prefix_andVerifies() {
+        val h = PinManager.hashPinSecure("1234")
+        assertTrue(h.startsWith("v2$"))
+        assertTrue(PinManager.verifyHash("1234", h))
+        assertFalse(PinManager.verifyHash("0000", h))
+    }
+
+    @Test
+    fun secureHash_randomSalt_eachHashDiffers() {
+        assertFalse(PinManager.hashPinSecure("1234") == PinManager.hashPinSecure("1234"))
+    }
+
+    @Test
+    fun secureHash_malformed_rejected() {
+        assertFalse(PinManager.verifyHash("1234", "v2$broken"))
+        assertFalse(PinManager.verifyHash("1234", "v2$120000$!!!$???"))
+    }
+
+    @Test
+    fun setPin_writesV2_verifyRoundTrip() = runBlocking {
+        val prefs = FakePinPrefs()
+        val m = PinManager(prefs)
+        m.setPin("1234")
+        val stored = prefs.hash!!
+        assertTrue(stored.startsWith("v2$"))
+        assertTrue(m.verify("1234"))
+        assertFalse(m.verify("0000"))
+    }
+
+    @Test
+    fun legacyHash_verifiesAndUpgradesToV2() = runBlocking {
+        val prefs = FakePinPrefs()
+        // Simulate a hash written by an older install (unsalted C# parity).
+        prefs.hash = PinManager.hashPin("1234")
+        val m = PinManager(prefs)
+        assertTrue(m.verify("1234"))
+        // Transparent upgrade on successful unlock.
+        val upgraded = prefs.hash!!
+        assertTrue(upgraded.startsWith("v2$"))
+        assertTrue(m.verify("1234"))
+        assertFalse(m.verify("0000"))
+    }
 }

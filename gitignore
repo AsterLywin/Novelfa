@@ -1,0 +1,38 @@
+# Visual Studio / MSBuild
+.vs/
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+TestResults/
+# Build outputs
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]uild/
+# NuGet
+*.nupkg
+packages/
+# OS
+Thumbs.db
+Desktop.ini
+# Archives
+*.zip
+# SDD working scratch (ledgers, briefs, reports) — never commit
+.superpowers/
+# Gradle / Android local state
+.gradle/
+android/.kotlin/
+android/.gradle/
+local.properties
+*.iml
+.idea/
+captures/
+
+# Release signing keystores (Novelfa Android) — never commit.
+*.jks
+*.keystore
+keystore.properties
