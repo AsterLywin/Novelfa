@@ -118,22 +118,26 @@ object EpubParser {
     }
 
     /**
-     * XXE-hardened factory, BEST-EFFORT: several Android devices' built-in
-     * DocumentBuilderFactory do not honor Apache feature flags and throw
-     * ParserConfigurationException on setFeature — which hard-failed EVERY
-     * import on those devices (cf. aws-amplify/aws-sdk-android#3336).
-     * Unsupported flags are therefore skipped; the manual DOCTYPE scan in
-     * [parseXml] is the portable guarantee and works on every JAXP provider.
+     * XXE-hardened factory, BEST-EFFORT on EVERY setting: Android's built-in
+     * DocumentBuilderFactory leaves several JAXP knobs unimplemented — the
+     * base-class setXIncludeAware()/setExpandEntityReferences() ALWAYS throw
+     * UnsupportedOperationException("...specification "Unknown" version "0.0"")
+     * (cf. jooq/joox#149; this exact line hard-failed every import on-device),
+     * and some devices also reject the Apache setFeature flags
+     * (cf. aws-amplify/aws-sdk-android#3336). Each setting is therefore
+     * applied in runCatching and skipped when unsupported; the manual DOCTYPE
+     * scan in [parseXml] is the portable XXE guarantee and works on every
+     * JAXP provider.
      */
     private fun secureDocumentBuilderFactory(): DocumentBuilderFactory =
         DocumentBuilderFactory.newInstance().apply {
-            isNamespaceAware = true
+            runCatching { isNamespaceAware = true }
             setFeatureSafe("http://apache.org/xml/features/disallow-doctype-decl", true)
             setFeatureSafe("http://xml.org/sax/features/external-general-entities", false)
             setFeatureSafe("http://xml.org/sax/features/external-parameter-entities", false)
             setFeatureSafe("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-            isXIncludeAware = false
-            isExpandEntityReferences = false
+            runCatching { isXIncludeAware = false }
+            runCatching { isExpandEntityReferences = false }
         }
 
     private fun DocumentBuilderFactory.setFeatureSafe(name: String, value: Boolean) {
