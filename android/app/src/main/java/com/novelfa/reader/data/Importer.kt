@@ -2,6 +2,7 @@ package com.novelfa.reader.data
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import com.novelfa.reader.parser.EpubParser
 import java.io.File
 import java.io.IOException
@@ -47,10 +48,12 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             tmpDir.deleteRecursively()
             id
         } catch (e: ImportException) {
+            Log.e("NovelfaImporter", "import failed: ${e.message}", e)
             tmpDir.deleteRecursively()
             dest.delete()
             throw e
         } catch (e: Exception) {
+            Log.e("NovelfaImporter", "import failed: ${e.message}", e)
             tmpDir.deleteRecursively()
             dest.delete()
             throw ImportException(e.message ?: "import failed", cause = e)

@@ -15,7 +15,7 @@ object EpubParser {
         val opfFile = findOpfFile(dbf, extractDir)
             ?: throw IllegalArgumentException("No OPF package document found in EPUB")
         val opfFolder = opfFile.parentFile!!
-        val odoc = dbf.newDocumentBuilder().parse(opfFile)
+        val odoc = parseXml(dbf, opfFile)
         val titleNodes = elements(odoc, DC_NS, "title")
         val title =
             if (titleNodes.length > 0 && titleNodes.item(0).textContent.isNotBlank()) {
@@ -96,7 +96,7 @@ object EpubParser {
         val container = File(extractDir, "META-INF" + File.separatorChar + "container.xml")
         if (container.isFile) {
             val found = runCatching {
-                val cdoc = dbf.newDocumentBuilder().parse(container)
+                val cdoc = parseXml(dbf, container)
                 val rootfiles = elements(cdoc, CONTAINER_NS, "rootfile")
                 if (rootfiles.length == 0) return@runCatching null
                 val rel = rootfiles.item(0).attributes.getNamedItem("full-path")
@@ -118,21 +118,47 @@ object EpubParser {
     }
 
     /**
-     * XXE-hardened factory: EPUB XML (container.xml, OPF) is untrusted input.
-     * DOCTYPE is rejected outright (stops external entities AND billion-laughs
-     * style internal-entity bombs); external DTD/entity resolution and
-     * XInclude are disabled as defense in depth. Note: a tiny minority of
-     * ancient OEB 1.2 books declare a DOCTYPE in the OPF — those now fail
-     * import with a clean user-facing error instead of parsing unsafely.
+     * XXE-hardened factory, BEST-EFFORT: several Android devices' built-in
+     * DocumentBuilderFactory do not honor Apache feature flags and throw
+     * ParserConfigurationException on setFeature — which hard-failed EVERY
+     * import on those devices (cf. aws-amplify/aws-sdk-android#3336).
+     * Unsupported flags are therefore skipped; the manual DOCTYPE scan in
+     * [parseXml] is the portable guarantee and works on every JAXP provider.
      */
     private fun secureDocumentBuilderFactory(): DocumentBuilderFactory =
         DocumentBuilderFactory.newInstance().apply {
             isNamespaceAware = true
-            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-            setFeature("http://xml.org/sax/features/external-general-entities", false)
-            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-            setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+            setFeatureSafe("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setFeatureSafe("http://xml.org/sax/features/external-general-entities", false)
+            setFeatureSafe("http://xml.org/sax/features/external-parameter-entities", false)
+            setFeatureSafe("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
             isXIncludeAware = false
             isExpandEntityReferences = false
         }
+
+    private fun DocumentBuilderFactory.setFeatureSafe(name: String, value: Boolean) {
+        runCatching { setFeature(name, value) }
+    }
+
+    /**
+     * Parses an EPUB package XML file after rejecting DOCTYPE declarations.
+     * Portable XXE/DTD protection: unlike setFeature flags, a literal scan
+     * works on every Android JAXP provider. DOCTYPE can only appear before
+     * the root element and container.xml/OPF are small, so the whole file is
+     * scanned (null bytes stripped to also catch UTF-16-encoded files).
+     * Note: a tiny minority of ancient OEB 1.2 books declare a DOCTYPE in
+     * the OPF — those fail import with a clean user-facing error.
+     */
+    private fun parseXml(dbf: DocumentBuilderFactory, file: File): org.w3c.dom.Document {
+        val bytes = runCatching { file.readBytes() }.getOrNull()
+        if (bytes != null) {
+            val text = bytes.toString(Charsets.UTF_8).replace("\u0000", "")
+            if (text.contains("<!DOCTYPE", ignoreCase = true)) {
+                throw IllegalArgumentException(
+                    "DOCTYPE declarations are not allowed in EPUB package files: ${file.name}"
+                )
+            }
+        }
+        return dbf.newDocumentBuilder().parse(file)
+    }
 }

@@ -156,7 +156,10 @@ fun LibraryScreen(
     // changes (approximation of "resume"), plus private-tab session unlock.
     val context = LocalContext.current
     val prefs = remember(context) { PrefsStore(context) }
-    val profileName by prefs.profileName.collectAsState(initial = "")
+    // initial=null: the placeholder must be distinguishable from a real blank
+    // value, otherwise the welcome dialog opens on every cold start before
+    // DataStore delivers the saved name (and never closes afterwards).
+    val profileName by prefs.profileName.collectAsState(initial = null)
     var welcomeOpen by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var aboutOpen by remember { mutableStateOf(false) }
@@ -167,7 +170,8 @@ fun LibraryScreen(
         }
     }
     LaunchedEffect(profileName) {
-        if (profileName.isBlank()) welcomeOpen = true
+        val name = profileName ?: return@LaunchedEffect // value not loaded yet
+        if (name.isBlank()) welcomeOpen = true
     }
 
     var menuFor by remember { mutableStateOf<BookEntity?>(null) }
@@ -225,7 +229,7 @@ fun LibraryScreen(
                     .padding(horizontal = 12.dp)
             ) {
                 libraryHeaderSpan(
-                    profileName = profileName,
+                    profileName = profileName ?: "",
                     rankName = rankName,
                     bookCount = visible.size,
                     onRename = { renameOpen = true },
@@ -286,7 +290,7 @@ fun LibraryScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 libraryHeaderList(
-                    profileName = profileName,
+                    profileName = profileName ?: "",
                     rankName = rankName,
                     bookCount = visible.size,
                     onRename = { renameOpen = true },
@@ -369,7 +373,7 @@ fun LibraryScreen(
         ProfileNameDialog(
             title = stringResource(R.string.change_name),
             hint = stringResource(R.string.before_we_start_choose_a_name_for_yourself),
-            initial = profileName,
+            initial = profileName ?: "",
             onDismiss = { renameOpen = false },
             onSave = { name ->
                 scope.launch {
