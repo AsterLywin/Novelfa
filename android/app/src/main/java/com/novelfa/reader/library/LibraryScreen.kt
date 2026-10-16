@@ -3,6 +3,11 @@ package com.novelfa.reader.library
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -21,6 +27,8 @@ import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
@@ -34,6 +42,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,7 +59,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -74,6 +85,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.util.Calendar
 
 private val TABS = listOf(
@@ -180,6 +192,34 @@ fun LibraryScreen(
         if (name.isBlank()) welcomeOpen = true
     }
 
+    // Selection mode (long-press a book): empty = off. Tapping toggles;
+    // when the last book is deselected the mode exits by itself.
+    var selection by remember { mutableStateOf(emptySet<String>()) }
+    var deleteConfirm by remember { mutableStateOf(false) }
+    // Avatar: blank path = default Novelfa icon (like the desktop client).
+    val avatarPath by prefs.avatarPath.collectAsState(initial = "")
+    var avatarOpen by remember { mutableStateOf(false) }
+    val galleryPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val path = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val dir = File(context.filesDir, "avatars").apply { mkdirs() }
+                        val dest = File(dir, "avatar.jpg")
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            dest.outputStream().use { output -> input.copyTo(output) }
+                        } ?: throw IOException("cannot open image")
+                        dest.absolutePath
+                    }.getOrNull()
+                }
+                if (path != null) prefs.setAvatarPath(path)
+                avatarOpen = false
+            }
+        }
+    }
+
     var menuFor by remember { mutableStateOf<BookEntity?>(null) }
     var assignFor by remember { mutableStateOf<BookEntity?>(null) }
     var resetFor by remember { mutableStateOf<BookEntity?>(null) }
@@ -213,7 +253,7 @@ fun LibraryScreen(
                     }
                     TextButton(onClick = { aboutOpen = true }) { Text("ⓘ") }
                     TextButton(onClick = onOpenSettings) {
-                        Text(stringResource(R.string.app_settings))
+                        Text("\u2699")
                     }
                 }
             )
@@ -224,20 +264,33 @@ fun LibraryScreen(
             }
         }
     ) { padding ->
-        if (gridView) {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(140.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier
-                    .padding(padding)
-                    .fillMaxSize()
-                    .padding(horizontal = 12.dp)
-            ) {
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+        ) {
+            if (selection.isNotEmpty()) {
+                SelectionBar(
+                    count = selection.size,
+                    onDelete = { deleteConfirm = true },
+                    onCancel = { selection = emptySet() }
+                )
+            }
+            if (gridView) {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(140.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp)
+                ) {
                 libraryHeaderSpan(
                     profileName = profileName ?: "",
                     rankName = rankName,
                     bookCount = visible.size,
+                    avatarPath = avatarPath,
+                    onAvatarClick = { avatarOpen = true },
                     onRename = { renameOpen = true },
                     total = visible.size,
                     reading = visible.count { isInProgress(it) },
@@ -280,25 +333,44 @@ fun LibraryScreen(
                         BookCard(
                             book = book,
                             title = displayTitle(book, allBooks),
-                            onClick = { openBookSafe(book.id) },
+                            onClick = {
+                                if (selection.isNotEmpty()) {
+                                    selection = if (book.id in selection) {
+                                        selection - book.id
+                                    } else {
+                                        selection + book.id
+                                    }
+                                } else {
+                                    openBookSafe(book.id)
+                                }
+                            },
+                            onLongClick = {
+                                selection = if (book.id in selection) {
+                                    selection - book.id
+                                } else {
+                                    selection + book.id
+                                }
+                            },
                             onMenuClick = { menuFor = book },
-                            missingFile = book.id in missingIds
+                            missingFile = book.id in missingIds,
+                            selected = book.id in selection
                         )
                     }
                 }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .padding(padding)
-                    .fillMaxSize()
-                    .padding(horizontal = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                 libraryHeaderList(
                     profileName = profileName ?: "",
                     rankName = rankName,
                     bookCount = visible.size,
+                    avatarPath = avatarPath,
+                    onAvatarClick = { avatarOpen = true },
                     onRename = { renameOpen = true },
                     total = visible.size,
                     reading = visible.count { isInProgress(it) },
@@ -337,13 +409,32 @@ fun LibraryScreen(
                         BookRow(
                             book = book,
                             title = displayTitle(book, allBooks),
-                            onClick = { openBookSafe(book.id) },
+                            onClick = {
+                                if (selection.isNotEmpty()) {
+                                    selection = if (book.id in selection) {
+                                        selection - book.id
+                                    } else {
+                                        selection + book.id
+                                    }
+                                } else {
+                                    openBookSafe(book.id)
+                                }
+                            },
+                            onLongClick = {
+                                selection = if (book.id in selection) {
+                                    selection - book.id
+                                } else {
+                                    selection + book.id
+                                }
+                            },
                             onMenuClick = { menuFor = book },
-                            missingFile = book.id in missingIds
+                            missingFile = book.id in missingIds,
+                            selected = book.id in selection
                         )
                     }
                 }
             }
+        }
         }
     }
 
@@ -472,12 +563,71 @@ fun LibraryScreen(
             }
         )
     }
+
+    if (deleteConfirm) {
+        val targets = selection.mapNotNull { id -> allBooks.firstOrNull { it.id == id } }
+        AlertDialog(
+            onDismissRequest = { deleteConfirm = false },
+            title = { Text(stringResource(R.string.delete_n_books, selection.size)) },
+            text = {
+                Text(
+                    targets.take(5)
+                        .joinToString("\n") { displayTitle(it, allBooks) }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        val ids = targets.map { it.id }
+                        selection = emptySet()
+                        deleteConfirm = false
+                        withContext(Dispatchers.IO) {
+                            ids.forEach { id ->
+                                allBooks.firstOrNull { it.id == id }
+                                    ?.let { viewModel.removeBook(it) }
+                            }
+                        }
+                    }
+                }) { Text(stringResource(R.string.yes)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteConfirm = false }) { Text(stringResource(R.string.no)) }
+            }
+        )
+    }
+
+    if (avatarOpen) {
+        AlertDialog(
+            onDismissRequest = { avatarOpen = false },
+            title = { Text(stringResource(R.string.choose_avatar)) },
+            text = {
+                Column {
+                    TextButton(onClick = {
+                        scope.launch {
+                            prefs.setAvatarPath("")
+                            avatarOpen = false
+                        }
+                    }) { Text(stringResource(R.string.default_avatar)) }
+                    TextButton(onClick = { galleryPicker.launch("image/*") }) {
+                        Text(stringResource(R.string.pick_from_gallery))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { avatarOpen = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
 }
 
 private fun LazyGridScope.libraryHeaderSpan(
     profileName: String,
     rankName: String,
     bookCount: Int,
+    avatarPath: String,
+    onAvatarClick: () -> Unit,
     onRename: () -> Unit,
     total: Int,
     reading: Int,
@@ -500,6 +650,8 @@ private fun LazyGridScope.libraryHeaderSpan(
             name = profileName.ifBlank { "…" },
             rankName = rankName,
             bookCount = bookCount,
+            avatarPath = avatarPath,
+            onAvatarClick = onAvatarClick,
             onRename = onRename
         )
     }
@@ -539,6 +691,8 @@ private fun LazyListScope.libraryHeaderList(
     profileName: String,
     rankName: String,
     bookCount: Int,
+    avatarPath: String,
+    onAvatarClick: () -> Unit,
     onRename: () -> Unit,
     total: Int,
     reading: Int,
@@ -561,6 +715,8 @@ private fun LazyListScope.libraryHeaderList(
             name = profileName.ifBlank { "…" },
             rankName = rankName,
             bookCount = bookCount,
+            avatarPath = avatarPath,
+            onAvatarClick = onAvatarClick,
             onRename = onRename
         )
     }
@@ -652,10 +808,39 @@ private fun pluralBooks(count: Int): String {
 }
 
 @Composable
+private fun SelectionBar(
+    count: Int,
+    onDelete: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                stringResource(R.string.n_selected, count),
+                style = MaterialTheme.typography.titleSmall
+            )
+            Row {
+                TextButton(onClick = onDelete) { Text("\uD83D\uDDD1") }
+                TextButton(onClick = onCancel) { Text("\u2715") }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ProfileHeader(
     name: String,
     rankName: String,
     bookCount: Int,
+    avatarPath: String,
+    onAvatarClick: () -> Unit,
     onRename: () -> Unit
 ) {
     Card(onClick = onRename, modifier = Modifier.fillMaxWidth()) {
@@ -663,21 +848,53 @@ private fun ProfileHeader(
             modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Avatar (like the desktop client): the Novelfa icon by default,
+            // a user-picked image when set. Tapping it opens the picker.
             Box(
-                modifier = Modifier.size(52.dp),
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onAvatarClick),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = name.firstOrNull()?.toString() ?: "?",
-                    style = MaterialTheme.typography.headlineMedium
-                )
+                val avatarFile = avatarPath.takeIf { it.isNotBlank() }?.let { File(it) }
+                if (avatarFile != null && avatarFile.isFile) {
+                    AsyncImage(
+                        model = avatarFile,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Image(
+                        painter = painterResource(id = R.mipmap.ic_launcher),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
             Column(modifier = Modifier.padding(start = 10.dp)) {
                 Text(name, style = MaterialTheme.typography.titleMedium)
-                Text(rankName, style = MaterialTheme.typography.labelMedium)
+                // Rank badge with a colored outline, like the desktop client.
+                Box(
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .border(
+                            1.dp,
+                            MaterialTheme.colorScheme.primary,
+                            RoundedCornerShape(8.dp)
+                        )
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        rankName,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Text(
                     pluralBooks(bookCount),
-                    style = MaterialTheme.typography.labelSmall
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
             }
         }
@@ -809,9 +1026,17 @@ fun BookCard(
     title: String,
     onClick: () -> Unit,
     onMenuClick: (() -> Unit)? = null,
-    missingFile: Boolean = false
+    missingFile: Boolean = false,
+    selected: Boolean = false,
+    onLongClick: (() -> Unit)? = null
 ) {
-    Card(onClick = onClick) {
+    Card(
+        border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+        modifier = Modifier.combinedClickable(
+            onClick = onClick,
+            onLongClick = onLongClick
+        )
+    ) {
         Column {
             Box(
                 modifier = Modifier
@@ -843,6 +1068,22 @@ fun BookCard(
                             .align(Alignment.TopStart)
                             .padding(6.dp)
                     )
+                }
+                if (selected) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(6.dp)
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "\u2713",
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
                 }
                 if (!book.collectionName.isNullOrBlank()) {
                     Text(
@@ -895,9 +1136,19 @@ private fun BookRow(
     title: String,
     onClick: () -> Unit,
     onMenuClick: () -> Unit,
-    missingFile: Boolean = false
+    missingFile: Boolean = false,
+    selected: Boolean = false,
+    onLongClick: (() -> Unit)? = null
 ) {
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+    Card(
+        border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+    ) {
         Row(
             modifier = Modifier.padding(8.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -931,6 +1182,7 @@ private fun BookRow(
             }
             if (missingFile) Text("⚠")
             if (book.isFavorite) Text("★")
+            if (selected) Text("✓")
             TextButton(onClick = onMenuClick) { Text("⋯") }
         }
     }
