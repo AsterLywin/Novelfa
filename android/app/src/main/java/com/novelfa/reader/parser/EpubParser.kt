@@ -127,13 +127,16 @@ object EpubParser {
      */
     private fun secureDocumentBuilderFactory(): DocumentBuilderFactory =
         DocumentBuilderFactory.newInstance().apply {
-            isNamespaceAware = true
+            runCatching { isNamespaceAware = true }
             setFeatureSafe("http://apache.org/xml/features/disallow-doctype-decl", true)
             setFeatureSafe("http://xml.org/sax/features/external-general-entities", false)
             setFeatureSafe("http://xml.org/sax/features/external-parameter-entities", false)
             setFeatureSafe("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-            isXIncludeAware = false
-            isExpandEntityReferences = false
+            // NOTE: setXIncludeAware/setExpandEntityReferences ALWAYS throw
+            // UnsupportedOperationException on Android's DocumentBuilderFactory
+            // (spec "Unknown" version "0.0") — keep them guarded (cf. 2446ec44).
+            runCatching { isXIncludeAware = false }
+            runCatching { isExpandEntityReferences = false }
         }
 
     private fun DocumentBuilderFactory.setFeatureSafe(name: String, value: Boolean) {
