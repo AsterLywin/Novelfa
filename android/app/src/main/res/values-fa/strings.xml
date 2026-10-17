@@ -171,6 +171,12 @@
     <string name="night">%1$s (شب)</string>
     <string name="day">%1$s (روز)</string>
     <string name="couldn_t_add_the_book_to_the_library">افزودن کتاب به کتابخونه انجام نشد.</string>
+    <string name="import_error_not_valid_epub">فایل انتخاب‌شده یک کتاب EPUB معتبر نیست.</string>
+    <string name="import_error_bad_structure">ساختار داخلی کتاب آسیب دیده است.</string>
+    <string name="import_error_old_format">این قالب قدیمی کتاب پشتیبانی نمی‌شود.</string>
+    <string name="import_error_cannot_read">فایل خوانده نشد.</string>
+    <string name="import_error_access_denied">دسترسی به فایل رد شد.</string>
+    <string name="import_error_generic">خطا در باز کردن کتاب</string>
     <string name="of">%1$s از %2$s</string>
     <string name="couldn_t_display_the_chapter">"خطا در نمایش بخش:
 "</string>

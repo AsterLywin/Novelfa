@@ -4,11 +4,13 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import com.novelfa.reader.R
 import com.novelfa.reader.parser.EpubParser
 import java.io.File
 import java.io.IOException
 import java.time.Instant
 import java.util.UUID
+import java.util.zip.ZipException
 import java.util.zip.ZipFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -67,8 +69,38 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             Log.e("NovelfaImporter", "import failed: ${e.message}", e)
             tmpDir.deleteRecursively()
             dest.delete()
-            throw ImportException(e.message ?: "import failed", cause = e)
+            throw ImportException(
+                e.message ?: "import failed",
+                messageFa = context.getString(importErrorMessageRes(e)),
+                cause = e
+            )
         }
+    }
+
+    /**
+     * Maps an import failure to a localized, user-facing message. The raw
+     * technical detail is still surfaced by the caller's diagnostic snackbar;
+     * this is the human-readable line. Walks the cause chain because parsers
+     * often wrap the original failure.
+     */
+    private fun importErrorMessageRes(e: Throwable): Int {
+        var t: Throwable? = e
+        while (t != null) {
+            when {
+                // NB: ZipException extends IOException — check it first.
+                t is ZipException -> return R.string.import_error_not_valid_epub
+                t is SecurityException -> return R.string.import_error_access_denied
+                t is IOException -> return R.string.import_error_cannot_read
+                t is IllegalArgumentException &&
+                    t.message?.contains("DOCTYPE", ignoreCase = true) == true ->
+                    return R.string.import_error_old_format
+                t is IllegalArgumentException &&
+                    t.message?.contains("OPF", ignoreCase = true) == true ->
+                    return R.string.import_error_bad_structure
+            }
+            t = t.cause
+        }
+        return R.string.import_error_generic
     }
 
     /** Original file name from the SAF picker (null when unavailable). */

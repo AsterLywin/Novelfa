@@ -171,6 +171,12 @@ No: continue from section %1$s"</string>
     <string name="night">%1$s (Night)</string>
     <string name="day">%1$s (Day)</string>
     <string name="couldn_t_add_the_book_to_the_library">Couldn\'t add the book to the library.</string>
+    <string name="import_error_not_valid_epub">The selected file is not a valid EPUB book.</string>
+    <string name="import_error_bad_structure">The book\'s internal structure is damaged.</string>
+    <string name="import_error_old_format">This old book format is not supported.</string>
+    <string name="import_error_cannot_read">Couldn\'t read the file.</string>
+    <string name="import_error_access_denied">File access was denied.</string>
+    <string name="import_error_generic">Couldn\'t open the book.</string>
     <string name="of">%1$s of %2$s</string>
     <string name="couldn_t_display_the_chapter">"Couldn\'t display the section:
 "</string>
