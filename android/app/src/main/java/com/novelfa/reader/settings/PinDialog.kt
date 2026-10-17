@@ -29,6 +29,34 @@ import kotlinx.coroutines.launch
 enum class PinMode { SETUP, VERIFY, CHANGE }
 
 /**
+ * Brute-force throttle for PIN verify attempts (process-lifetime): after 5
+ * consecutive failures the dialog refuses further attempts for 30 seconds.
+ */
+object PinThrottle {
+    private const val MAX_FAILURES = 5
+    private const val LOCKOUT_MS = 30_000L
+    private var failures = 0
+    private var lockedUntilMs = 0L
+
+    fun isLockedOut(): Boolean = System.currentTimeMillis() < lockedUntilMs
+
+    fun remainingSeconds(): Long =
+        ((lockedUntilMs - System.currentTimeMillis()) / 1000).coerceAtLeast(1)
+
+    fun recordFailure() {
+        if (++failures >= MAX_FAILURES) {
+            failures = 0
+            lockedUntilMs = System.currentTimeMillis() + LOCKOUT_MS
+        }
+    }
+
+    fun reset() {
+        failures = 0
+        lockedUntilMs = 0L
+    }
+}
+
+/**
  * Process-lifetime session unlock: the private tab shows the lock +
  * PinDialog while `hasPin && !unlocked`, and sets `unlocked = true` on
  * success. The lock button re-locks by setting it back to false.
@@ -60,6 +88,10 @@ fun PinDialog(
     val shortErr = stringResource(R.string.the_pin_must_be_at_least_4_characters)
     val mismatchErr = stringResource(R.string.the_pins_don_t_match)
     val wrongErr = stringResource(R.string.wrong_pin)
+    // Format template resolved at composition; seconds filled in on click
+    // (stringResource with args is @Composable-only).
+    val lockoutFmt = stringResource(R.string.pin_locked_out)
+    fun lockoutErr(): String = lockoutFmt.format(PinThrottle.remainingSeconds())
 
     val title = stringResource(
         when (mode) {
@@ -93,11 +125,15 @@ fun PinDialog(
                     PinMode.VERIFY -> {
                         if (first.isEmpty()) {
                             error = emptyErr
+                        } else if (PinThrottle.isLockedOut()) {
+                            error = lockoutErr()
                         } else if (manager.verify(first)) {
+                            PinThrottle.reset()
                             onSuccess()
                         } else {
+                            PinThrottle.recordFailure()
                             first = ""
-                            error = wrongErr
+                            error = if (PinThrottle.isLockedOut()) lockoutErr() else wrongErr
                         }
                     }
                     PinMode.SETUP -> {
@@ -114,10 +150,14 @@ fun PinDialog(
                         }
                     }
                     PinMode.CHANGE -> {
-                        if (!manager.verify(oldPin)) {
+                        if (PinThrottle.isLockedOut()) {
+                            error = lockoutErr()
+                        } else if (!manager.verify(oldPin)) {
+                            PinThrottle.recordFailure()
                             oldPin = ""
-                            error = wrongErr
+                            error = if (PinThrottle.isLockedOut()) lockoutErr() else wrongErr
                         } else {
+                            PinThrottle.reset()
                             val err = validateSetup(first, second)
                             if (err != null) {
                                 error = err

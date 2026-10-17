@@ -121,7 +121,7 @@ class PrefsStore(private val context: Context) {
         context.dataStore.edit { it[key] = value }
     }
 
-    /** Sync read of the support toggle for the runBlocking SupportPrefs bridge. */
+    /** Sync read of the support toggle (suspend: never blocks the main thread). */
     suspend fun supportEnabledNow(): Boolean =
         context.dataStore.data.map { it[SUPPORT_ENABLED] ?: true }.first()
 }

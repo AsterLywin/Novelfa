@@ -7,6 +7,8 @@ import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** Thrown for PIN validation failures; message is user-facing fa text. */
 class PinException(messageFa: String) : IllegalArgumentException(messageFa)
@@ -63,25 +65,26 @@ class PinManager(private val prefs: PinPrefs) : PinGate {
      * Verifies the PIN against the stored hash (v2 or legacy). On a
      * successful legacy verification the stored hash is upgraded to v2.
      * The input PIN is hashed RAW, exactly like C# VerifyPin/HashPin — no trim.
+     * CPU-bound PBKDF2 runs on Dispatchers.Default, never the caller's thread.
      */
-    suspend fun verify(pin: String): Boolean {
+    suspend fun verify(pin: String): Boolean = withContext(Dispatchers.Default) {
         val saved = prefs.pinHash()?.trim()
-        if (saved.isNullOrEmpty()) return false
-        if (!verifyHash(pin, saved)) return false
+        if (saved.isNullOrEmpty()) return@withContext false
+        if (!verifyHash(pin, saved)) return@withContext false
         if (!isV2(saved)) {
             prefs.setPinHash(hashPinSecure(pin))
         }
-        return true
+        true
     }
 
     /** Stores a new PIN (always v2); rejects PINs shorter than 4 chars (fa message). Raw input, like C#. */
-    suspend fun setPin(pin: String) {
+    suspend fun setPin(pin: String) = withContext(Dispatchers.Default) {
         if (pin.length < 4) throw PinException("پین باید حداقل ۴ کاراکتر باشه")
         prefs.setPinHash(hashPinSecure(pin))
     }
 
     /** Verifies the old PIN first, then stores the new one. */
-    suspend fun changePin(old: String, new: String) {
+    suspend fun changePin(old: String, new: String) = withContext(Dispatchers.Default) {
         if (!verify(old)) throw PinException("پین اشتباهه")
         setPin(new)
     }

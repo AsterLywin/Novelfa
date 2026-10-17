@@ -120,13 +120,15 @@ fun LibraryScreen(
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(SortMode.DEFAULT) }
     var gridView by rememberSaveable { mutableStateOf(true) }
-    val books by viewModel.filtered(tab, query).collectAsState(initial = emptyList())
+    val books by remember(tab, query) { viewModel.filtered(tab, query) }
+        .collectAsState(initial = emptyList())
     val allBooks by viewModel.books.collectAsState(initial = emptyList())
     val visible = remember(allBooks) { allBooks.filter { !it.isPrivate } }
     val shown = remember(books, allBooks, sort) { sortBooks(books, allBooks, sort) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val missingFileMsg = stringResource(R.string.book_file_missing)
+    val avatarCopyErr = stringResource(R.string.couldn_t_copy_the_avatar)
     // Books whose EPUB file is gone (e.g. Auto Backup restored the DB but not
     // files/books/): show a warning badge and explain instead of opening the
     // reader into an error.
@@ -173,7 +175,13 @@ fun LibraryScreen(
     // Task 8: refresh reading rank on first composition and whenever the tab
     // changes (approximation of "resume"), plus private-tab session unlock.
     val context = LocalContext.current
-    val prefs = remember(context) { PrefsStore(context) }
+    // PrefsStore must be built on the application context: the DataStore
+    // delegate is process-wide, so an Activity context would leak the
+    // Activity on recreation (e.g. in-app language change).
+    val prefs = remember(context) { PrefsStore(context.applicationContext) }
+    // Single rank-prefs bridge for the screen: it preloads on IO once and
+    // serves reads from memory (no runBlocking on the UI thread).
+    val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
     // initial=null: the placeholder must be distinguishable from a real blank
     // value, otherwise the welcome dialog opens on every cold start before
     // DataStore delivers the saved name (and never closes afterwards).
@@ -184,7 +192,7 @@ fun LibraryScreen(
     LaunchedEffect(tab) {
         gateTick++
         runCatching {
-            RankHook.refreshRank(viewModel.dao, PrefsStoreRankPrefs(prefs))
+            RankHook.refreshRank(viewModel.dao, rankPrefs)
         }
     }
     LaunchedEffect(profileName) {
@@ -204,7 +212,7 @@ fun LibraryScreen(
     ) { uri ->
         if (uri != null) {
             scope.launch {
-                val path = withContext(Dispatchers.IO) {
+                val result = withContext(Dispatchers.IO) {
                     runCatching {
                         val dir = File(context.filesDir, "avatars").apply { mkdirs() }
                         val dest = File(dir, "avatar.jpg")
@@ -212,9 +220,10 @@ fun LibraryScreen(
                             dest.outputStream().use { output -> input.copyTo(output) }
                         } ?: throw IOException("cannot open image")
                         dest.absolutePath
-                    }.getOrNull()
+                    }
                 }
-                if (path != null) prefs.setAvatarPath(path)
+                result.onSuccess { path -> prefs.setAvatarPath(path) }
+                    .onFailure { snackbar.showSnackbar(avatarCopyErr) }
                 avatarOpen = false
             }
         }

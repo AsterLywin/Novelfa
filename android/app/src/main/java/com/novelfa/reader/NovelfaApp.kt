@@ -30,7 +30,7 @@ import com.novelfa.reader.theme.hexToColor
 @Composable
 fun NovelfaApp() {
     val context = LocalContext.current
-    val prefs = remember { PrefsStore(context) }
+    val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
     val themeKey by prefs.theme.collectAsState(initial = "dark")
     val accentHex by prefs.accent.collectAsState(initial = Accent.DEFAULT)
     val charThemeId by prefs.charTheme.collectAsState(initial = "")

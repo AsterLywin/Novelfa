@@ -31,7 +31,7 @@ fun NavGraph() {
         composable(Routes.LIBRARY) {
             val context = LocalContext.current
             val db = remember { (context.applicationContext as NovelfaApplication).db }
-            val prefs = remember { PrefsStore(context) }
+            val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
             // Task 8: real PIN gate (was NoPinGate) + rank/support prefs.
             val viewModel = remember {
                 LibraryViewModel(
@@ -51,7 +51,7 @@ fun NavGraph() {
         composable(Routes.COLLECTIONS) {
             val context = LocalContext.current
             val db = remember { (context.applicationContext as NovelfaApplication).db }
-            val prefs = remember { PrefsStore(context) }
+            val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
             val viewModel = remember {
                 LibraryViewModel(
                     db.bookDao(),
@@ -72,7 +72,7 @@ fun NavGraph() {
         ) { backStackEntry ->
             val context = LocalContext.current
             val db = remember { (context.applicationContext as NovelfaApplication).db }
-            val prefs = remember { PrefsStore(context) }
+            val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
             val supportTracker = remember { SupportTracker(PrefsStoreSupportPrefs(prefs)) }
             val bookId = backStackEntry.arguments?.getString("bookId") ?: ""
             ReaderScreen(
@@ -85,7 +85,7 @@ fun NavGraph() {
         composable(Routes.SETTINGS) {
             val context = LocalContext.current
             val db = remember { (context.applicationContext as NovelfaApplication).db }
-            val prefs = remember { PrefsStore(context) }
+            val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
             val settingsVm = remember {
                 SettingsViewModel(
                     prefs = prefs,

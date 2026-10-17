@@ -38,9 +38,11 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
 
     /**
      * Deletes `cacheDir/epub_open/<bookId>` dirs whose book no longer exists
-     * in the DB (e.g. the book was deleted while its extraction was cached).
-     * ReaderScreen re-extracts on demand via its stamp check, so this only
-     * drops dead weight — never a live book's chapters.
+     * in the DB (e.g. the book was deleted while its extraction was cached),
+     * plus any leftover `cacheDir/epub_tmp/<id>` dirs orphaned when the
+     * process died mid-import. ReaderScreen re-extracts on demand via its
+     * stamp check, so this only drops dead weight — never a live book's
+     * chapters.
      */
     private fun pruneOrphanedEpubCache() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
@@ -48,6 +50,11 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
                 val ids = db.bookDao().allBooks().first().map { it.id }.toSet()
                 File(cacheDir, "epub_open").listFiles()
                     ?.filter { it.isDirectory && it.name !in ids }
+                    ?.forEach { it.deleteRecursively() }
+                // Importer deletes epub_tmp on success/cancel/failure, but a
+                // process kill in the middle orphans it permanently.
+                File(cacheDir, "epub_tmp").listFiles()
+                    ?.filter { it.isDirectory }
                     ?.forEach { it.deleteRecursively() }
             }
         }

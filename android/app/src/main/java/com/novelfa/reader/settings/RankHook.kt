@@ -2,7 +2,7 @@ package com.novelfa.reader.settings
 
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.isCompleted
-import com.novelfa.reader.theme.RankPrefs
+import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankService
 import kotlinx.coroutines.flow.first
 
@@ -14,7 +14,10 @@ import kotlinx.coroutines.flow.first
  */
 object RankHook {
 
-    suspend fun refreshRank(dao: BookDao, rankPrefs: RankPrefs) {
+    suspend fun refreshRank(dao: BookDao, rankPrefs: PrefsStoreRankPrefs) {
+        // Wait for the bridge's DataStore preload: recordProgress is
+        // monotonic, so it must read the real stored maxRank, not a default.
+        rankPrefs.awaitLoaded()
         val done = dao.allBooks().first().count { !it.isPrivate && isCompleted(it) }
         RankService(rankPrefs).recordProgress(done)
     }
