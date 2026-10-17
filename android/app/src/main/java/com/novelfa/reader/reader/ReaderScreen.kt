@@ -302,8 +302,11 @@ fun ReaderScreen(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        // Single open path: the top-bar menu button. No edge-swipe.
-        gesturesEnabled = false,
+        // No edge-swipe to open (the top-bar menu button is the single open
+        // path), but taps outside MUST close: ModalNavigationDrawer's scrim
+        // tap-to-close is gated by gesturesEnabled, so it follows the drawer
+        // state — disabled while closed, enabled while open.
+        gesturesEnabled = drawerState.isOpen,
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.widthIn(max = 300.dp)

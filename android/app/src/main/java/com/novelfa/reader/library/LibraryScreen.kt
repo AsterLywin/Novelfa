@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.width
@@ -66,7 +67,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -1021,11 +1027,76 @@ private fun SelectionBar(
                 stringResource(R.string.n_selected, count),
                 style = MaterialTheme.typography.titleSmall
             )
-            Row {
-                TextButton(onClick = onDelete) { Text("\uD83D\uDDD1") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onDelete) {
+                    TrashCanIcon(
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
                 TextButton(onClick = onCancel) { Text("\u2715") }
             }
         }
+    }
+}
+
+/**
+ * Vector trash-can icon (replaces the 🗑️ emoji): lid + handle + tapered
+ * body outline, drawn with Canvas so it follows the theme instead of the
+ * system emoji font.
+ */
+@Composable
+private fun TrashCanIcon(
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val stroke = w * 0.09f
+        // Handle on the lid.
+        drawLine(
+            color = color,
+            start = Offset(w * 0.38f, h * 0.06f),
+            end = Offset(w * 0.62f, h * 0.06f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
+        // Lid.
+        drawLine(
+            color = color,
+            start = Offset(w * 0.12f, h * 0.20f),
+            end = Offset(w * 0.88f, h * 0.20f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
+        // Tapered body outline.
+        drawPath(
+            path = Path().apply {
+                moveTo(w * 0.24f, h * 0.32f)
+                lineTo(w * 0.76f, h * 0.32f)
+                lineTo(w * 0.67f, h * 0.94f)
+                lineTo(w * 0.33f, h * 0.94f)
+                close()
+            },
+            color = color,
+            style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+        // Two vertical ribs inside the body.
+        drawLine(
+            color = color,
+            start = Offset(w * 0.43f, h * 0.44f),
+            end = Offset(w * 0.41f, h * 0.82f),
+            strokeWidth = stroke * 0.75f,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = color,
+            start = Offset(w * 0.57f, h * 0.44f),
+            end = Offset(w * 0.59f, h * 0.82f),
+            strokeWidth = stroke * 0.75f,
+            cap = StrokeCap.Round
+        )
     }
 }
 
