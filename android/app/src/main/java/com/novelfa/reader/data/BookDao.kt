@@ -27,7 +27,4 @@ interface BookDao {
 
     @Query("SELECT * FROM books WHERE collectionName = :name")
     fun byCollection(name: String): Flow<List<BookEntity>>
-
-    @Query("SELECT * FROM books WHERE title LIKE '%' || :query || '%'")
-    fun search(query: String): Flow<List<BookEntity>>
 }

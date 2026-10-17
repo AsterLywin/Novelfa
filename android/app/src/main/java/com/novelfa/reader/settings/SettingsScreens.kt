@@ -260,21 +260,32 @@ private fun ReaderDefaultsSection(viewModel: SettingsViewModel, fontStore: FontS
     }
 
     if (familyEdit) {
+        var familyError by remember { mutableStateOf<String?>(null) }
         AlertDialog(
             onDismissRequest = { familyEdit = false },
             title = { Text(stringResource(R.string.custom_fonts)) },
             text = {
-                OutlinedTextField(
-                    value = familyText,
-                    onValueChange = { familyText = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column {
+                    OutlinedTextField(
+                        value = familyText,
+                        onValueChange = { familyText = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    familyError?.let {
+                        Text(text = it, color = MaterialTheme.colorScheme.error)
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    scope.launch { viewModel.setFontFamily(familyText) }
-                    familyEdit = false
+                    scope.launch {
+                        if (viewModel.setFontFamily(familyText)) {
+                            familyEdit = false
+                        } else {
+                            familyError = "اسم فونت معتبر نیست."
+                        }
+                    }
                 }) {
                     Text(stringResource(R.string.save))
                 }

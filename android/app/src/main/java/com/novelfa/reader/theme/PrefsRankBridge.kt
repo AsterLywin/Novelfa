@@ -28,9 +28,14 @@ class PrefsStoreRankPrefs(
 
     init {
         scope.launch {
-            cache[RankService.MAX_RANK_KEY] = store.getString(PrefsStore.MAX_RANK, "-1")
-            cache[RankService.SECRET_KEY] = store.getString(PrefsStore.SECRET_THEMES, "")
-            loaded.complete(Unit)
+            try {
+                cache[RankService.MAX_RANK_KEY] = store.getString(PrefsStore.MAX_RANK, "-1")
+                cache[RankService.SECRET_KEY] = store.getString(PrefsStore.SECRET_THEMES, "")
+            } finally {
+                // Always release waiters: a failed preload (e.g. corrupted
+                // DataStore) must not hang awaitLoaded() forever.
+                loaded.complete(Unit)
+            }
         }
     }
 

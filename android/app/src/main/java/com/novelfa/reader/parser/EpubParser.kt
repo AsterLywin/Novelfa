@@ -9,13 +9,22 @@ object EpubParser {
     private const val OPF_NS = "http://www.idpf.org/2007/opf"
     private const val DC_NS = "http://purl.org/dc/elements/1.1/"
     private const val CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
+    /** Package documents (container.xml/OPF) are kilobytes; anything larger is hostile. */
+    private const val MAX_PACKAGE_XML_BYTES = 10L * 1024 * 1024
 
     fun parse(extractDir: File, epubFileName: String): ParsedBook {
         val dbf = secureDocumentBuilderFactory()
         val opfFile = findOpfFile(dbf, extractDir)
             ?: throw IllegalArgumentException("No OPF package document found in EPUB")
         val opfFolder = opfFile.parentFile!!
-        val odoc = parseXml(dbf, opfFile)
+        val odoc = try {
+            parseXml(dbf, opfFile)
+        } catch (e: Throwable) {
+            // parseXml rejects DOCTYPE, but a hostile OPF can still blow the
+            // stack (deep nesting) or memory — both surface as Error, which
+            // the callers' catch (e: Exception) would miss and crash the app.
+            throw IllegalArgumentException("Could not parse EPUB package document: ${e.message}")
+        }
         val titleNodes = elements(odoc, DC_NS, "title")
         val title =
             if (titleNodes.length > 0 && titleNodes.item(0).textContent.isNotBlank()) {
@@ -39,8 +48,12 @@ object EpubParser {
             val el = metas.item(i)
             if (el.attributes.getNamedItem("name")?.nodeValue == "cover") {
                 val cid = el.attributes.getNamedItem("content")?.nodeValue
-                if (cid != null && manifest.containsKey(cid)) {
-                    coverHref = manifest[cid]!!.first
+                // Only accept actual images here (the fallbacks below check
+                // media-type too); a hostile OPF could otherwise point the
+                // cover at an HTML/bin file.
+                val item = if (cid != null && manifest.containsKey(cid)) manifest[cid] else null
+                if (item != null && (item.second == null || item.second!!.startsWith("image"))) {
+                    coverHref = item.first
                     break
                 }
             }
@@ -58,12 +71,24 @@ object EpubParser {
         val coverFile = coverHref?.let { HrefResolver.resolve(opfFolder, it).takeIf { f -> f.exists() } }
         val spine = elements(odoc, OPF_NS, "itemref")
         val chapters = mutableListOf<Chapter>()
+        val seenFiles = mutableSetOf<String>()
         var idx = 1
         for (i in 0 until spine.length) {
             val idref = spine.item(i).attributes.getNamedItem("idref")?.nodeValue?.trim() ?: continue
             if (idref.isEmpty()) continue
-            val href = manifest[idref]?.first ?: continue
-            chapters += Chapter(title = "بخش $idx", file = HrefResolver.resolve(opfFolder, href))
+            val (href, mediaType) = manifest[idref] ?: continue
+            // Skip non-XHTML spine items (cover-in-spine etc.): a missing
+            // media-type stays lenient, but an explicit non-document type
+            // would render as binary garbage.
+            if (mediaType != null &&
+                !mediaType.equals("application/xhtml+xml", ignoreCase = true) &&
+                !mediaType.equals("text/html", ignoreCase = true)
+            ) continue
+            val file = HrefResolver.resolve(opfFolder, href)
+            // Dedupe: duplicate itemrefs (or hrefs resolving to the same file)
+            // would produce duplicate LazyColumn keys and crash the drawer.
+            if (!seenFiles.add(file.canonicalPath)) continue
+            chapters += Chapter(title = "بخش $idx", file = file)
             idx++
         }
         return ParsedBook(title = title, chapters = chapters, coverFile = coverFile)
@@ -153,6 +178,11 @@ object EpubParser {
      * the OPF — those fail import with a clean user-facing error.
      */
     private fun parseXml(dbf: DocumentBuilderFactory, file: File): org.w3c.dom.Document {
+        // Package documents are kilobytes; cap before readBytes() so a hostile
+        // file can't OOM the parse (the zip-level cap is far larger).
+        if (file.length() > MAX_PACKAGE_XML_BYTES) {
+            throw IllegalArgumentException("Package document too large: ${file.name}")
+        }
         val bytes = runCatching { file.readBytes() }.getOrNull()
         if (bytes != null) {
             val text = bytes.toString(Charsets.UTF_8).replace("\u0000", "")

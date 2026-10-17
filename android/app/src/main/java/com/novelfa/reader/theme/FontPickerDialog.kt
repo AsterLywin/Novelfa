@@ -164,10 +164,13 @@ private fun importFont(
         if (bytes < 4) return "این فایل یک فونت معتبر نیست."
         val header = ByteArray(4)
         tmp.inputStream().use { it.read(header) }
+        // Strict magic-byte check: 0x00010000 / 'true' / 'typ1' (TrueType),
+        // 'OTTO' (OpenType). The extension alone is not trusted — a renamed
+        // non-font file must not be imported and base64-embedded.
+        val headerStr = String(header, Charsets.US_ASCII)
         val isTtf = (header[0] == 0x00.toByte() && header[1] == 0x01.toByte()) ||
-            String(header, Charsets.US_ASCII) == "OTTO" ||
-            String(header, Charsets.US_ASCII) == "true"
-        if (!isTtf && ext != "ttf" && ext != "otf") {
+            headerStr == "OTTO" || headerStr == "true" || headerStr == "typ1"
+        if (!isTtf) {
             return "فقط فایل‌های ttf و otf پشتیبانی می‌شن."
         }
         val destName = "$name.${if (ext == "otf") "otf" else "ttf"}"

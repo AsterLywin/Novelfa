@@ -372,4 +372,6 @@ Drag your EPUB files here and drop them</string>
     <string name="pick_from_gallery">Choose from gallery</string>
     <string name="couldn_t_copy_the_avatar">Couldn\'t copy the avatar image.</string>
     <string name="pin_locked_out">Too many failed attempts. Try again in %1$d seconds.</string>
+    <string name="no_search_results">No results found</string>
+    <string name="couldn_t_apply_the_theme">Couldn\'t apply the theme.</string>
 </resources>

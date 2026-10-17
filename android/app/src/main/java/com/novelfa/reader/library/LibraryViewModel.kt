@@ -60,9 +60,15 @@ fun sortBooks(
 fun displayTitle(book: BookEntity, all: List<BookEntity>): String {
     val t = book.title.trim()
     val duplicate = all.count { it.title.trim().equals(t, ignoreCase = true) } > 1
-    if ((duplicate || isGenericTitle(t)) && book.filePath.isNotEmpty()) {
-        val name = File(book.filePath).nameWithoutExtension
-        if (name.isNotBlank()) return name
+    if (duplicate || isGenericTitle(t)) {
+        // Prefer the original import file name; the stored filePath is a UUID
+        // name that means nothing to the user.
+        val original = book.originalFileName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() }
+        if (original != null) return original
+        if (book.filePath.isNotEmpty()) {
+            val name = File(book.filePath).nameWithoutExtension
+            if (name.isNotBlank()) return name
+        }
     }
     return book.title
 }

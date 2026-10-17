@@ -57,6 +57,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -195,6 +199,17 @@ fun LibraryScreen(
             RankHook.refreshRank(viewModel.dao, rankPrefs)
         }
     }
+    // Also re-check on resume: the PIN can be set/removed in Settings, and
+    // the back navigation doesn't change `tab`, so the gate above wouldn't
+    // re-run — leaving the private tab permanently locked after PIN removal.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) gateTick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     LaunchedEffect(profileName) {
         val name = profileName ?: return@LaunchedEffect // value not loaded yet
         if (name.isBlank()) welcomeOpen = true
@@ -323,7 +338,11 @@ fun LibraryScreen(
                     }
                 } else if (shown.isEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
-                        EmptyLibrary(onImport = { launchImport() })
+                        if (query.isNotBlank() && allBooks.isNotEmpty()) {
+                            NoSearchResults()
+                        } else {
+                            EmptyLibrary(onImport = { launchImport() })
+                        }
                     }
                 } else {
                     if (tab == Tab.PRIVATE && pinSet) {
@@ -400,7 +419,13 @@ fun LibraryScreen(
                 if (privateLocked) {
                     item { PrivateLockedGate(onUnlock = { pinOpen = true }) }
                 } else if (shown.isEmpty()) {
-                    item { EmptyLibrary(onImport = { launchImport() }) }
+                    item {
+                        if (query.isNotBlank() && allBooks.isNotEmpty()) {
+                            NoSearchResults()
+                        } else {
+                            EmptyLibrary(onImport = { launchImport() })
+                        }
+                    }
                 } else {
                     if (tab == Tab.PRIVATE && pinSet) {
                         item {
@@ -1010,6 +1035,16 @@ private fun EmptyLibrary(onImport: () -> Unit) {
             style = MaterialTheme.typography.labelMedium
         )
         TextButton(onClick = onImport) { Text(stringResource(R.string.add_book)) }
+    }
+}
+
+@Composable
+private fun NoSearchResults() {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(stringResource(R.string.no_search_results))
     }
 }
 

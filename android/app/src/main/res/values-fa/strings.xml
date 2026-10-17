@@ -372,4 +372,6 @@
     <string name="pick_from_gallery">انتخاب از گالری</string>
     <string name="couldn_t_copy_the_avatar">کپی کردن عکس آواتار انجام نشد.</string>
     <string name="pin_locked_out">تلاش‌های ناموفق زیاد شد. %1$d ثانیه دیگر تلاش کن.</string>
+    <string name="no_search_results">نتیجه‌ای پیدا نشد</string>
+    <string name="couldn_t_apply_the_theme">اعمال تم انجام نشد.</string>
 </resources>

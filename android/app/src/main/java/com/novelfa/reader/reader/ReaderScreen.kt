@@ -105,6 +105,7 @@ fun ReaderScreen(
 
     val chapterErr = stringResource(R.string.couldn_t_display_the_chapter)
     val openErr = stringResource(R.string.couldn_t_open_the_book)
+    val themeErr = stringResource(R.string.couldn_t_apply_the_theme)
 
     suspend fun showVmError(v: ReaderViewModel) {
         snackbar.showSnackbar(chapterErr + (v.lastError ?: ""))
@@ -466,20 +467,27 @@ fun ReaderScreen(
                 onDismiss = { spacingOpen = false },
                 onApply = { lh, margin, para ->
                     scope.launch {
-                        v.applySpacing(lh.toDouble(), margin, para.toDouble())
-                        webView?.updateSpacingJs(v.spacingCss())
-                        pageHtml = v.html
-                        rev++
-                        spacingOpen = false
+                        try {
+                            v.applySpacing(lh.toDouble(), margin, para.toDouble())
+                            webView?.updateSpacingJs(v.spacingCss())
+                            pageHtml = v.html
+                            rev++
+                        } finally {
+                            // A DB failure must not leave the dialog stuck open.
+                            spacingOpen = false
+                        }
                     }
                 },
                 onReset = {
                     scope.launch {
-                        v.applySpacing(1.8, 24, 0.0)
-                        webView?.updateSpacingJs(v.spacingCss())
-                        pageHtml = v.html
-                        rev++
-                        spacingOpen = false
+                        try {
+                            v.applySpacing(1.8, 24, 0.0)
+                            webView?.updateSpacingJs(v.spacingCss())
+                            pageHtml = v.html
+                            rev++
+                        } finally {
+                            spacingOpen = false
+                        }
                     }
                 }
             )
@@ -505,6 +513,8 @@ fun ReaderScreen(
                                     pageHtml = v.html
                                     pageBase = v.baseUrl
                                     rev++
+                                } else {
+                                    snackbar.showSnackbar(themeErr)
                                 }
                                 themeOpen = false
                             }
@@ -524,12 +534,16 @@ fun ReaderScreen(
 
     if (fontOpen) {
         val v = vm
-        val families = remember {
-            val store = FontStore(context)
-            listOf("Tahoma") + store.list()
-                .map { it.nameWithoutExtension }
-                .filter { it.isNotBlank() }
-                .distinct()
+        // Disk I/O off the composition: load the family list once on IO.
+        var families by remember { mutableStateOf(listOf("Tahoma")) }
+        LaunchedEffect(fontOpen) {
+            families = withContext(Dispatchers.IO) {
+                val store = FontStore(context)
+                listOf("Tahoma") + store.list()
+                    .map { it.nameWithoutExtension }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+            }
         }
         AlertDialog(
             onDismissRequest = { fontOpen = false },
@@ -664,7 +678,9 @@ private fun openParsed(
                 val out = File(outDir, entry.name)
                 val canonicalOut = out.canonicalPath
                 val canonicalDir = outDir.canonicalPath
-                if (!canonicalOut.startsWith(canonicalDir)) {
+                // Trailing separator: without it, a sibling dir sharing the
+                // string prefix would pass the check.
+                if (!canonicalOut.startsWith(canonicalDir + File.separatorChar)) {
                     throw IOException("Zip entry outside target dir: " + entry.name)
                 }
                 if (entry.isDirectory) {

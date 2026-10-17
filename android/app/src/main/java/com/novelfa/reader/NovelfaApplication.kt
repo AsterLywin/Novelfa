@@ -5,6 +5,7 @@ import androidx.room.Room
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
+import com.novelfa.reader.data.MIGRATION_1_2
 import com.novelfa.reader.data.ReaderDb
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -28,7 +29,9 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
 
     /** Single Room instance for the whole app. */
     val db: ReaderDb by lazy {
-        Room.databaseBuilder(this, ReaderDb::class.java, "reader.db").build()
+        Room.databaseBuilder(this, ReaderDb::class.java, "reader.db")
+            .addMigrations(MIGRATION_1_2)
+            .build()
     }
 
     override fun onCreate() {

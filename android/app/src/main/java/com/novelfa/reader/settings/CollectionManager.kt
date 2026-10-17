@@ -24,6 +24,12 @@ class CollectionManager(
     suspend fun renameCollection(old: String, new: String) {
         val clean = new.trim()
         if (clean.isEmpty()) throw CollectionException("اسم مجموعه نمی‌تونه خالی باشه.")
+        val existing = allCollectionNames()
+        // Renaming onto an existing collection would silently merge the two
+        // with no way back — refuse instead.
+        if (existing.any { it.equals(clean, ignoreCase = true) && !it.equals(old, ignoreCase = true) }) {
+            throw CollectionException("مجموعه‌ای با این اسم از قبل وجود داره.")
+        }
         dao.allBooks().first()
             .filter { it.collectionName == old }
             .forEach { dao.update(it.copy(collectionName = clean)) }

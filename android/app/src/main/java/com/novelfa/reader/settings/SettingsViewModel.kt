@@ -48,7 +48,22 @@ class SettingsViewModel(
     suspend fun setAccent(value: String) = prefs.setAccent(value)
     suspend fun setCharTheme(value: String?) = prefs.setCharTheme(value ?: "")
     suspend fun setFontSize(value: Int) = prefs.setFontSize(value.coerceIn(10, 72))
-    suspend fun setFontFamily(value: String) = prefs.setFontFamily(value.trim())
+    /**
+     * Stores a custom font-family name. Returns false (and stores nothing)
+     * when the name is blank or contains path separators / markup: the value
+     * flows into a CSS font-family and matched file names, so it needs the
+     * same sanitization as the font-import dialog.
+     */
+    suspend fun setFontFamily(value: String): Boolean {
+        val clean = value.trim()
+        if (clean.isEmpty() || clean.contains('/') || clean.contains('\\') ||
+            clean.contains("..") || clean.contains('<') || clean.contains('>')
+        ) {
+            return false
+        }
+        prefs.setFontFamily(clean)
+        return true
+    }
     suspend fun setReaderLineHeight(value: String) = prefs.setReaderLineHeight(value)
     suspend fun setReaderMargin(value: String) = prefs.setReaderMargin(value)
     suspend fun setReaderSpacing(value: String) = prefs.setReaderSpacing(value)

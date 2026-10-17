@@ -22,7 +22,9 @@ data class BookEntity(
     val lastOpenedDate: String? = null,
     val isPrivate: Boolean = false,
     val isFavorite: Boolean = false,
-    val collectionName: String? = null
+    val collectionName: String? = null,
+    /** Original file name from the import picker (for display disambiguation). */
+    val originalFileName: String? = null
 )
 
 fun progressPercent(e: BookEntity): Double {

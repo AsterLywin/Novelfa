@@ -29,6 +29,15 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         val booksDir = File(context.filesDir, "books").apply { mkdirs() }
         val dest = File(booksDir, "$id.epub")
         val tmpDir = File(context.cacheDir, "epub_tmp/$id")
+        // Fail fast on absurd picks instead of filling internal storage with
+        // the unbounded SAF copy below.
+        val pickedSize = queryDisplaySize(sourceUri)
+        if (pickedSize != null && pickedSize > MAX_EPUB_BYTES) {
+            throw ImportException(
+                "EPUB too large: $pickedSize bytes",
+                messageFa = "حجم فایل بیش از حد مجاز است."
+            )
+        }
         try {
             context.contentResolver.openInputStream(sourceUri)?.use { input ->
                 dest.outputStream().use { output -> input.copyTo(output) }
@@ -38,7 +47,14 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             // Keep the original file name: when the EPUB has no <dc:title>,
             // the parser falls back to the file name — the UUID name would
             // show up as the book title otherwise.
-            val parsed = EpubParser.parse(tmpDir, queryDisplayName(sourceUri) ?: "$id.epub")
+            val displayName = queryDisplayName(sourceUri) ?: "$id.epub"
+            val parsed = EpubParser.parse(tmpDir, displayName)
+            if (parsed.chapters.isEmpty()) {
+                throw ImportException(
+                    "EPUB has no readable chapters",
+                    messageFa = "این فایل هیچ بخش قابل خواندنی ندارد."
+                )
+            }
             val coverPath = parsed.coverFile
                 ?.takeIf { it.exists() }
                 ?.let { CoverStore(context).saveCover(it, dest.absolutePath).absolutePath }
@@ -49,7 +65,8 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     filePath = dest.absolutePath,
                     coverPath = coverPath,
                     totalChapters = parsed.chapters.size,
-                    dateAdded = Instant.now().toString()
+                    dateAdded = Instant.now().toString(),
+                    originalFileName = displayName
                 )
             )
             tmpDir.deleteRecursively()
@@ -112,6 +129,15 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         }
     }.getOrNull()
 
+    /** Declared size of the SAF pick in bytes (null when unavailable). */
+    private fun queryDisplaySize(uri: Uri): Long? = runCatching {
+        context.contentResolver.query(
+            uri, arrayOf(OpenableColumns.SIZE), null, null, null
+        )?.use { c ->
+            if (c.moveToFirst()) c.getLong(0).takeIf { it >= 0 } else null
+        }
+    }.getOrNull()
+
     private fun unzip(zip: File, outDir: File) {
         ZipFile(zip).use { zf ->
             val entries = zf.entries()
@@ -126,7 +152,9 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 val out = File(outDir, entry.name)
                 val canonicalOut = out.canonicalPath
                 val canonicalDir = outDir.canonicalPath
-                if (!canonicalOut.startsWith(canonicalDir)) {
+                // Trailing separator: without it, a sibling dir sharing the
+                // string prefix (e.g. "<uuid>-evil") would pass the check.
+                if (!canonicalOut.startsWith(canonicalDir + File.separatorChar)) {
                     throw IOException("Zip entry outside target dir: ${entry.name}")
                 }
                 if (entry.isDirectory) {
@@ -150,3 +178,5 @@ class Importer(private val context: Context, private val db: ReaderDb) {
 /** Zip-bomb guardrails for EPUB extraction (generous: real books are far smaller). */
 private const val MAX_ZIP_ENTRIES = 10_000
 private const val MAX_ZIP_BYTES = 500L * 1024 * 1024
+/** Upper bound for the initial SAF copy, before unzip/parse get a say. */
+private const val MAX_EPUB_BYTES = 500L * 1024 * 1024
