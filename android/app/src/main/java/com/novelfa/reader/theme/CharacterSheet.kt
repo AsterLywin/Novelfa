@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -38,7 +39,9 @@ fun CharacterSheet(
     activeId: String?,
     isUnlocked: (CharacterTheme) -> Boolean,
     onPick: (String?) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    particlesEnabled: Boolean = false,
+    onToggleParticles: (Boolean) -> Unit = {}
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Card {
@@ -55,7 +58,9 @@ fun CharacterSheet(
                     onClick = { onPick(null) }
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                LazyColumn {
+                LazyColumn(
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
                     items(CharacterThemes.All) { theme ->
                         val locked = !isUnlocked(theme)
                         CharacterRow(
@@ -70,6 +75,22 @@ fun CharacterSheet(
                             onClick = { if (!locked) onPick(theme.id) }
                         )
                     }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                // WPF parity: particle layer toggle in the picker footer.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "ذرات متحرک",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = particlesEnabled,
+                        onCheckedChange = onToggleParticles
+                    )
                 }
             }
         }

@@ -7,6 +7,7 @@ import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import com.novelfa.reader.data.MIGRATION_1_2
 import com.novelfa.reader.data.ReaderDb
+import com.novelfa.reader.data.RecommendedFonts
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +38,10 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         pruneOrphanedEpubCache()
+        // Bundled recommended fonts (B Koodak, Vazirmatn — WPF parity).
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching { RecommendedFonts.installIfMissing(this@NovelfaApplication) }
+        }
     }
 
     /**

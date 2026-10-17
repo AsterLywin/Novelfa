@@ -178,6 +178,7 @@ private fun AccentSection(viewModel: SettingsViewModel) {
 @Composable
 private fun CharacterSection(viewModel: SettingsViewModel) {
     val charTheme by viewModel.charTheme.collectAsState(initial = "")
+    val particles by viewModel.themeParticles.collectAsState(initial = false)
     val scope = rememberCoroutineScope()
     var open by remember { mutableStateOf(false) }
     val rank = remember { viewModel.rankService() }
@@ -194,7 +195,11 @@ private fun CharacterSection(viewModel: SettingsViewModel) {
                 scope.launch { viewModel.setCharTheme(id) }
                 open = false
             },
-            onDismiss = { open = false }
+            onDismiss = { open = false },
+            particlesEnabled = particles,
+            onToggleParticles = { enabled ->
+                scope.launch { viewModel.setThemeParticles(enabled) }
+            }
         )
     }
 }

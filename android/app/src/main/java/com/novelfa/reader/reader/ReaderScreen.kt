@@ -52,6 +52,7 @@ import androidx.core.view.WindowInsetsCompat
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.FontStore
+import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.parser.EpubParser
 import com.novelfa.reader.settings.SupportDialog
 import com.novelfa.reader.settings.SupportTracker
@@ -86,6 +87,9 @@ fun ReaderScreen(
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
+    // Reader page theme is stored per book (WPF parity), unlike the global
+    // app theme — an Activity context here would leak on recreation.
+    val prefs = remember(context) { PrefsStore(context.applicationContext) }
 
     var vm by remember { mutableStateOf<ReaderViewModel?>(null) }
     var loadError by remember { mutableStateOf(false) }
@@ -162,9 +166,12 @@ fun ReaderScreen(
                     it.nameWithoutExtension.contains(entity.fontFamily, ignoreCase = true)
                 }
             }
+            val savedTheme = withContext(Dispatchers.IO) { prefs.getReaderTheme(bookId) }
             val v = ReaderViewModel(
                 dao, bookId, entity.copy(totalChapters = parsed.chapters.size),
-                parsed.chapters, fontFiles = files
+                parsed.chapters,
+                theme = Themes.findStatic(savedTheme) ?: Themes.DARK,
+                fontFiles = files
             )
             v.continuous = continuousUi
             val target = entity.lastChapterIndex.coerceIn(0, parsed.chapters.size - 1)
@@ -513,6 +520,10 @@ fun ReaderScreen(
                                     pageHtml = v.html
                                     pageBase = v.baseUrl
                                     rev++
+                                    // Persisted per book (WPF parity).
+                                    withContext(Dispatchers.IO) {
+                                        prefs.setReaderTheme(bookId, t.key)
+                                    }
                                 } else {
                                     snackbar.showSnackbar(themeErr)
                                 }

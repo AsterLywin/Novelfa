@@ -1,6 +1,8 @@
 package com.novelfa.reader.library
 
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -64,6 +66,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -83,6 +86,9 @@ import com.novelfa.reader.settings.PinManager
 import com.novelfa.reader.settings.PinMode
 import com.novelfa.reader.settings.PinSession
 import com.novelfa.reader.settings.RankHook
+import com.novelfa.reader.settings.RankUp
+import com.novelfa.reader.theme.CharacterTheme
+import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankService
 import kotlinx.coroutines.Dispatchers
@@ -116,13 +122,40 @@ fun LibraryScreen(
     onOpenBook: (String) -> Unit,
     viewModel: LibraryViewModel,
     onOpenCollections: () -> Unit = {},
-    onOpenSettings: () -> Unit = {}
+    onOpenSettings: () -> Unit = {},
+    // EPUB opened from a file manager (ACTION_VIEW intent, WPF
+    // file-association parity). Consumed once via onImportUriConsumed.
+    pendingImportUri: Uri? = null,
+    onImportUriConsumed: () -> Unit = {}
 ) {
     // Task 9: tab + query survive rotation/process death (DB is NOT
     // involved here — this is pure UI state).
     var tab by rememberSaveable { mutableStateOf(Tab.ALL) }
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(SortMode.DEFAULT) }
+    // Secret theme codes (WPF TrackSecretKeys parity): typing BEAKO / EMT /
+    // TEA unlocks the hidden themes; the code letters are scrubbed from the
+    // search box like the desktop client does.
+    var secretUnlocked by remember { mutableStateOf<CharacterTheme?>(null) }
+    val secretCodes = remember {
+        listOf("BEAKO" to "beatrice", "EMT" to "emilia", "TEA" to "echidna")
+    }
+    fun handleQuery(newQuery: String) {
+        query = newQuery
+        val run = newQuery.takeLastWhile { it in 'A'..'Z' || it in 'a'..'z' }
+            .takeLast(16).uppercase()
+        for ((code, themeId) in secretCodes) {
+            if (!run.endsWith(code)) continue
+            val theme = CharacterThemes.find(themeId)
+            val service = RankService(rankPrefs)
+            if (theme != null && !service.isUnlocked(theme)) {
+                service.secretUnlock(themeId)
+                query = newQuery.dropLast(code.length)
+                secretUnlocked = theme
+            }
+            break
+        }
+    }
     var gridView by rememberSaveable { mutableStateOf(true) }
     val books by remember(tab, query) { viewModel.filtered(tab, query) }
         .collectAsState(initial = emptyList())
@@ -132,6 +165,9 @@ fun LibraryScreen(
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val missingFileMsg = stringResource(R.string.book_file_missing)
+    val addedFmt = stringResource(R.string.import_summary_added)
+    val dupFmt = stringResource(R.string.import_summary_duplicates)
+    val failedFmt = stringResource(R.string.import_summary_failed)
     val avatarCopyErr = stringResource(R.string.couldn_t_copy_the_avatar)
     // Books whose EPUB file is gone (e.g. Auto Backup restored the DB but not
     // files/books/): show a warning badge and explain instead of opening the
@@ -143,32 +179,61 @@ fun LibraryScreen(
                 .map { it.id }.toSet()
         }
     }
+    var restartAsk by remember { mutableStateOf<BookEntity?>(null) }
     val openBookSafe: (String) -> Unit = { id ->
         if (id in missingIds) {
             scope.launch { snackbar.showSnackbar(missingFileMsg) }
         } else {
-            onOpenBook(id)
+            val book = allBooks.firstOrNull { it.id == id }
+            // WPF parity: opening an already-started book asks «start over?»
+            // (Yes = reset to chapter 1, No = continue, dismiss = cancel).
+            if (book != null && isInProgress(book)) {
+                restartAsk = book
+            } else {
+                onOpenBook(id)
+            }
         }
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
+    /**
+     * Shared import path for the SAF picker and the ACTION_VIEW file intent:
+     * batch summary on success, diagnostic detail on a single-file failure.
+     */
+    suspend fun importUris(uris: List<Uri>) {
+        try {
+            val summary = viewModel.importMultiple(uris)
+            val parts = mutableListOf<String>()
+            if (summary.added > 0) parts.add(addedFmt.format(summary.added))
+            if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
+            if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
+            if (parts.isNotEmpty()) snackbar.showSnackbar(parts.joinToString("، "))
+        } catch (e: ImportException) {
+            // DIAGNOSTIC (temporary): surface the real cause in the UI so a
+            // failing import can be root-caused from a screenshot alone.
+            // Remove once the import failure is understood and fixed.
+            val cause = e.cause
+            val detail = (cause?.javaClass?.simpleName ?: "no-cause") +
+                ": " + (cause?.message ?: e.message)
+            snackbar.showSnackbar(e.messageFa + "\n" + detail)
+        }
+    }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
             scope.launch {
-                try {
-                    viewModel.import(uri)
-                } catch (e: ImportException) {
-                    // DIAGNOSTIC (temporary): surface the real cause in the UI so a
-                    // failing import can be root-caused from a screenshot alone.
-                    // Remove once the import failure is understood and fixed.
-                    val cause = e.cause
-                    val detail = (cause?.javaClass?.simpleName ?: "no-cause") +
-                        ": " + (cause?.message ?: e.message)
-                    snackbar.showSnackbar(e.messageFa + "\n" + detail)
-                }
+                importUris(uris)
             }
         }
     }
     val launchImport = { picker.launch(arrayOf("application/epub+zip", "application/epub")) }
+
+    // EPUB handed in from a file manager (ACTION_VIEW). Imported once, then
+    // the URI is consumed so rotation doesn't re-import it.
+    LaunchedEffect(pendingImportUri) {
+        val uri = pendingImportUri ?: return@LaunchedEffect
+        onImportUriConsumed()
+        importUris(listOf(uri))
+    }
 
     val pinManager = viewModel.pinGate as? PinManager
     var unlocked by remember { mutableStateOf(PinSession.unlocked) }
@@ -193,10 +258,11 @@ fun LibraryScreen(
     var welcomeOpen by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var aboutOpen by remember { mutableStateOf(false) }
+    var rankUp by remember { mutableStateOf<RankUp?>(null) }
     LaunchedEffect(tab) {
         gateTick++
         runCatching {
-            RankHook.refreshRank(viewModel.dao, rankPrefs)
+            RankHook.refreshRank(viewModel.dao, rankPrefs)?.let { rankUp = it }
         }
     }
     // Also re-check on resume: the PIN can be set/removed in Settings, and
@@ -266,8 +332,21 @@ fun LibraryScreen(
     }
     val privateLocked = tab == Tab.PRIVATE && pinSet && !unlocked
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
+    // Character-theme particle layer (WPF parity): drawn behind the library
+    // content when the active character theme defines particles and the user
+    // enabled them in the theme picker.
+    val charThemeId by prefs.charTheme.collectAsState(initial = "")
+    val particlesOn by prefs.themeParticles.collectAsState(initial = false)
+    val particleType = remember(charThemeId) {
+        CharacterThemes.find(charThemeId)?.particle.orEmpty()
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        ParticleLayer(type = particleType, enabled = particlesOn)
+
+        Scaffold(
+            containerColor = Color.Transparent,
+            snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.app_name)) },
@@ -330,7 +409,7 @@ fun LibraryScreen(
                     tab = tab,
                     onTab = { tab = it },
                     query = query,
-                    onQuery = { query = it }
+                    onQuery = ::handleQuery
                 )
                 if (privateLocked) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
@@ -414,7 +493,7 @@ fun LibraryScreen(
                     tab = tab,
                     onTab = { tab = it },
                     query = query,
-                    onQuery = { query = it }
+                    onQuery = ::handleQuery
                 )
                 if (privateLocked) {
                     item { PrivateLockedGate(onUnlock = { pinOpen = true }) }
@@ -471,6 +550,7 @@ fun LibraryScreen(
         }
         }
     }
+    }
 
     if (pinOpen && pinManager != null) {
         PinDialog(
@@ -517,6 +597,80 @@ fun LibraryScreen(
 
     if (aboutOpen) {
         AboutDialog(onDismiss = { aboutOpen = false })
+    }
+
+    // Rank-up celebration (WPF AnnounceUnlocks parity): «رتبه‌ات شد X!
+    // تم ... برات باز شد. همین الان فعالش کنم؟»
+    rankUp?.let { up ->
+        val rankName = RankService.Ranks.getOrNull(up.toRank)?.nameFa ?: ""
+        val names = up.newThemes.joinToString("، ") { it.nameFa }
+        AlertDialog(
+            onDismissRequest = { rankUp = null },
+            title = { Text(stringResource(R.string.new_theme_unlocked)) },
+            text = {
+                Text(
+                    stringResource(R.string.rank_up_message, rankName, names, up.best.nameFa)
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        prefs.setCharTheme(up.best.id)
+                        rankUp = null
+                    }
+                }) { Text(stringResource(R.string.yes)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { rankUp = null }) { Text(stringResource(R.string.no)) }
+            }
+        )
+    }
+
+    // Secret-code unlock celebration (WPF SecretTyped parity).
+    secretUnlocked?.let { theme ->
+        AlertDialog(
+            onDismissRequest = { secretUnlocked = null },
+            title = { Text(stringResource(R.string.new_theme_unlocked)) },
+            text = { Text(stringResource(R.string.secret_theme_message, theme.nameFa)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        prefs.setCharTheme(theme.id)
+                        secretUnlocked = null
+                    }
+                }) { Text(stringResource(R.string.yes)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { secretUnlocked = null }) { Text(stringResource(R.string.no)) }
+            }
+        )
+    }
+
+    // «Start over?» prompt (WPF AskRestart parity): shown when opening an
+    // already-started book. Yes = reset to chapter 1, No = continue,
+    // dismiss = cancel.
+    restartAsk?.let { book ->
+        AlertDialog(
+            onDismissRequest = { restartAsk = null },
+            title = { Text(stringResource(R.string.start_over)) },
+            text = { Text(stringResource(R.string.start_over_prompt, displayTitle(book, allBooks))) },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        viewModel.resetProgress(book)
+                        restartAsk = null
+                        onOpenBook(book.id)
+                    }
+                }) { Text(stringResource(R.string.yes)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    val id = book.id
+                    restartAsk = null
+                    onOpenBook(id)
+                }) { Text(stringResource(R.string.no)) }
+            }
+        )
     }
 
     menuFor?.let { target ->
@@ -1334,12 +1488,22 @@ private fun ProfileNameDialog(
 @Composable
 private fun AboutDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     val version = remember {
         runCatching {
             @Suppress("DEPRECATION")
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
         }.getOrNull() ?: ""
     }
+    // WPF parity: channel / donate / boost rows (DarkMessageBox.cs:636-638).
+    val links = remember {
+        listOf(
+            Triple("کانال", "t.me/NoveIFa", "https://t.me/NoveIFa"),
+            Triple("دونیت", "Daramet.com/NovelFa", "http://Daramet.com/NovelFa"),
+            Triple("بوست", "t.me/NoveIFa?boost", "https://t.me/NoveIFa?boost")
+        )
+    }
+    val copiedMsg = stringResource(R.string.copied)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.about_title)) },
@@ -1351,6 +1515,44 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                         stringResource(R.string.app_version, version),
                         modifier = Modifier.padding(top = 8.dp)
                     )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                // WPF parity: channel / donate / boost rows, each with
+                // an open button and a copy-to-clipboard button.
+                for ((label, display, url) in links) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                            Text(
+                                text = display,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        TextButton(onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                )
+                            }
+                        }) {
+                            Text(stringResource(R.string.open_link))
+                        }
+                        TextButton(onClick = {
+                            clipboard.setText(AnnotatedString(url))
+                            Toast.makeText(context, copiedMsg, Toast.LENGTH_SHORT).show()
+                        }) {
+                            Text(stringResource(R.string.copy_link))
+                        }
+                    }
                 }
             }
         },

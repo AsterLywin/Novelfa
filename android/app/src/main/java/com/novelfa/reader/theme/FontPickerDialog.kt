@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.novelfa.reader.data.FontStore
+import com.novelfa.reader.data.RecommendedFonts
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -54,6 +55,12 @@ fun FontPickerDialog(
     }
     var name by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    // WPF parity: font search box filtering the installed list.
+    var fontQuery by remember { mutableStateOf("") }
+    val visibleFonts = remember(fonts, fontQuery) {
+        if (fontQuery.isBlank()) fonts
+        else fonts.filter { it.contains(fontQuery, ignoreCase = true) }
+    }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -103,8 +110,16 @@ fun FontPickerDialog(
                     Text(text = it, color = MaterialTheme.colorScheme.error)
                 }
                 Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = fontQuery,
+                    onValueChange = { fontQuery = it },
+                    label = { Text("جست‌وجوی فونت") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(4.dp))
                 LazyColumn {
-                    items(fonts) { fileName ->
+                    items(visibleFonts) { fileName ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -115,15 +130,20 @@ fun FontPickerDialog(
                                 text = fileName,
                                 modifier = Modifier.weight(1f)
                             )
-                            OutlinedButton(onClick = {
-                                scope.launch {
-                                    withContext(Dispatchers.IO) { fontStore.deleteFont(fileName) }
-                                    fonts = withContext(Dispatchers.IO) {
-                                        fontStore.list().map { it.name }
+                            // Bundled recommended fonts are not user-deletable
+                            // (the desktop client ships them too); a delete
+                            // would just be undone on next launch anyway.
+                            if (!RecommendedFonts.isBundled(context, fileName)) {
+                                OutlinedButton(onClick = {
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) { fontStore.deleteFont(fileName) }
+                                        fonts = withContext(Dispatchers.IO) {
+                                            fontStore.list().map { it.name }
+                                        }
                                     }
+                                }) {
+                                    Text("حذف")
                                 }
-                            }) {
-                                Text("حذف")
                             }
                         }
                     }

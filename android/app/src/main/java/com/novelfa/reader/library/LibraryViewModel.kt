@@ -10,7 +10,9 @@ import com.novelfa.reader.data.isInProgress
 import com.novelfa.reader.data.progressPercent
 import com.novelfa.reader.settings.CollectionManager
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 /** Library tabs. Predicates mirror WPF Book.cs: IsCompleted / IsInProgress. */
@@ -106,6 +108,49 @@ class LibraryViewModel(
 
     suspend fun import(uri: Uri): String =
         requireNotNull(importer) { "Importer not provided" }.importEpub(uri)
+
+    /** Batch import result (WPF parity: added/duplicates/failed summary). */
+    data class ImportSummary(
+        val added: Int,
+        val duplicates: Int,
+        val failed: Int
+    )
+
+    /**
+     * Imports several EPUBs, skipping ones already in the library (matched by
+     * original file name, like the desktop client's path-based dedupe) and
+     * ones repeated inside the batch. A single-URI batch rethrows so the
+     * diagnostic import-error path keeps working.
+     */
+    suspend fun importMultiple(uris: List<Uri>): ImportSummary {
+        val imp = requireNotNull(importer) { "Importer not provided" }
+        val known = dao.allBooks().first()
+            .mapNotNull { it.originalFileName?.lowercase() }
+            .toMutableSet()
+        var added = 0
+        var duplicates = 0
+        var failed = 0
+        for (uri in uris) {
+            val key = imp.displayNameOf(uri)?.lowercase()
+            if (key != null && (key in known)) {
+                duplicates++
+                continue
+            }
+            try {
+                imp.importEpub(uri)
+                added++
+                if (key != null) known.add(key)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Single-file import keeps the old behavior: the caller shows
+                // the diagnostic detail from the real exception.
+                if (uris.size == 1) throw e
+                failed++
+            }
+        }
+        return ImportSummary(added, duplicates, failed)
+    }
 
     suspend fun toggleFavorite(book: BookEntity) {
         dao.update(book.copy(isFavorite = !book.isFavorite))

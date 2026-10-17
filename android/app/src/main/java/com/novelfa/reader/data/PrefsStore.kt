@@ -37,6 +37,9 @@ class PrefsStore(private val context: Context) {
         val READER_SPACING = stringPreferencesKey("readerSpacing")
         val PROFILE_NAME = stringPreferencesKey("profileName")
         val AVATAR = stringPreferencesKey("avatarPath")
+        // WPF parity: animated character-theme particle layer (default off,
+        // like the desktop client's "0").
+        val THEME_PARTICLES = booleanPreferencesKey("themeParticles")
     }
 
     val theme: Flow<String> = context.dataStore.data.map { it[THEME] ?: "dark" }
@@ -55,6 +58,8 @@ class PrefsStore(private val context: Context) {
     val profileName: Flow<String> = context.dataStore.data.map { it[PROFILE_NAME] ?: "" }
     /** Custom avatar file path; blank = default Novelfa icon. */
     val avatarPath: Flow<String> = context.dataStore.data.map { it[AVATAR] ?: "" }
+    /** Animated character-theme particles behind the library (default off). */
+    val themeParticles: Flow<Boolean> = context.dataStore.data.map { it[THEME_PARTICLES] ?: false }
 
     suspend fun setTheme(value: String) {
         context.dataStore.edit { it[THEME] = value }
@@ -103,6 +108,18 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setAvatarPath(value: String) {
         context.dataStore.edit { it[AVATAR] = value }
+    }
+
+    suspend fun setThemeParticles(value: Boolean) {
+        context.dataStore.edit { it[THEME_PARTICLES] = value }
+    }
+
+    /** Per-book reader page theme id (WPF parity); blank = default dark. */
+    suspend fun getReaderTheme(bookId: String): String =
+        context.dataStore.data.map { it[stringPreferencesKey("readerTheme_$bookId")] ?: "" }.first()
+
+    suspend fun setReaderTheme(bookId: String, themeId: String) {
+        context.dataStore.edit { it[stringPreferencesKey("readerTheme_$bookId")] = themeId }
     }
 
     // Task 7 additive generic string access (used by RankService wiring).

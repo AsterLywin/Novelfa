@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import android.net.Uri
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.theme.Accent
 import com.novelfa.reader.theme.CharacterThemes
@@ -28,7 +29,10 @@ import com.novelfa.reader.theme.hexToColor
  *   goes back to plain app colors). Also saved-but-never-read until now.
  */
 @Composable
-fun NovelfaApp() {
+fun NovelfaApp(
+    openEpubUri: Uri? = null,
+    onEpubUriConsumed: () -> Unit = {}
+) {
     val context = LocalContext.current
     val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
     val themeKey by prefs.theme.collectAsState(initial = "dark")
@@ -39,7 +43,10 @@ fun NovelfaApp() {
         buildAppColorScheme(isLight, accentHex, charThemeId)
     }
     MaterialTheme(colorScheme = colorScheme) {
-        NavGraph()
+        NavGraph(
+            openEpubUri = openEpubUri,
+            onEpubUriConsumed = onEpubUriConsumed
+        )
     }
 }
 

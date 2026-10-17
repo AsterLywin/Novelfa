@@ -374,4 +374,19 @@ Drag your EPUB files here and drop them</string>
     <string name="pin_locked_out">Too many failed attempts. Try again in %1$d seconds.</string>
     <string name="no_search_results">No results found</string>
     <string name="couldn_t_apply_the_theme">Couldn\'t apply the theme.</string>
+    <string name="import_summary_added">%1$d added</string>
+    <string name="import_summary_duplicates">%1$d duplicates skipped</string>
+    <string name="import_summary_failed">%1$d failed</string>
+    <string name="custom_color">Custom color</string>
+    <string name="apply_custom_color">Apply</string>
+    <string name="default_color">Default</string>
+    <string name="invalid_hex">Invalid color code</string>
+    <string name="pick_this_color">Use this color</string>
+    <string name="new_theme_unlocked">New theme unlocked</string>
+    <string name="rank_up_message">Your rank is now %1$s! Theme %2$s unlocked for you.\n\nActivate %3$s right now?</string>
+    <string name="secret_theme_message">Theme %1$s unlocked for you ✦\n\nActivate it right now?</string>
+    <string name="open_link">Open</string>
+    <string name="copy_link">Copy</string>
+    <string name="copied">Copied ✓</string>
+    <string name="start_over_prompt">Start %1$s over from chapter 1?</string>
 </resources>

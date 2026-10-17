@@ -374,4 +374,19 @@
     <string name="pin_locked_out">تلاش‌های ناموفق زیاد شد. %1$d ثانیه دیگر تلاش کن.</string>
     <string name="no_search_results">نتیجه‌ای پیدا نشد</string>
     <string name="couldn_t_apply_the_theme">اعمال تم انجام نشد.</string>
+    <string name="import_summary_added">%1$d کتاب اضافه شد</string>
+    <string name="import_summary_duplicates">%1$d تکراری رد شد</string>
+    <string name="import_summary_failed">%1$d ناموفق بود</string>
+    <string name="custom_color">رنگ دلخواه</string>
+    <string name="apply_custom_color">اعمال</string>
+    <string name="default_color">پیش‌فرض</string>
+    <string name="invalid_hex">کد رنگ معتبر نیست</string>
+    <string name="pick_this_color">انتخاب این رنگ</string>
+    <string name="new_theme_unlocked">تم جدید باز شد</string>
+    <string name="rank_up_message">رتبه‌ات شد %1$s!\nتم %2$s برات باز شد.\n\nهمین الان تم %3$s رو فعال کنم؟</string>
+    <string name="secret_theme_message">تم %1$s برات باز شد ✦\n\nهمین الان فعالش کنم؟</string>
+    <string name="open_link">باز کردن</string>
+    <string name="copy_link">کپی</string>
+    <string name="copied">کپی شد ✓</string>
+    <string name="start_over_prompt">«%1$s» رو از فصل ۱ شروع کنم؟</string>
 </resources>

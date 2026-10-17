@@ -41,6 +41,7 @@ class SettingsViewModel(
     val readerSpacing: Flow<String> = prefs.readerSpacing
     val lang: Flow<String> = prefs.lang
     val supportEnabled: Flow<Boolean> = prefs.supportEnabled
+    val themeParticles: Flow<Boolean> = prefs.themeParticles
 
     fun rankService(): RankService = RankService(rankPrefs)
 
@@ -71,6 +72,8 @@ class SettingsViewModel(
         prefs.setSupportEnabled(value)
         support.setEnabled(value)
     }
+
+    suspend fun setThemeParticles(value: Boolean) = prefs.setThemeParticles(value)
 
     /**
      * Minimal port of Loc.SetLanguage: persist "Lang" ("fa"/"en") and apply

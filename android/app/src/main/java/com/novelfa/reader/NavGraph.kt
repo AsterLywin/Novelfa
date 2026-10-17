@@ -1,5 +1,6 @@
 package com.novelfa.reader
 
+import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
@@ -25,7 +26,10 @@ import com.novelfa.reader.settings.SupportTracker
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 
 @Composable
-fun NavGraph() {
+fun NavGraph(
+    openEpubUri: Uri? = null,
+    onEpubUriConsumed: () -> Unit = {}
+) {
     val navController = rememberNavController()
     NavHost(navController = navController, startDestination = Routes.LIBRARY) {
         composable(Routes.LIBRARY) {
@@ -45,7 +49,9 @@ fun NavGraph() {
                 onOpenBook = { id -> navController.navigate("reader/$id") },
                 viewModel = viewModel,
                 onOpenCollections = { navController.navigate(Routes.COLLECTIONS) },
-                onOpenSettings = { navController.navigate(Routes.SETTINGS) }
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                pendingImportUri = openEpubUri,
+                onImportUriConsumed = onEpubUriConsumed
             )
         }
         composable(Routes.COLLECTIONS) {

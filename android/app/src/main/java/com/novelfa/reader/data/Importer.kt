@@ -121,6 +121,8 @@ class Importer(private val context: Context, private val db: ReaderDb) {
     }
 
     /** Original file name from the SAF picker (null when unavailable). */
+    fun displayNameOf(uri: Uri): String? = queryDisplayName(uri)
+
     private fun queryDisplayName(uri: Uri): String? = runCatching {
         context.contentResolver.query(
             uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
