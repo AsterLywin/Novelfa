@@ -52,6 +52,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -382,6 +383,11 @@ fun LibraryScreen(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.app_name)) },
+                // Match the Windows version: header uses the background color
+                // (Bg), not the card/surface color.
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                ),
                 actions = {
                     TextButton(onClick = onOpenCollections) {
                         Text(stringResource(R.string.library_collections))
@@ -976,7 +982,10 @@ private fun LazyListScope.libraryHeaderList(
 private fun LibraryTabs(tab: Tab, onTab: (Tab) -> Unit) {
     ScrollableTabRow(
         selectedTabIndex = TABS.indexOfFirst { it.first == tab },
-        edgePadding = 0.dp
+        edgePadding = 0.dp,
+        // Match the Windows version: tabs use the background color (Bg),
+        // not the card/surface color.
+        containerColor = MaterialTheme.colorScheme.background
     ) {
         TABS.forEach { (t, label) ->
             Tab(
@@ -1378,7 +1387,18 @@ fun BookCard(
                 AsyncImage(
                     model = book.coverPath,
                     contentDescription = title,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        // Cover flush with card edges; top corners rounded to
+                        // match the card's shape.
+                        .clip(
+                            RoundedCornerShape(
+                                topStart = 12.dp,
+                                topEnd = 12.dp,
+                                bottomStart = 0.dp,
+                                bottomEnd = 0.dp
+                            )
+                        )
                 )
                 if (showBite) {
                     BiteOverlay(
