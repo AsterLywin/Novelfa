@@ -22,8 +22,8 @@ import kotlin.random.Random
  * Animated character-theme particle layer (WPF ThemeParticleLayer parity):
  * a handful of small drifting shapes behind the library content, drawn at
  * ~30fps. Types come from [CharacterTheme.particle]: embers, petals,
- * sparkles, butterflies, snow, leaves. Hit-test invisible by construction
- * (pure Canvas draw, no pointer input).
+ * sparkles, butterflies, snow, leaves, ash. Hit-test invisible by
+ * construction (pure Canvas draw, no pointer input).
  */
 @Composable
 fun ParticleLayer(
@@ -66,6 +66,8 @@ private fun particleColor(type: String, idx: Int): Color = when (type) {
     "butterflies" -> listOf(Color(0xFFC4B5FD), Color(0xFFA78BFA), Color(0xFFDDD6FE))[idx % 3]
     "snow" -> Color.White
     "leaves" -> listOf(Color(0xFF86EFAC), Color(0xFF4ADE80), Color(0xFFBBF7D0))[idx % 3]
+    // Upstream "ash" (tsugi theme): small gray shards drifting down.
+    "ash" -> listOf(Color(0xFF9A8C80), Color(0xFFA39286), Color(0xFF7C6068))[idx % 3]
     else -> Color.White
 }
 
@@ -114,6 +116,17 @@ private fun DrawScope.drawSeed(s: ParticleSeed, type: String, t: Float) {
                     c.copy(alpha = alpha),
                     topLeft = Offset(x - s.size / 2f, y - s.size / 4f),
                     size = Size(s.size, s.size / 2f)
+                )
+            }
+        }
+        "ash" -> {
+            // Gray shards: small rotated rectangles drifting down.
+            rotate(s.phase * 57f + t * s.spin, Offset(x, y)) {
+                val sh = s.size * 0.45f
+                drawRect(
+                    c.copy(alpha = alpha),
+                    topLeft = Offset(x - sh / 2f, y - sh / 4f),
+                    size = Size(sh, sh / 2f)
                 )
             }
         }

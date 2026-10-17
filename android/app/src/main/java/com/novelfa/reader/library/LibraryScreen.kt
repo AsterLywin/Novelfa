@@ -466,7 +466,9 @@ fun LibraryScreen(
                             },
                             onMenuClick = { menuFor = book },
                             missingFile = book.id in missingIds,
-                            selected = book.id in selection
+                            selected = book.id in selection,
+                            // Bite mark: completed books only, tsugi theme only.
+                            showBite = charThemeId == "tsugi" && isCompleted(book)
                         )
                     }
                 }
@@ -548,7 +550,9 @@ fun LibraryScreen(
                             },
                             onMenuClick = { menuFor = book },
                             missingFile = book.id in missingIds,
-                            selected = book.id in selection
+                            selected = book.id in selection,
+                            // Bite mark: completed books only, tsugi theme only.
+                            showBite = charThemeId == "tsugi" && isCompleted(book)
                         )
                     }
                 }
@@ -1044,8 +1048,7 @@ private fun SelectionBar(
  * Vector trash-can icon (replaces the 🗑️ emoji): lid + handle + tapered
  * body outline, drawn with Canvas so it follows the theme instead of the
  * system emoji font.
- */
-@Composable
+ */@Composable
 private fun TrashCanIcon(
     color: Color,
     modifier: Modifier = Modifier
@@ -1097,6 +1100,25 @@ private fun TrashCanIcon(
             strokeWidth = stroke * 0.75f,
             cap = StrokeCap.Round
         )
+    }
+}
+
+/**
+ * Bite taken out of a completed book's cover (upstream ThemeBiteVisibility
+ * parity): three overlapping background-colored circles chewing into the
+ * top-end corner. Only shown with the «سوبارو · شکم‌پرستی» theme.
+ */
+@Composable
+private fun BiteOverlay(modifier: Modifier = Modifier) {
+    val bg = MaterialTheme.colorScheme.surface
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        // Anchor the bite on the top-end corner: circles centered just
+        // outside the corner so their arcs cut into the cover.
+        drawCircle(bg, radius = w * 0.34f, center = Offset(w * 1.02f, -h * 0.04f))
+        drawCircle(bg, radius = w * 0.26f, center = Offset(w * 0.78f, -h * 0.10f))
+        drawCircle(bg, radius = w * 0.22f, center = Offset(w * 1.06f, h * 0.22f))
     }
 }
 
@@ -1304,7 +1326,10 @@ fun BookCard(
     onMenuClick: (() -> Unit)? = null,
     missingFile: Boolean = false,
     selected: Boolean = false,
-    onLongClick: (() -> Unit)? = null
+    onLongClick: (() -> Unit)? = null,
+    // Upstream f352105: bite taken out of completed books' covers, visible
+    // only with the «سوبارو · شکم‌پرستی» (tsugi) character theme.
+    showBite: Boolean = false
 ) {
     Card(
         border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
@@ -1329,6 +1354,13 @@ fun BookCard(
                     contentDescription = title,
                     modifier = Modifier.fillMaxSize()
                 )
+                if (showBite) {
+                    BiteOverlay(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .size(64.dp)
+                    )
+                }
                 if (book.isFavorite) {
                     Text(
                         text = "★",

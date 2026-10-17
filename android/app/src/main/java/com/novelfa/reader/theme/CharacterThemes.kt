@@ -112,9 +112,18 @@ object CharacterThemes {
         CharacterTheme(
             "echidna", "اکیدنا", "اکیدنا، جادوگرِ طمع",
             "سبزِ زهرآگین و چایِ نیمه‌شب؛ طمعِ سیری‌ناپذیر برای دانستن",
-            "leaves", 99,
+            "leaves", 5,
             ThemePalette.parse("#040A07 #08120D #0E1D15 #E6FFEF #7FB095 #14301F #1B4A2E #0F2A1B #0F3A22 #06120B #2CFF8A #12C968 #7CFFB5 #0FA85A #2CFF8A #00E5C0"),
             ThemePalette.parse("#F0FAF4 #FFFFFF #FFFFFF #0B2417 #5B8068 #E2F5EA #C6E6D2 #D8F5E3 #D2F4E0 #BDEBD2 #0B8F4A #076B37 #3DDB86 #0B8F4A #1FD174 #00BFA0")
+        ),
+        // Upstream f352105: «سوبارو · شکم‌پرستی» (rank 6, ash particles).
+        // Palettes copied verbatim from CharacterThemes.cs.
+        CharacterTheme(
+            "tsugi", "سوبارو · شکم‌پرستی", "ناتسوکی سوبارو، نسخه‌ی شکم‌پرستی",
+            "خاکستر، کتاب مردگان و خاطره‌ای که تکه‌تکه دوخته می‌شه",
+            "ash", 6,
+            ThemePalette.parse("#141415 #19191A #1E1E20 #F1EBE6 #9A8C80 #262325 #3B3432 #2A2422 #28262B #151416 #E3B46E #C8934A #EBC585 #D39A4E #A39286 #7C6068"),
+            ThemePalette.parse("#F5F0EE #FBF8F6 #FDFAF8 #2E2429 #7C6368 #EDE3E0 #E2C9C0 #F3E4DC #EBD9D3 #D9C2C0 #A9732B #85561A #E3B46E #C28A3E #A78A89 #C0392F")
         )
     )
 

@@ -4,15 +4,19 @@ import android.net.Uri
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.BookEntity
 import com.novelfa.reader.data.Importer
+import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.SortFa
 import com.novelfa.reader.data.isCompleted
 import com.novelfa.reader.data.isInProgress
 import com.novelfa.reader.data.progressPercent
 import com.novelfa.reader.settings.CollectionManager
+import com.novelfa.reader.settings.ManualCollectionRegistry
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 
 /** Library tabs. Predicates mirror WPF Book.cs: IsCompleted / IsInProgress. */
@@ -94,12 +98,34 @@ class LibraryViewModel(
     val dao: BookDao,
     private val importer: Importer? = null,
     val pinGate: PinGate = NoPinGate,
-    cacheDir: File? = null
+    cacheDir: File? = null,
+    prefs: PrefsStore? = null
 ) {
     val books: Flow<List<BookEntity>> = dao.allBooks()
 
+    /**
+     * All collection names incl. empty manual ones (upstream
+     * GetAllCollectionNames + CollectionRegistry parity).
+     */
+    val collectionNames: Flow<List<String>> =
+        combine(books, prefs?.manualCollections ?: flowOf(emptySet())) { list, manual ->
+            (list.mapNotNull { it.collectionName?.takeIf { n -> n.isNotBlank() } } + manual)
+                .distinct().sorted()
+        }
+
     /** Task 8 collection/book ops (pure logic in CollectionManager). */
-    val collections = CollectionManager(dao, cacheDir)
+    val collections = CollectionManager(
+        dao,
+        cacheDir,
+        prefs?.let { p ->
+            object : ManualCollectionRegistry {
+                override suspend fun get() = p.getManualCollections()
+                override suspend fun add(name: String) = p.addManualCollection(name)
+                override suspend fun remove(name: String) = p.removeManualCollection(name)
+                override suspend fun rename(old: String, new: String) = p.renameManualCollection(old, new)
+            }
+        }
+    )
 
     fun filtered(tab: Tab, query: String): Flow<List<BookEntity>> =
         dao.allBooks().map { applyFilter(it, tab, query) }
@@ -168,6 +194,8 @@ class LibraryViewModel(
     suspend fun deleteCollection(name: String) = collections.deleteCollection(name)
 
     suspend fun allCollectionNames(): List<String> = collections.allCollectionNames()
+
+    suspend fun createCollection(name: String) = collections.createCollection(name)
 
     suspend fun resetProgress(book: BookEntity) = collections.resetProgress(book.id)
 

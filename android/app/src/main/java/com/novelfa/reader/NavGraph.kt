@@ -42,7 +42,8 @@ fun NavGraph(
                     db.bookDao(),
                     Importer(context, db),
                     PinManager(PrefsStorePinPrefs(prefs)),
-                    cacheDir = context.cacheDir
+                    cacheDir = context.cacheDir,
+                    prefs = prefs
                 )
             }
             LibraryScreen(
@@ -63,7 +64,8 @@ fun NavGraph(
                     db.bookDao(),
                     Importer(context, db),
                     PinManager(PrefsStorePinPrefs(prefs)),
-                    cacheDir = context.cacheDir
+                    cacheDir = context.cacheDir,
+                    prefs = prefs
                 )
             }
             CollectionsScreen(

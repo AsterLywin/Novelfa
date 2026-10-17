@@ -43,7 +43,9 @@ class RankService(private val prefs: RankPrefs) {
             RankInfo(1, "کتاب‌باز", 1),
             RankInfo(2, "کتاب‌خور", 3),
             RankInfo(3, "کتابدار", 10),
-            RankInfo(4, "افسانه‌ی کتابخانه", 25)
+            RankInfo(4, "افسانه‌ی کتابخانه", 25),
+            RankInfo(5, "دانای پلایادس", 60),
+            RankInfo(6, "هیولای پلایادس", 80)
         )
 
         /** Desc loop, like RankService.RankIndexFor. */

@@ -42,6 +42,9 @@ class PrefsStore(private val context: Context) {
         val THEME_PARTICLES = booleanPreferencesKey("themeParticles")
         // Reading layout mode (replaces the old continuous toggle).
         val READING_MODE = stringPreferencesKey("readingMode")
+        // Upstream CollectionRegistry parity: manually-created collection
+        // names (including empty ones, which have no books to anchor them).
+        val MANUAL_COLLECTIONS = stringSetPreferencesKey("manualCollections")
     }
 
     val theme: Flow<String> = context.dataStore.data.map { it[THEME] ?: "dark" }
@@ -123,6 +126,26 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setReadingMode(value: String) {
         context.dataStore.edit { it[READING_MODE] = value }
+    }
+
+    /** Manually-created collection names (survive even when empty). */
+    val manualCollections: Flow<Set<String>> =
+        context.dataStore.data.map { it[MANUAL_COLLECTIONS] ?: emptySet() }
+
+    suspend fun getManualCollections(): Set<String> = manualCollections.first()
+
+    suspend fun addManualCollection(name: String) {
+        context.dataStore.edit { it[MANUAL_COLLECTIONS] = (it[MANUAL_COLLECTIONS] ?: emptySet()) + name }
+    }
+
+    suspend fun removeManualCollection(name: String) {
+        context.dataStore.edit { it[MANUAL_COLLECTIONS] = (it[MANUAL_COLLECTIONS] ?: emptySet()) - name }
+    }
+
+    suspend fun renameManualCollection(old: String, new: String) {
+        context.dataStore.edit {
+            it[MANUAL_COLLECTIONS] = (it[MANUAL_COLLECTIONS] ?: emptySet()) - old + new
+        }
     }
 
     /** Per-book reader page theme id (WPF parity); blank = default dark. */

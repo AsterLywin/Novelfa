@@ -351,6 +351,8 @@
     <string name="app_name">ناول‌فا ریدر</string>
     <string name="app_settings">تنظیمات</string>
     <string name="library_collections">مجموعه‌ها</string>
+    <string name="new_collection">مجموعه جدید</string>
+    <string name="new_collection_name">اسم مجموعه</string>
     <string name="about_title">درباره ناول‌فا</string>
     <string name="about_body">کتاب‌خوان فارسی، کاملاً آفلاین و بدون هیچ دسترسی. هیچ داده‌ای جمع یا ارسال نمی‌شود.</string>
     <string name="app_version">نسخه %1$s</string>

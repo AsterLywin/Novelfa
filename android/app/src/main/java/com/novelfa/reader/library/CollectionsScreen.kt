@@ -52,12 +52,10 @@ fun CollectionsScreen(
     onBack: (() -> Unit)? = null
 ) {
     val books by viewModel.books.collectAsState(initial = emptyList())
-    val collections = remember(books) {
-        books.mapNotNull { it.collectionName?.takeIf { n -> n.isNotBlank() } }
-            .distinct()
-            .sorted()
-    }
+    // Includes empty manually-created collections (upstream CollectionRegistry).
+    val collections by viewModel.collectionNames.collectAsState(initial = emptyList())
     var selected by remember { mutableStateOf<String?>(null) }
+    var createOpen by remember { mutableStateOf(false) }
     var assignTarget by remember { mutableStateOf<BookEntity?>(null) }
     var renameTarget by remember { mutableStateOf<String?>(null) }
     var deleteTarget by remember { mutableStateOf<String?>(null) }
@@ -72,8 +70,12 @@ fun CollectionsScreen(
                 TextButton(onClick = onBack) { Text("→") }
                 Text(
                     stringResource(R.string.library_collections),
-                    modifier = Modifier.align(Alignment.CenterVertically)
+                    modifier = Modifier.align(Alignment.CenterVertically).weight(1f)
                 )
+                // Upstream parity: manually create a collection (may stay empty).
+                TextButton(onClick = { createOpen = true }) {
+                    Text("＋ " + stringResource(R.string.new_collection))
+                }
             }
         }
         if (selected == null) {
@@ -153,6 +155,25 @@ fun CollectionsScreen(
                 scope.launch {
                     viewModel.setCollection(target, newName)
                     assignTarget = null
+                }
+            }
+        )
+    }
+
+    if (createOpen) {
+        CreateCollectionDialog(
+            onDismiss = { createOpen = false },
+            onSave = { name ->
+                scope.launch {
+                    val result = runCatching { viewModel.createCollection(name) }
+                    createOpen = false
+                    if (!result.isSuccess) {
+                        Toast.makeText(
+                            context,
+                            result.exceptionOrNull()?.message ?: "Create failed",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
             }
         )
@@ -283,6 +304,54 @@ fun RenameCollectionDialog(
             TextButton(onClick = {
                 if (text.isBlank()) {
                     error = "اسم مجموعه نمی‌تونه خالی باشه."
+                } else {
+                    onSave(text.trim())
+                }
+            }) {
+                Text(stringResource(R.string.save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+/**
+ * Upstream NameInputWindow parity: dialog for creating a collection,
+ * with inline validation (won't close until the name is valid).
+ */
+@Composable
+private fun CreateCollectionDialog(
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var text by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.new_collection)) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text(stringResource(R.string.new_collection_name)) },
+                    singleLine = true
+                )
+                error?.let {
+                    Text(text = it, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (text.isBlank()) {
+                    error = "اسم مجموعه نمی‌تونه خالی باشه."
+                } else if (text.trim().length > 60) {
+                    error = "اسم مجموعه حداکثر ۶۰ کاراکتره."
                 } else {
                     onSave(text.trim())
                 }

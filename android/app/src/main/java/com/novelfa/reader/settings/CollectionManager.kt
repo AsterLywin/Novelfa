@@ -8,6 +8,17 @@ import kotlinx.coroutines.flow.first
 class CollectionException(messageFa: String) : IllegalArgumentException(messageFa)
 
 /**
+ * Upstream CollectionRegistry parity: persistence for manually-created
+ * collection names (including empty ones).
+ */
+interface ManualCollectionRegistry {
+    suspend fun get(): Set<String>
+    suspend fun add(name: String)
+    suspend fun remove(name: String)
+    suspend fun rename(old: String, new: String)
+}
+
+/**
  * Collection + book-removal ops ported from LibraryService.cs
  * (RenameCollection, RemoveFromCollection/SetCollection, ResetProgress,
  * RemoveBook + CleanupUnusedCovers minimally, TogglePrivate).
@@ -17,8 +28,20 @@ class CollectionException(messageFa: String) : IllegalArgumentException(messageF
  */
 class CollectionManager(
     private val dao: BookDao,
-    private val cacheDir: File? = null
+    private val cacheDir: File? = null,
+    private val manualRegistry: ManualCollectionRegistry? = null
 ) {
+
+    /** Create a manually-named collection (upstream NameInputWindow flow). */
+    suspend fun createCollection(name: String) {
+        val clean = name.trim()
+        if (clean.isEmpty()) throw CollectionException("اسم مجموعه نمی‌تونه خالی باشه.")
+        if (clean.length > 60) throw CollectionException("اسم مجموعه حداکثر ۶۰ کاراکتره.")
+        if (allCollectionNames().any { it.equals(clean, ignoreCase = true) }) {
+            throw CollectionException("مجموعه‌ای با این اسم از قبل وجود داره.")
+        }
+        manualRegistry?.add(clean)
+    }
 
     /** Rename a collection: updates every book carrying [old] (blank -> throw). */
     suspend fun renameCollection(old: String, new: String) {
@@ -33,20 +56,24 @@ class CollectionManager(
         dao.allBooks().first()
             .filter { it.collectionName == old }
             .forEach { dao.update(it.copy(collectionName = clean)) }
+        manualRegistry?.rename(old, clean)
     }
 
-    /** Delete a collection: nulls out the name on every member book. */
+    /** Delete a collection: nulls out the name on every member book (books stay). */
     suspend fun deleteCollection(name: String) {
         dao.allBooks().first()
             .filter { it.collectionName == name }
             .forEach { dao.update(it.copy(collectionName = null)) }
+        manualRegistry?.remove(name)
     }
 
-    /** Distinct non-blank collection names (port of GetAllCollectionNames). */
-    suspend fun allCollectionNames(): List<String> =
-        dao.allBooks().first()
+    /** Distinct non-blank collection names incl. empty manual ones. */
+    suspend fun allCollectionNames(): List<String> {
+        val fromBooks = dao.allBooks().first()
             .mapNotNull { it.collectionName?.takeIf { n -> n.isNotBlank() } }
-            .distinct()
+        val manual = manualRegistry?.get() ?: emptySet()
+        return (fromBooks + manual).distinct().sorted()
+    }
 
     /**
      * Port of ResetProgress: index back to 0 (LastChapterDisplay = index+1, so
