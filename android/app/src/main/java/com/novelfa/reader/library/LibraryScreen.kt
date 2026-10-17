@@ -806,26 +806,33 @@ private fun StatsStrip(
     fav: Int,
     onPick: (Tab) -> Unit
 ) {
+    // Like the WPF stats strip: each card is one unit (count + label) and
+    // tapping it selects the corresponding tab.
     val cards = listOf(
-        total to Tab.ALL,
-        reading to Tab.READING,
-        done to Tab.COMPLETED,
-        fav to Tab.FAVORITES
+        Triple(total, Tab.ALL, R.string.all_books),
+        Triple(reading, Tab.READING, R.string.currently_reading),
+        Triple(done, Tab.COMPLETED, R.string.completed),
+        Triple(fav, Tab.FAVORITES, R.string.favorites)
     )
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        cards.forEach { (count, t) ->
+        cards.forEach { (count, t, labelRes) ->
             Card(
                 onClick = { onPick(t) },
                 modifier = Modifier.weight(1f)
             ) {
-                Box(
-                    modifier = Modifier.padding(10.dp).fillMaxWidth(),
-                    contentAlignment = Alignment.Center
+                Column(
+                    modifier = Modifier.padding(vertical = 10.dp).fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text("$count", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        stringResource(labelRes),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
