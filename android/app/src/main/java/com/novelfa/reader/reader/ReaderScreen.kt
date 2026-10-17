@@ -185,11 +185,15 @@ fun ReaderScreen(
         val tracker = support ?: return@LaunchedEffect
         while (true) {
             delay(10_000)
-            tracker.addForegroundSeconds(10)
-            if (tracker.shouldPrompt()) {
-                tracker.onPromptShown()
-                supportOpen = true
+            // DataStore read+write every tick: keep it off the UI thread.
+            val prompt = withContext(Dispatchers.IO) {
+                tracker.addForegroundSeconds(10)
+                if (tracker.shouldPrompt()) {
+                    tracker.onPromptShown()
+                    true
+                } else false
             }
+            if (prompt) supportOpen = true
         }
     }
 
@@ -329,7 +333,7 @@ fun ReaderScreen(
                                     gotoChapter(vv, vv.index - 1)
                                 }
                             },
-                            enabled = v != null
+                            enabled = v != null && v.index > 0
                         ) { Text(stringResource(R.string.previous_chapter)) }
                         TextButton(
                             onClick = {
@@ -338,7 +342,7 @@ fun ReaderScreen(
                                     gotoChapter(vv, vv.index + 1)
                                 }
                             },
-                            enabled = v != null
+                            enabled = v != null && v.index < v.chapters.size - 1
                         ) { Text(stringResource(R.string.next_chapter)) }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             @Suppress("UNUSED_EXPRESSION")
@@ -649,8 +653,14 @@ private fun openParsed(
         outDir.mkdirs()
         ZipFile(epub).use { zf ->
             val entries = zf.entries()
+            var entryCount = 0
+            var totalBytes = 0L
             while (entries.hasMoreElements()) {
                 val entry = entries.nextElement()
+                // Zip-bomb guard: cap entry count and total uncompressed size.
+                if (++entryCount > MAX_ZIP_ENTRIES) {
+                    throw IOException("Zip entry count exceeds limit: " + entry.name)
+                }
                 val out = File(outDir, entry.name)
                 val canonicalOut = out.canonicalPath
                 val canonicalDir = outDir.canonicalPath
@@ -662,7 +672,12 @@ private fun openParsed(
                 } else {
                     out.parentFile?.mkdirs()
                     zf.getInputStream(entry).use { input ->
-                        out.outputStream().use { output -> input.copyTo(output) }
+                        out.outputStream().use { output ->
+                            totalBytes += input.copyTo(output)
+                            if (totalBytes > MAX_ZIP_BYTES) {
+                                throw IOException("Zip uncompressed size exceeds limit")
+                            }
+                        }
                     }
                 }
             }
@@ -671,3 +686,7 @@ private fun openParsed(
     }
     return EpubParser.parse(outDir, epub.name)
 }
+
+/** Zip-bomb guardrails for EPUB extraction (generous: real books are far smaller). */
+private const val MAX_ZIP_ENTRIES = 10_000
+private const val MAX_ZIP_BYTES = 500L * 1024 * 1024

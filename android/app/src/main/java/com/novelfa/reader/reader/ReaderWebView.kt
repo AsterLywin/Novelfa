@@ -52,7 +52,10 @@ fun ReaderWebView(
             WebView(ctx).apply {
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
+                // No functional need for DOM storage in the reader; leaving it
+                // on would give every book's pages a shared persistent
+                // localStorage.
+                settings.domStorageEnabled = false
                 // Local file: subresources (chapter images/fonts) must load
                 // under loadDataWithBaseURL; the app is fully offline.
                 // NOTE: allowFileAccessFromFileURLs / allowUniversalAccessFromFileURLs
@@ -126,6 +129,9 @@ fun ReaderWebView(
                 loaded.value = html
                 wv.loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", null)
             }
-        }
+        },
+        // A WebView holds its Activity and native renderer resources: destroy
+        // it when the composable leaves the composition instead of leaking it.
+        onRelease = { wv -> wv.destroy() }
     )
 }

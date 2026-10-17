@@ -7,6 +7,7 @@ import com.novelfa.reader.theme.ReaderTheme
 import com.novelfa.reader.theme.Themes
 import java.io.File
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
@@ -83,9 +84,6 @@ class ReaderViewModel(
         lastDropped = null
     }
 
-    val positionText: String
-        get() = "${index + 1} از ${chapters.size}"
-
     val chapterTitle: String
         get() = chapters.getOrNull(index)?.title ?: ""
 
@@ -125,7 +123,7 @@ class ReaderViewModel(
             return false
         }
         return try {
-            val body = readPrepared(i)
+            val body = withContext(Dispatchers.IO) { readPrepared(i) }
             val wrapped = "<div class=\"rdr-chap\" data-idx=\"" + i + "\"" +
                 HtmlText.chapterDirAttr(body) + ">" + body + "</div>"
             docGen++
@@ -143,6 +141,8 @@ class ReaderViewModel(
             lastError = null
             saveProgress(i, force = true)
             true
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             lastError = e.message
             false
@@ -155,33 +155,41 @@ class ReaderViewModel(
         if (!appendMutex.tryLock()) {
             return false
         }
-        val next = contLast + 1
-        if (next >= chapters.size) {
-            return false
-        }
-        if (expectedGen != docGen) {
-            return false
-        }
-        isAppending = true
+        // The mutex MUST be released on every path: the bounds/gen early
+        // returns below used to skip the inner finally and leak the lock,
+        // permanently killing continuous mode for the session.
         try {
-            val body = withContext(Dispatchers.IO) { readPrepared(next) }
-            val chunk = "<div class=\"rdr-chap\" data-idx=\"" + next + "\"" +
-                HtmlText.chapterDirAttr(body) + ">" +
-                ChapterDivider.divider(chapters[next].title, theme) + body + "</div>"
-            html = html.replace("</body>", chunk + "</body>")
-            contLast = next
-            index = next
-            lastChunk = chunk
-            lastChunkKind = "append"
-            lastError = null
-            trimWindow(keepTail = true)
-            saveProgress(next)
-            return true
-        } catch (e: Exception) {
-            lastError = e.message
-            return false
+            val next = contLast + 1
+            if (next >= chapters.size) {
+                return false
+            }
+            if (expectedGen != docGen) {
+                return false
+            }
+            isAppending = true
+            try {
+                val body = withContext(Dispatchers.IO) { readPrepared(next) }
+                val chunk = "<div class=\"rdr-chap\" data-idx=\"" + next + "\"" +
+                    HtmlText.chapterDirAttr(body) + ">" +
+                    ChapterDivider.divider(chapters[next].title, theme) + body + "</div>"
+                html = html.replace("</body>", chunk + "</body>")
+                contLast = next
+                index = next
+                lastChunk = chunk
+                lastChunkKind = "append"
+                lastError = null
+                trimWindow(keepTail = true)
+                saveProgress(next)
+                return true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e.message
+                return false
+            } finally {
+                isAppending = false
+            }
         } finally {
-            isAppending = false
             appendMutex.unlock()
         }
     }
@@ -191,34 +199,41 @@ class ReaderViewModel(
         if (!appendMutex.tryLock()) {
             return false
         }
-        val prev = contFirst - 1
-        if (prev < 0 || contFirst >= chapters.size) {
-            return false
-        }
-        if (expectedGen != docGen) {
-            return false
-        }
-        isAppending = true
+        // See appendNext: the lock must be released on every path, including
+        // the bounds/gen early returns.
         try {
-            val body = withContext(Dispatchers.IO) { readPrepared(prev) }
-            val chunk = "<div class=\"rdr-chap\" data-idx=\"" + prev + "\"" +
-                HtmlText.chapterDirAttr(body) + ">" + body + "</div>"
-            val divider = ChapterDivider.divider(chapters[contFirst].title, theme)
-            html = html.replace("<body>", "<body>" + chunk + divider)
-            contFirst = prev
-            index = prev
-            lastChunk = chunk
-            lastPrependDivider = divider
-            lastChunkKind = "prepend"
-            lastError = null
-            trimWindow(keepTail = false)
-            saveProgress(prev)
-            return true
-        } catch (e: Exception) {
-            lastError = e.message
-            return false
+            val prev = contFirst - 1
+            if (prev < 0 || contFirst >= chapters.size) {
+                return false
+            }
+            if (expectedGen != docGen) {
+                return false
+            }
+            isAppending = true
+            try {
+                val body = withContext(Dispatchers.IO) { readPrepared(prev) }
+                val chunk = "<div class=\"rdr-chap\" data-idx=\"" + prev + "\"" +
+                    HtmlText.chapterDirAttr(body) + ">" + body + "</div>"
+                val divider = ChapterDivider.divider(chapters[contFirst].title, theme)
+                html = html.replace("<body>", "<body>" + chunk + divider)
+                contFirst = prev
+                index = prev
+                lastChunk = chunk
+                lastPrependDivider = divider
+                lastChunkKind = "prepend"
+                lastError = null
+                trimWindow(keepTail = false)
+                saveProgress(prev)
+                return true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e.message
+                return false
+            } finally {
+                isAppending = false
+            }
         } finally {
-            isAppending = false
             appendMutex.unlock()
         }
     }
@@ -233,7 +248,7 @@ class ReaderViewModel(
      * is intentionally left as "append"/"prepend" so the incremental JS path
      * (chunk + drop) runs. No-op while the span fits.
      */
-    private fun trimWindow(keepTail: Boolean) {
+    private suspend fun trimWindow(keepTail: Boolean) {
         lastDropped = null
         if (contLast - contFirst + 1 <= MAX_WINDOW_SPAN) return
         if (keepTail) {
@@ -245,7 +260,9 @@ class ReaderViewModel(
             lastDropped = newLast + 1..contLast
             contLast = newLast
         }
-        html = rebuildWindowHtml()
+        // Rebuilding re-reads up to MAX_WINDOW_SPAN chapter files: keep the
+        // blocking disk reads off the caller's (UI) thread.
+        html = withContext(Dispatchers.IO) { rebuildWindowHtml() }
     }
 
     /**
@@ -368,6 +385,8 @@ class ReaderViewModel(
             lastChunkKind = "full"
             lastError = null
             true
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             lastError = e.message
             false
