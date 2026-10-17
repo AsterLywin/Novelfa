@@ -1,17 +1,24 @@
 package com.novelfa.reader.reader
 
 import android.content.Context
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
@@ -25,7 +32,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -47,6 +53,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.novelfa.reader.R
@@ -68,7 +75,7 @@ import androidx.compose.material3.rememberDrawerState
 
 /**
  * Route `reader/{bookId}`: top bar (dir-aware chapter title + position
- * text), WebView, bottom bar (prev/next, continuous toggle, font size +/-,
+ * text, reading-mode picker), WebView, bottom bar (prev/next, font size +/-,
  * spacing dialog, chapter list drawer). Errors surface via snackbar with
  * R.string messages (fa "خطا در نمایش فصل:\n" equivalents, Task 4 map).
  */
@@ -102,10 +109,11 @@ fun ReaderScreen(
     var themeOpen by remember { mutableStateOf(false) }
     var fontOpen by remember { mutableStateOf(false) }
     var fullscreenUi by rememberSaveable { mutableStateOf(false) }
-    // Task 9: continuous survives rotation/process death (index is restored
-    // from the DB via saveProgress, which is authoritative; a fresh entry
-    // without saved state opens in single-chapter mode).
-    var continuousUi by rememberSaveable { mutableStateOf(false) }
+    // Reading layout mode (persisted globally): horizontal paging or
+    // vertical-continuous. Replaces the old continuous toggle.
+    val savedModeKey by prefs.readingMode.collectAsState(initial = "paged")
+    val modeNow = ReadingMode.fromKey(savedModeKey)
+    var modeOpen by remember { mutableStateOf(false) }
 
     val chapterErr = stringResource(R.string.couldn_t_display_the_chapter)
     val openErr = stringResource(R.string.couldn_t_open_the_book)
@@ -119,11 +127,14 @@ fun ReaderScreen(
      * Applies a ViewModel append/prepend to the WebView without a full
      * reload: evaluates the chunk JS, then removes chapters dropped by the
      * window trim via [HtmlBuilder.dropJs] (scroll-compensated, no jump).
+     * The drop script takes the KEEP range ([contFirst]..[contLast]) —
+     * passing the dropped range instead would invert it and wipe the live
+     * window from the DOM.
      */
     suspend fun applyIncrementalJs(v: ReaderViewModel, prevLast: Int, prevFirst: Int) {
         val drop = v.lastDropped
         val dropJs = if (drop != null && !drop.isEmpty()) {
-            HtmlBuilder.dropJs(v.docGen, drop.first, drop.last)
+            HtmlBuilder.dropJs(v.docGen, v.contFirst, v.contLast)
         } else ""
         when {
             v.lastChunkKind == "append" && v.contLast != prevLast -> {
@@ -143,9 +154,16 @@ fun ReaderScreen(
     }
 
     val bridge = remember {
-        ScrollBridge { t, h, c ->
+        ScrollBridge { t, h, c, gen ->
             scope.launch {
                 val v = vm ?: return@launch
+                // Stale-page guard: a drawer jump / theme change bumps
+                // docGen and reloads; the old page's 200ms interval can
+                // still fire once afterwards. Without this, appendNext
+                // would advance contLast while the gen-guarded chunk JS
+                // gets rejected — desyncing the ViewModel window from the
+                // DOM (the "can't advance after drawer select" bug).
+                if (gen != v.docGen) return@launch
                 val last = v.contLast
                 val first = v.contFirst
                 v.onScroll(t, h, c)
@@ -167,13 +185,14 @@ fun ReaderScreen(
                 }
             }
             val savedTheme = withContext(Dispatchers.IO) { prefs.getReaderTheme(bookId) }
+            val savedMode = withContext(Dispatchers.IO) { prefs.getReadingMode() }
             val v = ReaderViewModel(
                 dao, bookId, entity.copy(totalChapters = parsed.chapters.size),
                 parsed.chapters,
                 theme = Themes.findStatic(savedTheme) ?: Themes.DARK,
                 fontFiles = files
             )
-            v.continuous = continuousUi
+            v.readingMode = ReadingMode.fromKey(savedMode)
             val target = entity.lastChapterIndex.coerceIn(0, parsed.chapters.size - 1)
             if (!v.loadChapter(target)) {
                 throw IOException(v.lastError ?: "")
@@ -212,6 +231,57 @@ fun ReaderScreen(
             rev++
         } else {
             showVmError(v)
+        }
+    }
+
+    /**
+     * Horizontal page turn (paged mode). Asks the page to turn via
+     * `rdrTurn`; at the chapter edges it moves to the adjacent chapter
+     * instead (like a manga reader).
+     */
+    fun turnPage(v: ReaderViewModel, forward: Boolean) {
+        val wv = webView ?: return
+        wv.evaluateJavascript("rdrTurn(${if (forward) 1 else -1})") { result ->
+            val r = result?.trim()?.trim { it == '"' }
+            scope.launch {
+                val vv = vm ?: return@launch
+                if (r == "end" && forward && vv.index + 1 < vv.chapters.size) {
+                    gotoChapter(vv, vv.index + 1)
+                } else if (r == "start" && !forward && vv.index > 0) {
+                    gotoChapter(vv, vv.index - 1)
+                }
+            }
+        }
+    }
+
+    /**
+     * Switches the reading layout mode (from the mode popup): persists the
+     * choice, rebuilds the current chapter in the new layout, and — when
+     * entering vertical-continuous — stitches the next chapter right away
+     * instead of waiting for a scroll-to-bottom.
+     */
+    fun setMode(m: ReadingMode) {
+        val v = vm ?: return
+        scope.launch {
+            withContext(Dispatchers.IO) { prefs.setReadingMode(m.key) }
+            v.readingMode = m
+            if (m == ReadingMode.CONTINUOUS_VERTICAL) {
+                if (v.loadChapter(v.index)) {
+                    pageHtml = v.html
+                    pageBase = v.baseUrl
+                    val last = v.contLast
+                    val first = v.contFirst
+                    if (v.appendNext()) {
+                        applyIncrementalJs(v, last, first)
+                    }
+                    rev++
+                } else {
+                    showVmError(v)
+                }
+            } else {
+                gotoChapter(v, v.index)
+            }
+            modeOpen = false
         }
     }
 
@@ -311,6 +381,14 @@ fun ReaderScreen(
                         }
                     },
                     actions = {
+                        // Reading layout mode (replaces the old continuous
+                        // toggle): ⇄ horizontal paging, ↕ vertical-continuous.
+                        TextButton(onClick = { modeOpen = true }, enabled = vm != null) {
+                            Text(
+                                if (modeNow == ReadingMode.PAGED_HORIZONTAL) "⇄" else "↕",
+                                fontSize = 22.sp
+                            )
+                        }
                         TextButton(onClick = { themeOpen = true }, enabled = vm != null) {
                             Text("◑", fontSize = 22.sp)
                         }
@@ -352,36 +430,6 @@ fun ReaderScreen(
                             },
                             enabled = v != null && v.index < v.chapters.size - 1
                         ) { Text(stringResource(R.string.next_chapter)) }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            @Suppress("UNUSED_EXPRESSION")
-                            rev
-                            Text(stringResource(R.string.continuous_mode))
-                            Switch(
-                                checked = v?.continuous == true,
-                                onCheckedChange = {
-                                    val vv = vm ?: return@Switch
-                                    vv.continuous = it
-                                    continuousUi = it
-                                    if (it) {
-                                        // Show the continuous layout right away:
-                                        // append the next chapter now instead of
-                                        // waiting for a scroll-to-bottom.
-                                        scope.launch {
-                                            val last = vv.contLast
-                                            val first = vv.contFirst
-                                            if (vv.appendNext()) {
-                                                applyIncrementalJs(vv, last, first)
-                                            }
-                                            rev++
-                                        }
-                                    } else {
-                                        // Back to the single-chapter view.
-                                        scope.launch { gotoChapter(vv, vv.index) }
-                                    }
-                                    rev++
-                                }
-                            )
-                        }
                         TextButton(
                             onClick = {
                                 scope.launch {
@@ -436,18 +484,19 @@ fun ReaderScreen(
                         },
                         onWebView = { webView = it },
                         onSwipeLeft = {
-                            // RTL: a leftward swipe turns to the next section.
                             val v = vm
-                            if (v != null && !v.continuous &&
-                                v.index + 1 < v.chapters.size
-                            ) {
-                                scope.launch { gotoChapter(v, v.index + 1) }
+                            if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
+                                // Paged mode: a leftward swipe turns the page
+                                // forward for RTL books, backward for LTR.
+                                turnPage(v, forward = !v.isEnglish)
                             }
                         },
                         onSwipeRight = {
                             val v = vm
-                            if (v != null && !v.continuous && v.index > 0) {
-                                scope.launch { gotoChapter(v, v.index - 1) }
+                            if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
+                                // Paged mode: a rightward swipe turns the page
+                                // forward for LTR books, backward for RTL.
+                                turnPage(v, forward = v.isEnglish)
                             }
                         }
                     )
@@ -503,6 +552,50 @@ fun ReaderScreen(
 
     if (supportOpen) {
         SupportDialog(onDismiss = { supportOpen = false })
+    }
+
+    // Reading-mode picker (manga-reader style popup): horizontal paging
+    // (bidirectional arrow; direction follows the book language) vs
+    // vertical-continuous (up-down arrow).
+    if (modeOpen) {
+        Dialog(onDismissRequest = { modeOpen = false }) {
+            Card {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = stringResource(R.string.reading_mode),
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        ReadingModeChoice(
+                            glyph = "⇄",
+                            label = stringResource(R.string.mode_horizontal),
+                            selected = modeNow == ReadingMode.PAGED_HORIZONTAL,
+                            onClick = { setMode(ReadingMode.PAGED_HORIZONTAL) }
+                        )
+                        ReadingModeChoice(
+                            glyph = "↕",
+                            label = stringResource(R.string.mode_vertical_continuous),
+                            selected = modeNow == ReadingMode.CONTINUOUS_VERTICAL,
+                            onClick = { setMode(ReadingMode.CONTINUOUS_VERTICAL) }
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = stringResource(R.string.mode_direction_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
     }
 
     if (themeOpen) {
@@ -717,3 +810,49 @@ private fun openParsed(
 /** Zip-bomb guardrails for EPUB extraction (generous: real books are far smaller). */
 private const val MAX_ZIP_ENTRIES = 10_000
 private const val MAX_ZIP_BYTES = 500L * 1024 * 1024
+
+/**
+ * One reading-mode option in the mode picker popup: a big arrow glyph
+ * (bidirectional ⇄ for horizontal, up-down ↕ for vertical-continuous)
+ * with its label underneath, highlighted when selected.
+ */
+@Composable
+private fun ReadingModeChoice(
+    glyph: String,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outline,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer
+                else Color.Transparent,
+                RoundedCornerShape(12.dp)
+            )
+            .padding(horizontal = 20.dp, vertical = 12.dp)
+    ) {
+        Text(
+            text = glyph,
+            fontSize = 40.sp,
+            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurface
+        )
+    }
+}

@@ -389,4 +389,8 @@ Drag your EPUB files here and drop them</string>
     <string name="copy_link">Copy</string>
     <string name="copied">Copied ✓</string>
     <string name="start_over_prompt">Start %1$s over from chapter 1?</string>
+    <string name="reading_mode">Reading mode</string>
+    <string name="mode_horizontal">Horizontal</string>
+    <string name="mode_vertical_continuous">Continuous vertical</string>
+    <string name="mode_direction_hint">Horizontal page-turn direction follows the book\'s language automatically</string>
 </resources>

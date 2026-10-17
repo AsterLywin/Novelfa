@@ -40,6 +40,8 @@ class PrefsStore(private val context: Context) {
         // WPF parity: animated character-theme particle layer (default off,
         // like the desktop client's "0").
         val THEME_PARTICLES = booleanPreferencesKey("themeParticles")
+        // Reading layout mode (replaces the old continuous toggle).
+        val READING_MODE = stringPreferencesKey("readingMode")
     }
 
     val theme: Flow<String> = context.dataStore.data.map { it[THEME] ?: "dark" }
@@ -60,6 +62,8 @@ class PrefsStore(private val context: Context) {
     val avatarPath: Flow<String> = context.dataStore.data.map { it[AVATAR] ?: "" }
     /** Animated character-theme particles behind the library (default off). */
     val themeParticles: Flow<Boolean> = context.dataStore.data.map { it[THEME_PARTICLES] ?: false }
+    /** Reading layout mode key: "paged" (default) or "continuous". */
+    val readingMode: Flow<String> = context.dataStore.data.map { it[READING_MODE] ?: "paged" }
 
     suspend fun setTheme(value: String) {
         context.dataStore.edit { it[THEME] = value }
@@ -112,6 +116,13 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setThemeParticles(value: Boolean) {
         context.dataStore.edit { it[THEME_PARTICLES] = value }
+    }
+
+    suspend fun getReadingMode(): String =
+        context.dataStore.data.map { it[READING_MODE] ?: "paged" }.first()
+
+    suspend fun setReadingMode(value: String) {
+        context.dataStore.edit { it[READING_MODE] = value }
     }
 
     /** Per-book reader page theme id (WPF parity); blank = default dark. */

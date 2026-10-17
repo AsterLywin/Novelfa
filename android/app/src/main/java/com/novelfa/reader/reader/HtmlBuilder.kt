@@ -13,8 +13,9 @@ import java.util.Locale
  *
  * Dropped per spec (no keyboard on mobile): the shortcut-key script and the
  * `chrome.webview.postMessage` bridge. The scroll reporter is kept, adapted
- * to `Android.onScroll(t,h,c)` via a JavascriptInterface, including the
- * lr-restore `z()` used after prepend.
+ * to `Android.onScroll(t,h,c,gen)` via a JavascriptInterface, including the
+ * lr-restore `z()` used after prepend. `rdrTurn(d)` drives horizontal page
+ * turns in paged mode.
  */
 object HtmlBuilder {
 
@@ -32,11 +33,20 @@ object HtmlBuilder {
         paragraphSpacing: Double,
         isEnglish: Boolean,
         fontFaceCss: String,
-        docGen: Int
+        docGen: Int,
+        paged: Boolean = false
     ): String {
         val sb = StringBuilder()
         val themeAttr = if (theme.isDark) " data-theme=\"dark\"" else " data-theme=\"light\""
-        sb.append("<!DOCTYPE html><html").append(themeAttr).append("><head><meta charset=\"utf-8\">")
+        sb.append("<!DOCTYPE html><html")
+        if (paged) {
+            // Horizontal paging: CSS multicol lays the chapter out as
+            // 100vw pages; the flow direction follows the book language
+            // (RTL books paginate right-to-left, LTR left-to-right).
+            sb.append(" class=\"rdr-paged\" dir=\"")
+                .append(if (isEnglish) "ltr" else "rtl").append("\"")
+        }
+        sb.append(themeAttr).append("><head><meta charset=\"utf-8\">")
         sb.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
         sb.append("<base href=\"")
             .append(baseUrl).append("\">")
@@ -73,6 +83,20 @@ object HtmlBuilder {
         sb.append("<style id=\"rdrFontFace\">").append(fontFaceCss).append("</style>")
         sb.append("<style id=\"readerSpacing\">")
             .append(spacingCss(lineHeight, sideMargin, paragraphSpacing)).append("</style>")
+        if (paged) {
+            // Paged layout overrides: the body becomes a horizontal
+            // multicol pager (one 100vw column = one page); side margins
+            // move onto the chapter div so columns stay exactly 100vw.
+            // This style block comes after #readerSpacing on purpose.
+            sb.append("<style id=\"rdrPaged\">")
+            sb.append("html.rdr-paged,html.rdr-paged body{height:100%;}")
+            sb.append("html.rdr-paged{overflow-x:auto;overflow-y:hidden;}")
+            sb.append("html.rdr-paged body{margin:0 !important;padding:16px 0 !important;")
+            sb.append("column-width:100vw;column-gap:0;box-sizing:border-box;}")
+            sb.append("html.rdr-paged .rdr-chap{padding:0 ").append(sideMargin)
+                .append("px;box-sizing:border-box;}")
+            sb.append("</style>")
+        }
         sb.append("<script>window.__rdrGen=").append(docGen).append(";</script>")
         sb.append("<script>(function(){")
         sb.append("var lt=-1,lh=-1,lc=-1,lr=-1;")
@@ -81,13 +105,26 @@ object HtmlBuilder {
         sb.append("h=Math.max(d.scrollHeight||0,b.scrollHeight||0),")
         sb.append("c=d.clientHeight||b.clientHeight||0;")
         sb.append("if(t!=lt||h!=lh||c!=lc){lt=t;lh=h;lc=c;")
-        sb.append("try{Android.onScroll(t,h,c);}catch(x){}}")
+        sb.append("try{Android.onScroll(t,h,c,window.__rdrGen);}catch(x){}}")
         sb.append("else if(h>c){lr=t/(h-c);}}catch(x){}}")
         sb.append("function z(){try{if(lr>=0){var d=document.documentElement,b=document.body;")
         sb.append("var h=Math.max(d.scrollHeight||0,b.scrollHeight||0),")
         sb.append("c=d.clientHeight||b.clientHeight||0;")
         sb.append("var nt=Math.round(lr*Math.max(h-c,0));d.scrollTop=nt;b.scrollTop=nt;}}catch(x){}r();}")
         sb.append("window.addEventListener('scroll',r);window.addEventListener('resize',z);setInterval(r,200);")
+        // Horizontal page turning (paged mode). Returns 'page' when a page
+        // turned, 'start'/'end' at the chapter edges so native code can move
+        // to the adjacent chapter. RTL: scrollLeft runs 0 -> negative.
+        sb.append("function rdrTurn(d){try{var de=document.documentElement;")
+        sb.append("if(!de.classList.contains('rdr-paged'))return 'page';")
+        sb.append("var w=de.clientWidth||window.innerWidth||1;")
+        sb.append("var rtl=de.getAttribute('dir')==='rtl';")
+        sb.append("var sl=window.pageXOffset||de.scrollLeft||0;")
+        sb.append("var cur=rtl?Math.round(-sl/w):Math.round(sl/w);")
+        sb.append("var count=Math.max(1,Math.round(de.scrollWidth/w));")
+        sb.append("var n=cur+d;if(n<0)return 'start';if(n>=count)return 'end';")
+        sb.append("window.scrollTo({left:rtl?-n*w:n*w,behavior:'smooth'});")
+        sb.append("return 'page';}catch(x){return 'page';}}")
         sb.append("})();</script></head><body>").append(bodyContent).append("</body></html>")
         return sb.toString()
     }

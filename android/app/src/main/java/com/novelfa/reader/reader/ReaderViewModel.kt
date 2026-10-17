@@ -24,6 +24,24 @@ import kotlinx.coroutines.Dispatchers
  * insert path); only [loadChapter] bumps it. [appendNext]/[prependPrev]
  * take the gen they were issued against so stale scroll events are ignored.
  */
+
+/**
+ * Reading layout mode. Replaces the old continuous on/off toggle:
+ * - [PAGED_HORIZONTAL]: one chapter, horizontal page turns (the manga-reader
+ *   style). Page-turn direction follows the book language (RTL books turn
+ *   right-to-left, LTR books left-to-right).
+ * - [CONTINUOUS_VERTICAL]: the classic stitched vertical scroll.
+ */
+enum class ReadingMode(val key: String) {
+    PAGED_HORIZONTAL("paged"),
+    CONTINUOUS_VERTICAL("continuous");
+
+    companion object {
+        fun fromKey(key: String?): ReadingMode =
+            entries.firstOrNull { it.key == key } ?: PAGED_HORIZONTAL
+    }
+}
+
 class ReaderViewModel(
     private val dao: BookDao,
     private val bookId: String,
@@ -48,7 +66,11 @@ class ReaderViewModel(
 
     var index: Int = initialBook.lastChapterIndex
         private set
-    var continuous: Boolean = false
+    /** Current reading layout (replaces the old continuous on/off flag). */
+    var readingMode: ReadingMode = ReadingMode.PAGED_HORIZONTAL
+
+    /** True when the page is laid out as horizontal pages. */
+    fun isPaged(): Boolean = readingMode == ReadingMode.PAGED_HORIZONTAL
     var html: String = ""
         private set
     var baseUrl: String = ""
@@ -134,7 +156,8 @@ class ReaderViewModel(
             html = HtmlBuilder.build(
                 baseUrl, wrapped, theme, fontFamily, fontSize,
                 lineHeight, sideMargin, paragraphSpacing, isEnglish,
-                HtmlBuilder.fontFaceCss(fontFamily, fontFiles), docGen
+                HtmlBuilder.fontFaceCss(fontFamily, fontFiles), docGen,
+                paged = isPaged()
             )
             lastChunk = null
             lastChunkKind = "full"
@@ -169,6 +192,13 @@ class ReaderViewModel(
             isAppending = true
             try {
                 val body = withContext(Dispatchers.IO) { readPrepared(next) }
+                // The gen may have changed while the chapter was read
+                // (drawer jump / theme change bumps docGen and reloads):
+                // applying the chunk to the new page would desync the
+                // ViewModel window from the DOM.
+                if (expectedGen != docGen) {
+                    return false
+                }
                 val chunk = "<div class=\"rdr-chap\" data-idx=\"" + next + "\"" +
                     HtmlText.chapterDirAttr(body) + ">" +
                     ChapterDivider.divider(chapters[next].title, theme) + body + "</div>"
@@ -212,6 +242,10 @@ class ReaderViewModel(
             isAppending = true
             try {
                 val body = withContext(Dispatchers.IO) { readPrepared(prev) }
+                // Same post-IO gen re-check as appendNext.
+                if (expectedGen != docGen) {
+                    return false
+                }
                 val chunk = "<div class=\"rdr-chap\" data-idx=\"" + prev + "\"" +
                     HtmlText.chapterDirAttr(body) + ">" + body + "</div>"
                 val divider = ChapterDivider.divider(chapters[contFirst].title, theme)
@@ -285,15 +319,18 @@ class ReaderViewModel(
         return HtmlBuilder.build(
             baseUrl, sb.toString(), theme, fontFamily, fontSize,
             lineHeight, sideMargin, paragraphSpacing, isEnglish,
-            HtmlBuilder.fontFaceCss(fontFamily, fontFiles), docGen
+            HtmlBuilder.fontFaceCss(fontFamily, fontFiles), docGen,
+            paged = false // rebuildWindowHtml only serves continuous mode
         )
     }
 
     /**
      * Scroll-bridge entry: near-bottom (top+client >= height-300) appends,
-     * else top == 0 prepends. Only in continuous mode.
+     * else top == 0 prepends. Only in [ReadingMode.CONTINUOUS_VERTICAL];
+     * horizontal paging never stitches.
      */
-    suspend fun onScroll(top: Int, height: Int, client: Int) {        if (!continuous || isAppending) {
+    suspend fun onScroll(top: Int, height: Int, client: Int) {
+        if (readingMode != ReadingMode.CONTINUOUS_VERTICAL || isAppending) {
             return
         }
         if (top + client >= height - 300) {
@@ -356,17 +393,17 @@ class ReaderViewModel(
 
     /**
      * Rebuilds the current view after a theme/font change without losing
-     * continuous mode: when [continuous] with a multi-chapter window, the
-     * whole window is rebuilt; otherwise the single current chapter is
-     * rebuilt. The caller must push [html] to the WebView (full reload);
-     * [lastChunkKind] is "full" afterwards.
+     * the reading position: in [ReadingMode.CONTINUOUS_VERTICAL] with a
+     * multi-chapter window, the whole window is rebuilt; otherwise the
+     * single current chapter is rebuilt. The caller must push [html] to the
+     * WebView (full reload); [lastChunkKind] is "full" afterwards.
      */
     suspend fun reloadForSettings(): Boolean {
         if (html.isEmpty()) return true
         return try {
             docGen++
             html = withContext(Dispatchers.IO) {
-                if (continuous && contLast > contFirst) {
+                if (readingMode == ReadingMode.CONTINUOUS_VERTICAL && contLast > contFirst) {
                     rebuildWindowHtml()
                 } else {
                     val body = readPrepared(index)
@@ -376,7 +413,8 @@ class ReaderViewModel(
                     HtmlBuilder.build(
                         baseUrl, wrapped, theme, fontFamily, fontSize,
                         lineHeight, sideMargin, paragraphSpacing, isEnglish,
-                        HtmlBuilder.fontFaceCss(fontFamily, fontFiles), docGen
+                        HtmlBuilder.fontFaceCss(fontFamily, fontFiles), docGen,
+                        paged = isPaged()
                     )
                 }
             }

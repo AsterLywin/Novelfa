@@ -15,13 +15,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 
 /**
  * JS bridge for the adapted scroll reporter in [HtmlBuilder.build]
- * (`Android.onScroll(t,h,c)`).
+ * (`Android.onScroll(t,h,c,gen)`).
  */
-class ScrollBridge(private val onScroll: (Int, Int, Int) -> Unit) {
+class ScrollBridge(private val onScroll: (Int, Int, Int, Int) -> Unit) {
 
     @JavascriptInterface
-    fun onScroll(t: Long, h: Long, c: Long) {
-        onScroll(t.toInt(), h.toInt(), c.toInt())
+    fun onScroll(t: Long, h: Long, c: Long, gen: Long) {
+        onScroll(t.toInt(), h.toInt(), c.toInt(), gen.toInt())
     }
 }
 

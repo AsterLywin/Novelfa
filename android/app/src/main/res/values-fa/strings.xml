@@ -389,4 +389,8 @@
     <string name="copy_link">کپی</string>
     <string name="copied">کپی شد ✓</string>
     <string name="start_over_prompt">«%1$s» رو از فصل ۱ شروع کنم؟</string>
+    <string name="reading_mode">حالت مطالعه</string>
+    <string name="mode_horizontal">افقی</string>
+    <string name="mode_vertical_continuous">عمودی پیوسته</string>
+    <string name="mode_direction_hint">جهت ورق زدن افقی بر اساس زبان کتاب خودکار تنظیم می‌شود</string>
 </resources>
