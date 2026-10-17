@@ -45,6 +45,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.novelfa.reader.R
 
 /**
  * Accent-color picker: the 7 presets from ThemeManager.cs.

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -100,6 +101,7 @@ import com.novelfa.reader.settings.RankHook
 import com.novelfa.reader.settings.RankUp
 import com.novelfa.reader.theme.CharacterTheme
 import com.novelfa.reader.theme.CharacterThemes
+import com.novelfa.reader.theme.ParticleLayer
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankService
 import kotlinx.coroutines.CancellationException
@@ -153,6 +155,14 @@ fun LibraryScreen(
         debouncedQuery = query
     }
     var sort by rememberSaveable { mutableStateOf(SortMode.DEFAULT) }
+    val context = LocalContext.current
+    // PrefsStore must be built on the application context: the DataStore
+    // delegate is process-wide, so an Activity context would leak the
+    // Activity on recreation (e.g. in-app language change).
+    val prefs = remember(context) { PrefsStore(context.applicationContext) }
+    // Single rank-prefs bridge for the screen: it preloads on IO once and
+    // serves reads from memory (no runBlocking on the UI thread).
+    val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
     // Secret theme codes (WPF TrackSecretKeys parity): typing BEAKO / EMT /
     // TEA unlocks the hidden themes; the code letters are scrubbed from the
     // search box like the desktop client does.
@@ -272,16 +282,6 @@ fun LibraryScreen(
     // Re-check the gate whenever the tab is opened (PIN may be set/removed
     // from Settings while the library stays composed).
     var gateTick by remember { mutableIntStateOf(0) }
-    // Task 8: refresh reading rank on first composition and whenever the tab
-    // changes (approximation of "resume"), plus private-tab session unlock.
-    val context = LocalContext.current
-    // PrefsStore must be built on the application context: the DataStore
-    // delegate is process-wide, so an Activity context would leak the
-    // Activity on recreation (e.g. in-app language change).
-    val prefs = remember(context) { PrefsStore(context.applicationContext) }
-    // Single rank-prefs bridge for the screen: it preloads on IO once and
-    // serves reads from memory (no runBlocking on the UI thread).
-    val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
     // initial=null: the placeholder must be distinguishable from a real blank
     // value, otherwise the welcome dialog opens on every cold start before
     // DataStore delivers the saved name (and never closes afterwards).
@@ -1352,7 +1352,7 @@ private fun PrivateLockedGate(onUnlock: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun BookCard(
     book: BookEntity,
@@ -1484,6 +1484,7 @@ fun BookCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BookRow(
     book: BookEntity,
@@ -1492,7 +1493,8 @@ private fun BookRow(
     onMenuClick: () -> Unit,
     missingFile: Boolean = false,
     selected: Boolean = false,
-    onLongClick: (() -> Unit)? = null
+    onLongClick: (() -> Unit)? = null,
+    showBite: Boolean = false
 ) {
     Card(
         border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
@@ -1513,6 +1515,13 @@ private fun BookRow(
                     contentDescription = title,
                     modifier = Modifier.fillMaxSize()
                 )
+                if (showBite) {
+                    BiteOverlay(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .size(28.dp)
+                    )
+                }
             }
             Column(modifier = Modifier.weight(1f).padding(horizontal = 10.dp)) {
                 Text(
