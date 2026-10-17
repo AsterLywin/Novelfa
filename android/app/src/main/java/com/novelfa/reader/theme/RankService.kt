@@ -23,15 +23,6 @@ interface RankPrefs {
     fun setString(key: String, value: String)
 }
 
-/** In-memory RankPrefs for tests and previews. */
-class InMemoryRankPrefs : RankPrefs {
-    private val map = mutableMapOf<String, String>()
-    override fun getString(key: String, default: String): String = map[key] ?: default
-    override fun setString(key: String, value: String) {
-        map[key] = value
-    }
-}
-
 class RankService(private val prefs: RankPrefs) {
 
     companion object {
@@ -75,10 +66,6 @@ class RankService(private val prefs: RankPrefs) {
     fun isUnlocked(theme: CharacterTheme?): Boolean =
         theme != null && (isRankUnlocked(theme.requiredRank) || isSecretUnlocked(theme.id))
 
-    /** Unlocked by rank only (not by secret). */
-    fun isUnlockedByRank(theme: CharacterTheme?): Boolean =
-        theme != null && isRankUnlocked(theme.requiredRank)
-
     fun isSecretUnlocked(themeId: String?): Boolean {
         if (themeId.isNullOrEmpty()) return false
         return prefs.getString(SECRET_KEY, "")
@@ -91,8 +78,6 @@ class RankService(private val prefs: RankPrefs) {
         val old = prefs.getString(SECRET_KEY, "")
         prefs.setString(SECRET_KEY, if (old.isEmpty()) themeId else "$old,$themeId")
     }
-
-    fun unlockedCount(): Int = CharacterThemes.All.count { isUnlocked(it) }
 
     fun visibleCount(): Int = CharacterThemes.visibleCount { isUnlocked(it) }
 

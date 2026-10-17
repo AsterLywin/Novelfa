@@ -1,8 +1,8 @@
 package com.novelfa.reader.library
 
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
@@ -61,6 +63,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -74,6 +77,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -97,7 +101,9 @@ import com.novelfa.reader.theme.CharacterTheme
 import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -138,6 +144,13 @@ fun LibraryScreen(
     // involved here — this is pure UI state).
     var tab by rememberSaveable { mutableStateOf(Tab.ALL) }
     var query by rememberSaveable { mutableStateOf("") }
+    // Debounce the search: typing filters the full list on every keystroke;
+    // wait 300ms after the last keystroke before filtering.
+    var debouncedQuery by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(query) {
+        delay(300)
+        debouncedQuery = query
+    }
     var sort by rememberSaveable { mutableStateOf(SortMode.DEFAULT) }
     // Secret theme codes (WPF TrackSecretKeys parity): typing BEAKO / EMT /
     // TEA unlocks the hidden themes; the code letters are scrubbed from the
@@ -163,7 +176,7 @@ fun LibraryScreen(
         }
     }
     var gridView by rememberSaveable { mutableStateOf(true) }
-    val books by remember(tab, query) { viewModel.filtered(tab, query) }
+    val books by remember(tab, debouncedQuery) { viewModel.filtered(tab, debouncedQuery) }
         .collectAsState(initial = emptyList())
     val allBooks by viewModel.books.collectAsState(initial = emptyList())
     val visible = remember(allBooks) { allBooks.filter { !it.isPrivate } }
@@ -213,6 +226,8 @@ fun LibraryScreen(
             if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
             if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
             if (parts.isNotEmpty()) snackbar.showSnackbar(parts.joinToString("، "))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: ImportException) {
             // DIAGNOSTIC (temporary): surface the real cause in the UI so a
             // failing import can be root-caused from a screenshot alone.
@@ -221,6 +236,13 @@ fun LibraryScreen(
             val detail = (cause?.javaClass?.simpleName ?: "no-cause") +
                 ": " + (cause?.message ?: e.message)
             snackbar.showSnackbar(e.messageFa + "\n" + detail)
+        } catch (e: Exception) {
+            // Anything else (Room errors, unexpected throws) must not crash
+            // the app: show a generic message with the diagnostic detail.
+            val detail = (e.javaClass.simpleName ?: "no-cause") + ": " + (e.message ?: "")
+            snackbar.showSnackbar(
+                context.getString(R.string.import_error_not_valid_epub) + "\n" + detail
+            )
         }
     }
 
@@ -234,11 +256,13 @@ fun LibraryScreen(
     val launchImport = { picker.launch(arrayOf("application/epub+zip", "application/epub")) }
 
     // EPUB handed in from a file manager (ACTION_VIEW). Imported once, then
-    // the URI is consumed so rotation doesn't re-import it.
+    // the URI is consumed so rotation doesn't re-import it. Consume AFTER the
+    // import: consuming first changes the effect key and Compose cancels the
+    // in-flight import.
     LaunchedEffect(pendingImportUri) {
         val uri = pendingImportUri ?: return@LaunchedEffect
-        onImportUriConsumed()
         importUris(listOf(uri))
+        onImportUriConsumed()
     }
 
     val pinManager = viewModel.pinGate as? PinManager
@@ -325,6 +349,8 @@ fun LibraryScreen(
     val rankName = remember(finishedCount) {
         RankService.Ranks[RankService.rankIndexForStatic(finishedCount)].nameFa
     }
+    // Precompute display titles once per book-list emission (O(n), not O(n²)).
+    val titleMap = remember(allBooks) { displayTitleMap(allBooks) }
     val hero = remember(allBooks) {
         allBooks.filter { isInProgress(it) && !it.isPrivate }
             .maxByOrNull { it.lastOpenedDate ?: "" }
@@ -445,7 +471,7 @@ fun LibraryScreen(
                     items(shown, key = { it.id }) { book ->
                         BookCard(
                             book = book,
-                            title = displayTitle(book, allBooks),
+                            title = titleMap[book.id] ?: book.title,
                             onClick = {
                                 if (selection.isNotEmpty()) {
                                     selection = if (book.id in selection) {
@@ -529,7 +555,7 @@ fun LibraryScreen(
                     items(shown, key = { it.id }) { book ->
                         BookRow(
                             book = book,
-                            title = displayTitle(book, allBooks),
+                            title = titleMap[book.id] ?: book.title,
                             onClick = {
                                 if (selection.isNotEmpty()) {
                                     selection = if (book.id in selection) {

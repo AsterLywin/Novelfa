@@ -53,6 +53,9 @@ class ReaderViewModel(
 ) {
     private var book: BookEntity = initialBook
 
+    /** In-memory cache of prepared chapter bodies (trimWindow rebuilds). */
+    private val preparedCache = LinkedHashMap<Int, String>()
+
     var fontFamily: String = initialBook.fontFamily.ifBlank { "Tahoma" }
         private set
     var fontSize: Int = initialBook.fontSize.takeIf { it in 10..72 } ?: 18
@@ -63,6 +66,23 @@ class ReaderViewModel(
         private set
     var paragraphSpacing: Double
         private set
+
+    /**
+     * Cached @font-face CSS: fontFaceCss() does multi-MB disk reads + base64
+     * on every call; the files don't change mid-session, so cache by
+     * (family, file list). Invalidated when the font changes.
+     */
+    private var fontFaceCacheKey: Pair<String, List<File>>? = null
+    private var fontFaceCacheValue: String = ""
+
+    private fun cachedFontFaceCss(): String {
+        val key = fontFamily to fontFiles
+        if (key != fontFaceCacheKey) {
+            fontFaceCacheValue = HtmlBuilder.fontFaceCss(fontFamily, fontFiles)
+            fontFaceCacheKey = key
+        }
+        return fontFaceCacheValue
+    }
 
     var index: Int = initialBook.lastChapterIndex
         private set
@@ -105,9 +125,6 @@ class ReaderViewModel(
     fun clearDropped() {
         lastDropped = null
     }
-
-    val chapterTitle: String
-        get() = chapters.getOrNull(index)?.title ?: ""
 
     companion object {
         /**
@@ -156,7 +173,7 @@ class ReaderViewModel(
             html = HtmlBuilder.build(
                 baseUrl, wrapped, theme, fontFamily, fontSize,
                 lineHeight, sideMargin, paragraphSpacing, isEnglish,
-                HtmlBuilder.fontFaceCss(fontFamily, fontFiles), docGen,
+                cachedFontFaceCss(), docGen,
                 paged = isPaged()
             )
             lastChunk = null
@@ -319,7 +336,7 @@ class ReaderViewModel(
         return HtmlBuilder.build(
             baseUrl, sb.toString(), theme, fontFamily, fontSize,
             lineHeight, sideMargin, paragraphSpacing, isEnglish,
-            HtmlBuilder.fontFaceCss(fontFamily, fontFiles), docGen,
+            cachedFontFaceCss(), docGen,
             paged = false // rebuildWindowHtml only serves continuous mode
         )
     }
@@ -453,12 +470,21 @@ class ReaderViewModel(
     }
 
     private fun readPrepared(i: Int): String {
+        preparedCache[i]?.let { return it }
         val file = chapters[i].file
         var raw = file.inputStream().bufferedReader(Charsets.UTF_8).use { it.readText() }
         if (raw.isNotEmpty() && raw[0] == 0xFEFF.toChar()) {
             raw = raw.substring(1)
         }
-        return HtmlText.prepareChapterBody(raw, file.parentFile)
+        val prepared = HtmlText.prepareChapterBody(raw, file.parentFile)
+        // LRU: keep the window + neighbors; drop oldest beyond 12.
+        if (preparedCache.size >= 12) {
+            val oldest = preparedCache.keys.firstOrNull { it < contFirst || it > contLast }
+                ?: preparedCache.keys.firstOrNull()
+            if (oldest != null) preparedCache.remove(oldest)
+        }
+        preparedCache[i] = prepared
+        return prepared
     }
 
     private fun baseUrl(i: Int): String =

@@ -40,7 +40,24 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         }
         try {
             context.contentResolver.openInputStream(sourceUri)?.use { input ->
-                dest.outputStream().use { output -> input.copyTo(output) }
+                dest.outputStream().use { output ->
+                    // Cap the copy even when the provider didn't report a size:
+                    // copyTo with a byte budget instead of unbounded.
+                    var remaining = MAX_EPUB_BYTES
+                    val buf = ByteArray(8192)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        remaining -= n
+                        if (remaining < 0) {
+                            throw ImportException(
+                                "EPUB too large: exceeds $MAX_EPUB_BYTES bytes",
+                                messageFa = "حجم فایل بیش از حد مجاز است."
+                            )
+                        }
+                        output.write(buf, 0, n)
+                    }
+                }
             } ?: throw IOException("Cannot open input stream: $sourceUri")
             tmpDir.mkdirs()
             unzip(dest, tmpDir)
@@ -141,6 +158,11 @@ class Importer(private val context: Context, private val db: ReaderDb) {
     }.getOrNull()
 
     private fun unzip(zip: File, outDir: File) {
+        // Zip-bomb guard: read the entry count from the End-of-Central-Directory
+        // record BEFORE ZipFile() materializes the whole central directory.
+        if (centralDirectoryEntryCount(zip) > MAX_ZIP_ENTRIES) {
+            throw IOException("Zip entry count exceeds limit")
+        }
         ZipFile(zip).use { zf ->
             val entries = zf.entries()
             var entryCount = 0
@@ -173,6 +195,30 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Reads the total entry count from the ZIP End-of-Central-Directory record
+     * (last 22 bytes). Returns Int.MAX_VALUE if the EOCD can't be found (e.g.
+     * zip64 or comment) — the in-loop guard still applies.
+     */
+    private fun centralDirectoryEntryCount(zip: File): Int {
+        if (zip.length() < 22) return Int.MAX_VALUE
+        return try {
+            java.io.RandomAccessFile(zip, "r").use { raf ->
+                raf.seek(zip.length() - 22)
+                val buf = ByteArray(22)
+                raf.readFully(buf)
+                // EOCD signature 0x06054b50, entry count at offset 10 (LE u16).
+                if (buf[0] != 0x50.toByte() || buf[1] != 0x4b.toByte() ||
+                    buf[2] != 0x05.toByte() || buf[3] != 0x06.toByte()) {
+                    return Int.MAX_VALUE
+                }
+                ((buf[11].toInt() and 0xFF) shl 8) or (buf[10].toInt() and 0xFF)
+            }
+        } catch (e: Exception) {
+            Int.MAX_VALUE
         }
     }
 }

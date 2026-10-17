@@ -12,7 +12,6 @@ import androidx.navigation.navArgument
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.Importer
 import com.novelfa.reader.data.PrefsStore
-import com.novelfa.reader.data.ReaderDb
 import com.novelfa.reader.library.CollectionsScreen
 import com.novelfa.reader.library.LibraryScreen
 import com.novelfa.reader.library.LibraryViewModel

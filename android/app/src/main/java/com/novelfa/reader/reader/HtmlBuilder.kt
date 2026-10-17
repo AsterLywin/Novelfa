@@ -183,23 +183,26 @@ object HtmlBuilder {
     /**
      * Removes out-of-window chapters from the DOM (continuous-mode trim):
      * deletes every `.rdr-chap` div whose `data-idx` falls outside
-     * [keepFirst]..[keepLast], then compensates `scrollTop` by the removed
-     * height so the reading position does not jump. `querySelectorAll`
-     * returns a static list, so removal during iteration is safe.
-     * docGen-guarded like the append/prepend scripts.
+     * [keepFirst]..[keepLast], then compensates `scrollTop` ONLY for height
+     * removed ABOVE the viewport (removing below-viewport chapters must not
+     * move the scroll position). `querySelectorAll` returns a static list,
+     * so removal during iteration is safe. DocGen-guarded like the
+     * append/prepend scripts.
      */
     fun dropJs(docGen: Int, keepFirst: Int, keepLast: Int): String =
         "(function(){if(window.__rdrGen!==$docGen)return 0;" +
             "var d=document.documentElement,b=document.body;" +
-            "function H(){return Math.max(d.scrollHeight||0,b.scrollHeight||0);}" +
             "function T(){return Math.max(d.scrollTop||0,b.scrollTop||0);}" +
             "function S(v){d.scrollTop=v;b.scrollTop=v;}" +
-            "var oh=H(),ot=T();" +
+            "var ot=T(),removedAbove=0;" +
             "var chaps=b.querySelectorAll('.rdr-chap');" +
             "for(var i=0;i<chaps.length;i++){" +
             "var idx=parseInt(chaps[i].getAttribute('data-idx'),10);" +
-            "if(idx<$keepFirst||idx>$keepLast){chaps[i].parentNode.removeChild(chaps[i]);}}" +
-            "var ph=H();S(Math.max(0,ot+(ph-oh)));" +
+            "if(idx<$keepFirst||idx>$keepLast){" +
+            "var r=chaps[i].getBoundingClientRect();" +
+            "if(r.bottom<=1)removedAbove+=r.height;" +
+            "chaps[i].parentNode.removeChild(chaps[i]);}}" +
+            "S(Math.max(0,ot-removedAbove));" +
             "return 1;})();"
 
     /** Port of the PrependPreviousChapter insert script (scroll-preserving). */

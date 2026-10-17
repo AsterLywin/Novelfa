@@ -50,8 +50,13 @@ fun sortBooks(
     // DEFAULT preserves the filter's own order (e.g. RECENT stays
     // lastOpenedDate-desc); NAME_AZ is the explicit title sort.
     SortMode.DEFAULT -> list
-    SortMode.NAME_AZ ->
-        list.sortedWith { a, b -> SortFa.compare(displayTitle(a, all), displayTitle(b, all)) }
+    SortMode.NAME_AZ -> {
+        // Precompute titles once: displayTitle() is O(n) per book.
+        val titles = displayTitleMap(all)
+        list.sortedWith { a, b ->
+            SortFa.compare(titles[a.id] ?: a.title, titles[b.id] ?: b.title)
+        }
+    }
     SortMode.RECENT_ADDED -> list.sortedByDescending { it.dateAdded }
     SortMode.LAST_READ -> list.sortedByDescending { it.lastOpenedDate ?: "" }
     SortMode.MOST_PROGRESS -> list.sortedByDescending { progressPercent(it) }
@@ -63,20 +68,42 @@ fun sortBooks(
  * title such as "unknown"/"untitled"/"کتاب ترجمه شده" — show the file name
  * (without extension) so duplicates stay distinguishable.
  */
-fun displayTitle(book: BookEntity, all: List<BookEntity>): String {
-    val t = book.title.trim()
-    val duplicate = all.count { it.title.trim().equals(t, ignoreCase = true) } > 1
-    if (duplicate || isGenericTitle(t)) {
-        // Prefer the original import file name; the stored filePath is a UUID
-        // name that means nothing to the user.
-        val original = book.originalFileName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() }
-        if (original != null) return original
-        if (book.filePath.isNotEmpty()) {
-            val name = File(book.filePath).nameWithoutExtension
-            if (name.isNotBlank()) return name
-        }
+/**
+ * Precomputes display titles for a book list in O(n): the duplicate-title
+ * check in [displayTitle] is O(n) per book, which becomes O(n² log n) inside
+ * sort comparators. Compute once per list emission, then look up by id.
+ */
+fun displayTitleMap(all: List<BookEntity>): Map<String, String> {
+    // Count normalized titles once.
+    val titleCounts = mutableMapOf<String, Int>()
+    for (b in all) {
+        val t = b.title.trim().lowercase()
+        titleCounts[t] = (titleCounts[t] ?: 0) + 1
     }
-    return book.title
+    return all.associate { book ->
+        val t = book.title.trim()
+        val duplicate = (titleCounts[t.lowercase()] ?: 0) > 1
+        val display = if (duplicate || isGenericTitle(t)) {
+            val original = book.originalFileName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() }
+            if (original != null) {
+                original
+            } else if (book.filePath.isNotEmpty()) {
+                val name = File(book.filePath).nameWithoutExtension
+                if (name.isNotBlank()) name else book.title
+            } else {
+                book.title
+            }
+        } else {
+            book.title
+        }
+        book.id to display
+    }
+}
+
+fun displayTitle(book: BookEntity, all: List<BookEntity>): String {
+    // Legacy per-book path (kept for call sites without a precomputed map).
+    // Prefer displayTitleMap for lists.
+    return displayTitleMap(all)[book.id] ?: book.title
 }
 
 private fun isGenericTitle(title: String): Boolean {
@@ -131,9 +158,6 @@ class LibraryViewModel(
         dao.allBooks().map { applyFilter(it, tab, query) }
 
     fun byCollection(name: String): Flow<List<BookEntity>> = dao.byCollection(name)
-
-    suspend fun import(uri: Uri): String =
-        requireNotNull(importer) { "Importer not provided" }.importEpub(uri)
 
     /** Batch import result (WPF parity: added/duplicates/failed summary). */
     data class ImportSummary(
@@ -192,8 +216,6 @@ class LibraryViewModel(
         collections.renameCollection(old, new)
 
     suspend fun deleteCollection(name: String) = collections.deleteCollection(name)
-
-    suspend fun allCollectionNames(): List<String> = collections.allCollectionNames()
 
     suspend fun createCollection(name: String) = collections.createCollection(name)
 
