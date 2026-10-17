@@ -370,4 +370,6 @@ Drag your EPUB files here and drop them</string>
     <string name="choose_avatar">Choose avatar</string>
     <string name="default_avatar">Default Novelfa avatar</string>
     <string name="pick_from_gallery">Choose from gallery</string>
+    <string name="couldn_t_copy_the_avatar">Couldn\'t copy the avatar image.</string>
+    <string name="pin_locked_out">Too many failed attempts. Try again in %1$d seconds.</string>
 </resources>

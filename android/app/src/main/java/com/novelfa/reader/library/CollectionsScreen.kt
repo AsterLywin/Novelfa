@@ -27,8 +27,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookEntity
 import kotlinx.coroutines.launch
@@ -62,6 +64,7 @@ fun CollectionsScreen(
     var resetTarget by remember { mutableStateOf<BookEntity?>(null) }
     var removeTarget by remember { mutableStateOf<BookEntity?>(null) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     Column {
         if (onBack != null) {
@@ -161,9 +164,18 @@ fun CollectionsScreen(
             onDismiss = { renameTarget = null },
             onSave = { newName ->
                 scope.launch {
-                    runCatching { viewModel.renameCollection(old, newName) }
+                    val result = runCatching { viewModel.renameCollection(old, newName) }
                     renameTarget = null
-                    if (selected == old) selected = newName.trim().ifBlank { old }
+                    if (result.isSuccess) {
+                        if (selected == old) selected = newName.trim().ifBlank { old }
+                    } else {
+                        // Don't pretend the rename worked: tell the user.
+                        Toast.makeText(
+                            context,
+                            result.exceptionOrNull()?.message ?: "Rename failed",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
             }
         )

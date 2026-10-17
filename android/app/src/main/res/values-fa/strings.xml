@@ -370,4 +370,6 @@
     <string name="choose_avatar">انتخاب آواتار</string>
     <string name="default_avatar">آواتار پیش‌فرض ناول‌فا</string>
     <string name="pick_from_gallery">انتخاب از گالری</string>
+    <string name="couldn_t_copy_the_avatar">کپی کردن عکس آواتار انجام نشد.</string>
+    <string name="pin_locked_out">تلاش‌های ناموفق زیاد شد. %1$d ثانیه دیگر تلاش کن.</string>
 </resources>

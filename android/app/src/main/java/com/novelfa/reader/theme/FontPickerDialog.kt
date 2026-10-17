@@ -19,6 +19,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,7 +47,11 @@ fun FontPickerDialog(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var fonts by remember { mutableStateOf(fontStore.list().map { it.name }) }
+    // Disk I/O off the composition: load the font list once on IO.
+    var fonts by remember { mutableStateOf(emptyList<String>()) }
+    LaunchedEffect(fontStore) {
+        fonts = withContext(Dispatchers.IO) { fontStore.list().map { it.name } }
+    }
     var name by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -63,7 +68,7 @@ fun FontPickerDialog(
             } else {
                 name = ""
                 error = null
-                fonts = fontStore.list().map { it.name }
+                fonts = withContext(Dispatchers.IO) { fontStore.list().map { it.name } }
             }
         }
     }
@@ -111,8 +116,12 @@ fun FontPickerDialog(
                                 modifier = Modifier.weight(1f)
                             )
                             OutlinedButton(onClick = {
-                                fontStore.deleteFont(fileName)
-                                fonts = fontStore.list().map { it.name }
+                                scope.launch {
+                                    withContext(Dispatchers.IO) { fontStore.deleteFont(fileName) }
+                                    fonts = withContext(Dispatchers.IO) {
+                                        fontStore.list().map { it.name }
+                                    }
+                                }
                             }) {
                                 Text("حذف")
                             }
@@ -131,6 +140,14 @@ private fun importFont(
     fontStore: FontStore
 ): String? {
     if (name.isBlank()) return "اسم فونت نمی‌تونه خالی باشه."
+    // The name becomes a file name (FontStore) and a CSS font-family value:
+    // reject path separators, traversal and markup to block self-XSS and
+    // files escaping the fonts dir.
+    if (name.contains('/') || name.contains('\\') || name.contains("..") ||
+        name.contains('<') || name.contains('>')
+    ) {
+        return "اسم فونت نباید شامل / \\ .. < > باشه."
+    }
     val ext = uri.lastPathSegment
         ?.substringAfterLast('.', "")
         ?.lowercase()

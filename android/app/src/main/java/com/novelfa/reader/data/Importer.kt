@@ -115,8 +115,14 @@ class Importer(private val context: Context, private val db: ReaderDb) {
     private fun unzip(zip: File, outDir: File) {
         ZipFile(zip).use { zf ->
             val entries = zf.entries()
+            var entryCount = 0
+            var totalBytes = 0L
             while (entries.hasMoreElements()) {
                 val entry = entries.nextElement()
+                // Zip-bomb guard: cap entry count and total uncompressed size.
+                if (++entryCount > MAX_ZIP_ENTRIES) {
+                    throw IOException("Zip entry count exceeds limit: ${entry.name}")
+                }
                 val out = File(outDir, entry.name)
                 val canonicalOut = out.canonicalPath
                 val canonicalDir = outDir.canonicalPath
@@ -128,10 +134,19 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 } else {
                     out.parentFile?.mkdirs()
                     zf.getInputStream(entry).use { input ->
-                        out.outputStream().use { output -> input.copyTo(output) }
+                        out.outputStream().use { output ->
+                            totalBytes += input.copyTo(output)
+                            if (totalBytes > MAX_ZIP_BYTES) {
+                                throw IOException("Zip uncompressed size exceeds limit")
+                            }
+                        }
                     }
                 }
             }
         }
     }
 }
+
+/** Zip-bomb guardrails for EPUB extraction (generous: real books are far smaller). */
+private const val MAX_ZIP_ENTRIES = 10_000
+private const val MAX_ZIP_BYTES = 500L * 1024 * 1024
