@@ -34,13 +34,19 @@ object EpubParser {
             }
         val manifest = mutableMapOf<String, Pair<String, String?>>()
         val items = elements(odoc, OPF_NS, "item")
+        var navHref: String? = null
+        var ncxHref: String? = null
         for (i in 0 until items.length) {
             val el = items.item(i)
             val id = el.attributes.getNamedItem("id")?.nodeValue?.trim() ?: continue
             val href = el.attributes.getNamedItem("href")?.nodeValue?.trim() ?: continue
             if (id.isEmpty() || href.isEmpty()) continue
             if (manifest.containsKey(id)) continue
-            manifest[id] = href to el.attributes.getNamedItem("media-type")?.nodeValue
+            val mediaType = el.attributes.getNamedItem("media-type")?.nodeValue
+            manifest[id] = href to mediaType
+            val props = el.attributes.getNamedItem("properties")?.nodeValue
+            if (props != null && props.split(" ").contains("nav")) navHref = href
+            if (mediaType == "application/x-dtbncx+xml") ncxHref = href
         }
         var coverHref: String? = null
         val metas = elements(odoc, OPF_NS, "meta")
@@ -69,6 +75,15 @@ object EpubParser {
             }?.first
         }
         val coverFile = coverHref?.let { HrefResolver.resolve(opfFolder, it).takeIf { f -> f.exists() } }
+        // Real chapter titles: NCX (EPUB2) or nav doc (EPUB3) table of
+        // contents, keyed by chapter file's canonical path. Best-effort —
+        // any failure just leaves the map empty and titles fall back to
+        // the file's <title> / "بخش N".
+        val tocTitles: Map<String, String> = runCatching {
+            val tocFile = (ncxHref ?: navHref)?.let { HrefResolver.resolve(opfFolder, it) }
+            if (tocFile == null || !tocFile.exists()) return@runCatching emptyMap<String, String>()
+            if (ncxHref != null) parseNcxTitles(dbf, tocFile) else parseNavTitles(dbf, tocFile)
+        }.getOrDefault(emptyMap())
         val spine = elements(odoc, OPF_NS, "itemref")
         val chapters = mutableListOf<Chapter>()
         val seenFiles = mutableSetOf<String>()
@@ -87,8 +102,12 @@ object EpubParser {
             val file = HrefResolver.resolve(opfFolder, href)
             // Dedupe: duplicate itemrefs (or hrefs resolving to the same file)
             // would produce duplicate LazyColumn keys and crash the drawer.
-            if (!seenFiles.add(file.canonicalPath)) continue
-            chapters += Chapter(title = "بخش $idx", file = file)
+            val canonical = runCatching { file.canonicalPath }.getOrNull() ?: continue
+            if (!seenFiles.add(canonical)) continue
+            val title = tocTitles[canonical]
+                ?: readXhtmlTitle(dbf, file)
+                ?: "بخش $idx"
+            chapters += Chapter(title = title, file = file)
             idx++
         }
         return ParsedBook(title = title, chapters = chapters, coverFile = coverFile)
@@ -194,4 +213,120 @@ object EpubParser {
         }
         return dbf.newDocumentBuilder().parse(file)
     }
+
+    /**
+     * Lenient XML parse for TOC documents and chapter files, which commonly
+     * carry a DOCTYPE. DOCTYPE is allowed but external DTDs/entities stay
+     * disabled (same hardening as [secureDocumentBuilderFactory]), so the
+     * XXE risk stays closed. Null on any failure.
+     */
+    private fun parseXmlAllowDoctype(dbf: DocumentBuilderFactory, file: File): org.w3c.dom.Document? =
+        runCatching {
+            if (file.length() > MAX_PACKAGE_XML_BYTES) return@runCatching null
+            val f2 = secureDocumentBuilderFactory()
+            runCatching { f2.setFeature("http://apache.org/xml/features/disallow-doctype-decl", false) }
+            f2.newDocumentBuilder().parse(file.inputStream())
+        }.getOrNull()
+
+    /**
+     * EPUB2 NCX table of contents → chapter file canonical path → title.
+     * Only each navPoint's *direct* navLabel/content are read, so nested
+     * navPoints keep their own titles.
+     */
+    private fun parseNcxTitles(dbf: DocumentBuilderFactory, ncxFile: File): Map<String, String> {
+        val doc = parseXmlAllowDoctype(dbf, ncxFile) ?: return emptyMap()
+        val folder = ncxFile.parentFile ?: return emptyMap()
+        val out = mutableMapOf<String, String>()
+        val navPoints = doc.getElementsByTagName("navPoint")
+        for (i in 0 until navPoints.length) {
+            val np = navPoints.item(i)
+            var label: String? = null
+            var src: String? = null
+            val kids = np.childNodes
+            for (j in 0 until kids.length) {
+                val c = kids.item(j)
+                if (c.nodeType != org.w3c.dom.Node.ELEMENT_NODE) continue
+                when (c.nodeName) {
+                    "navLabel" -> {
+                        val texts = (c as org.w3c.dom.Element).getElementsByTagName("text")
+                        if (texts.length > 0) label = texts.item(0).textContent?.trim()
+                    }
+                    "content" -> src = c.attributes.getNamedItem("src")?.nodeValue
+                }
+            }
+            if (label.isNullOrBlank() || src.isNullOrBlank()) continue
+            val key = resolveTocHref(folder, src) ?: continue
+            out.putIfAbsent(key, label.trim())
+        }
+        return out
+    }
+
+    /**
+     * EPUB3 nav document (`<nav epub:type="toc">`) → chapter file canonical
+     * path → link text.
+     */
+    private fun parseNavTitles(dbf: DocumentBuilderFactory, navFile: File): Map<String, String> {
+        val doc = parseXmlAllowDoctype(dbf, navFile) ?: return emptyMap()
+        val folder = navFile.parentFile ?: return emptyMap()
+        val out = mutableMapOf<String, String>()
+        val navs = doc.documentElement?.let { elementsAnyNs(it, "nav") }
+            ?: return emptyMap()
+        // Prefer the <nav epub:type="toc">; a lone <nav> with no epub:type
+        // (sloppy but common) is treated as the TOC.
+        var tocNav: org.w3c.dom.Element? = null
+        for (i in 0 until navs.length) {
+            val nav = navs.item(i) as? org.w3c.dom.Element ?: continue
+            val epubType = nav.getAttribute("epub:type")
+                .ifEmpty { nav.getAttributeNS("http://www.idpf.org/2007/ops", "type") }
+                .split(" ")
+            if (epubType.contains("toc")) {
+                tocNav = nav
+                break
+            }
+        }
+        if (tocNav == null && navs.length == 1) {
+            tocNav = navs.item(0) as? org.w3c.dom.Element
+        }
+        val nav = tocNav ?: return emptyMap()
+        val links = elementsAnyNs(nav, "a")
+        for (j in 0 until links.length) {
+            val a = links.item(j) as? org.w3c.dom.Element ?: continue
+            val href = a.getAttribute("href")
+            val label = a.textContent?.trim()
+            if (href.isBlank() || label.isNullOrBlank()) continue
+            val key = resolveTocHref(folder, href) ?: continue
+            out.putIfAbsent(key, label)
+        }
+        return out
+    }
+
+    /**
+     * Namespace-agnostic descendant lookup, scoped to [parent]: matches docs
+     * with a default namespace, a prefix, or none at all.
+     */
+    private fun elementsAnyNs(
+        parent: org.w3c.dom.Element,
+        local: String
+    ): org.w3c.dom.NodeList {
+        val ns = parent.getElementsByTagNameNS("*", local)
+        if (ns.length > 0) return ns
+        return parent.getElementsByTagName(local)
+    }
+
+    /** Resolves a TOC href to a chapter file's canonical path (null if bad). */
+    private fun resolveTocHref(folder: File, href: String): String? = runCatching {
+        val clean = href.substringBefore('#').substringBefore('?').trim()
+        if (clean.isEmpty()) return@runCatching null
+        HrefResolver.resolve(folder, clean).canonicalPath
+    }.getOrNull()
+
+    /** Best-effort `<title>` of a chapter file; null when absent/unparseable. */
+    private fun readXhtmlTitle(dbf: DocumentBuilderFactory, file: File): String? = runCatching {
+        if (!file.exists()) return@runCatching null
+        val doc = parseXmlAllowDoctype(dbf, file) ?: return@runCatching null
+        val root = doc.documentElement ?: return@runCatching null
+        val titles = elementsAnyNs(root, "title")
+        if (titles.length == 0) return@runCatching null
+        titles.item(0).textContent?.trim()?.takeIf { it.isNotBlank() }
+    }.getOrNull()
 }
