@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.novelfa.reader.data.FontStore
@@ -36,6 +37,20 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * Display name for a font file: bundled fonts get their Persian names,
+ * everything else shows the file name without its extension.
+ */
+fun fontDisplayName(fileName: String): String {
+    val base = fileName.substringAfterLast('/').substringAfterLast('\\')
+    return when (base.lowercase()) {
+        "vazirmatn-regular.ttf" -> "وزیر متن عادی"
+        "vazirmatn-bold.ttf" -> "وزیر متن بولد"
+        "b koodak bold_0.ttf" -> "کودک بولد"
+        else -> base.substringBeforeLast('.')
+    }
+}
 
 /**
  * Custom-font picker: SAF .ttf/.otf import with a name field
@@ -59,7 +74,10 @@ fun FontPickerDialog(
     var fontQuery by remember { mutableStateOf("") }
     val visibleFonts = remember(fonts, fontQuery) {
         if (fontQuery.isBlank()) fonts
-        else fonts.filter { it.contains(fontQuery, ignoreCase = true) }
+        else fonts.filter {
+            it.contains(fontQuery, ignoreCase = true) ||
+                fontDisplayName(it).contains(fontQuery, ignoreCase = true)
+        }
     }
 
     val picker = rememberLauncherForActivityResult(
@@ -127,8 +145,10 @@ fun FontPickerDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = fileName,
-                                modifier = Modifier.weight(1f)
+                                text = fontDisplayName(fileName),
+                                modifier = Modifier.weight(1f),
+                                // Font names are centered, never RTL/LTR aligned.
+                                textAlign = TextAlign.Center
                             )
                             // Bundled recommended fonts are not user-deletable
                             // (the desktop client ships them too); a delete

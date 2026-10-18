@@ -5,8 +5,11 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -14,6 +17,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -29,10 +33,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.widget.Toast
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookEntity
+import com.novelfa.reader.data.isCompleted
+import com.novelfa.reader.data.isInProgress
+import com.novelfa.reader.data.progressPercent
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -63,13 +74,46 @@ fun CollectionsScreen(
     var removeTarget by remember { mutableStateOf<BookEntity?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val addedFmt = stringResource(R.string.import_summary_added)
+    val dupFmt = stringResource(R.string.import_summary_duplicates)
+    val failedFmt = stringResource(R.string.import_summary_failed)
+    val countFmt = stringResource(R.string.collection_count)
 
-    Column {
+    // WPF parity: import EPUBs straight into a collection (CollectionAdd).
+    var importTarget by remember { mutableStateOf<String?>(null) }
+    val importPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        val target = importTarget
+        importTarget = null
+        if (uris.isNotEmpty() && target != null) {
+            scope.launch {
+                val summary = viewModel.importMultiple(uris)
+                if (summary.addedNames.isNotEmpty()) {
+                    val all = viewModel.books.first()
+                    for (key in summary.addedNames) {
+                        all.firstOrNull { it.originalFileName?.lowercase() == key }
+                            ?.let { viewModel.setCollection(it, target) }
+                    }
+                }
+                val parts = mutableListOf<String>()
+                if (summary.added > 0) parts.add(addedFmt.format(summary.added))
+                if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
+                if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
+                if (parts.isNotEmpty()) {
+                    Toast.makeText(context, parts.joinToString("، "), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    // Top safe area: the header must not collide with the status bar.
+    Column(modifier = Modifier.statusBarsPadding()) {
         if (onBack != null) {
             Row(modifier = Modifier.padding(horizontal = 4.dp)) {
                 TextButton(onClick = onBack) { Text("→") }
                 Text(
-                    stringResource(R.string.library_collections),
+                    if (selected == null) stringResource(R.string.library_collections) else selected!!,
                     modifier = Modifier.align(Alignment.CenterVertically).weight(1f)
                 )
                 // Upstream parity: manually create a collection (may stay empty).
@@ -79,6 +123,17 @@ fun CollectionsScreen(
             }
         }
         if (selected == null) {
+            if (collections.isEmpty()) {
+                Text(
+                    stringResource(R.string.collections_empty_hint),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(32.dp),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             LazyColumn {
                 items(collections) { name ->
                     val count = books.count { it.collectionName == name }
@@ -88,19 +143,37 @@ fun CollectionsScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(name, modifier = Modifier.weight(1f))
-                            Text("$count")
-                            TextButton(onClick = { renameTarget = name }) {
-                                Text(stringResource(R.string.rename))
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(name, modifier = Modifier.weight(1f))
+                                // WPF CollectionRow.CountText parity: «N کتاب» / «خالی».
+                                Text(
+                                    if (count == 0) stringResource(R.string.collection_empty)
+                                    else countFmt.format(count)
+                                )
                             }
-                            TextButton(onClick = { deleteTarget = name }) {
-                                // No generic "delete" Loc key; hardcoded fa (Task 7 precedent).
-                                Text("حذف")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(onClick = {
+                                    importTarget = name
+                                    importPicker.launch(
+                                        arrayOf("application/epub+zip", "application/epub")
+                                    )
+                                }) {
+                                    Text(stringResource(R.string.add_epub))
+                                }
+                                TextButton(onClick = { renameTarget = name }) {
+                                    Text(stringResource(R.string.rename))
+                                }
+                                TextButton(onClick = { deleteTarget = name }) {
+                                    // No generic "delete" Loc key; hardcoded fa (Task 7 precedent).
+                                    Text("حذف")
+                                }
                             }
                         }
                     }
@@ -109,6 +182,52 @@ fun CollectionsScreen(
         } else {
             val name = selected!!
             val inCollection by viewModel.byCollection(name).collectAsState(initial = emptyList())
+            // WPF CollectionWindow header parity: «N جلد · M بخش · K جلد تموم‌شده»
+            // + average progress + «continue» opening the in-progress book.
+            val doneCount = inCollection.count { isCompleted(it) }
+            val chapterCount = inCollection.sumOf { it.totalChapters }
+            val avgProgress = if (inCollection.isNotEmpty()) {
+                inCollection.sumOf { progressPercent(it) } / inCollection.size / 100.0
+            } else 0.0
+            val toContinue = remember(inCollection) {
+                inCollection.filter { isInProgress(it) }
+                    .maxByOrNull { it.lastOpenedDate ?: "" }
+                    ?: inCollection.firstOrNull { !isCompleted(it) }
+                    ?: inCollection.firstOrNull()
+            }
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text(
+                    stringResource(
+                        R.string.collection_stats,
+                        inCollection.size, chapterCount, doneCount
+                    ),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { avgProgress.toFloat() },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(
+                        onClick = { toContinue?.let { onOpenBook(it.id) } },
+                        enabled = toContinue != null
+                    ) {
+                        Text(stringResource(R.string.continue_reading))
+                    }
+                    TextButton(onClick = {
+                        importTarget = name
+                        importPicker.launch(arrayOf("application/epub+zip", "application/epub"))
+                    }) {
+                        Text(stringResource(R.string.add_epub))
+                    }
+                }
+            }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(140.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),

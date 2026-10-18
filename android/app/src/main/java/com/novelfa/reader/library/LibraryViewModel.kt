@@ -167,7 +167,9 @@ class LibraryViewModel(
         /** URIs that were skipped as duplicates (for overwrite confirmation). */
         val duplicateUris: List<Uri> = emptyList(),
         /** Display names of the duplicates (for the confirmation dialog). */
-        val duplicateNames: List<String> = emptyList()
+        val duplicateNames: List<String> = emptyList(),
+        /** Lowercased original file names of the newly added books. */
+        val addedNames: List<String> = emptyList()
     )
 
     /**
@@ -189,6 +191,7 @@ class LibraryViewModel(
         var failed = 0
         val duplicateUris = mutableListOf<Uri>()
         val duplicateNames = mutableListOf<String>()
+        val addedNames = mutableListOf<String>()
         for (uri in uris) {
             val displayName = imp.displayNameOf(uri)
             val key = displayName?.lowercase()
@@ -201,7 +204,10 @@ class LibraryViewModel(
             try {
                 imp.importEpub(uri, overwrite = overwriteDuplicates)
                 added++
-                if (key != null) known.add(key)
+                if (key != null) {
+                    known.add(key)
+                    addedNames.add(key)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -211,7 +217,7 @@ class LibraryViewModel(
                 failed++
             }
         }
-        return ImportSummary(added, duplicates, failed, duplicateUris, duplicateNames)
+        return ImportSummary(added, duplicates, failed, duplicateUris, duplicateNames, addedNames)
     }
 
     /**
