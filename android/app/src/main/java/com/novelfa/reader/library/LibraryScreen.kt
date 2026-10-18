@@ -9,7 +9,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,6 +73,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -103,7 +103,6 @@ import com.novelfa.reader.theme.CharacterTheme
 import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankService
-import com.novelfa.reader.theme.ParticleLayer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -158,14 +157,6 @@ fun LibraryScreen(
         debouncedQuery = query
     }
     var sort by rememberSaveable { mutableStateOf(SortMode.DEFAULT) }
-    // PrefsStore must be built on the application context: the DataStore
-    // delegate is process-wide, so an Activity context would leak the
-    // Activity on recreation (e.g. in-app language change).
-    val context = LocalContext.current
-    val prefs = remember(context) { PrefsStore(context.applicationContext) }
-    // Single rank-prefs bridge for the screen: it preloads on IO once and
-    // serves reads from memory (no runBlocking on the UI thread).
-    val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
     // Secret theme codes (WPF TrackSecretKeys parity): typing BEAKO / EMT /
     // TEA unlocks the hidden themes; the code letters are scrubbed from the
     // search box like the desktop client does.
@@ -232,9 +223,24 @@ fun LibraryScreen(
      * Shared import path for the SAF picker and the ACTION_VIEW file intent:
      * batch summary on success, diagnostic detail on a single-file failure.
      */
+    // State for duplicate-overwrite confirmation dialog
+    var pendingDuplicates by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var pendingDuplicateNames by remember { mutableStateOf<List<String>>(emptyList()) }
+
     suspend fun importUris(uris: List<Uri>) {
         try {
             val summary = viewModel.importMultiple(uris)
+            // If duplicates found, ask for confirmation instead of silently skipping
+            if (summary.duplicates > 0 && summary.duplicateUris.isNotEmpty()) {
+                pendingDuplicates = summary.duplicateUris
+                pendingDuplicateNames = summary.duplicateNames
+                // Still show the summary for added/failed
+                val parts = mutableListOf<String>()
+                if (summary.added > 0) parts.add(addedFmt.format(summary.added))
+                if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
+                if (parts.isNotEmpty()) snackbar.showSnackbar(parts.joinToString("، "))
+                return
+            }
             val parts = mutableListOf<String>()
             if (summary.added > 0) parts.add(addedFmt.format(summary.added))
             if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
@@ -287,6 +293,14 @@ fun LibraryScreen(
     var gateTick by remember { mutableIntStateOf(0) }
     // Task 8: refresh reading rank on first composition and whenever the tab
     // changes (approximation of "resume"), plus private-tab session unlock.
+    val context = LocalContext.current
+    // PrefsStore must be built on the application context: the DataStore
+    // delegate is process-wide, so an Activity context would leak the
+    // Activity on recreation (e.g. in-app language change).
+    val prefs = remember(context) { PrefsStore(context.applicationContext) }
+    // Single rank-prefs bridge for the screen: it preloads on IO once and
+    // serves reads from memory (no runBlocking on the UI thread).
+    val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
     // initial=null: the placeholder must be distinguishable from a real blank
     // value, otherwise the welcome dialog opens on every cold start before
     // DataStore delivers the saved name (and never closes afterwards).
@@ -1377,7 +1391,7 @@ private fun PrivateLockedGate(onUnlock: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BookCard(
     book: BookEntity,
@@ -1416,6 +1430,9 @@ fun BookCard(
                 AsyncImage(
                     model = book.coverPath,
                     contentDescription = title,
+                    // Crop fills the box completely (no side gaps); the box
+                    // is 0.75 aspect so covers fill edge-to-edge.
+                    contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxSize()
                         // Cover flush with card edges; top corners rounded to
@@ -1513,7 +1530,6 @@ fun BookCard(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BookRow(
     book: BookEntity,
@@ -1522,10 +1538,7 @@ private fun BookRow(
     onMenuClick: () -> Unit,
     missingFile: Boolean = false,
     selected: Boolean = false,
-    onLongClick: (() -> Unit)? = null,
-    // Upstream f352105: bite taken out of completed books' covers, visible
-    // only with the «سوبارو · شکم‌پرستی» (tsugi) character theme.
-    showBite: Boolean = false
+    onLongClick: (() -> Unit)? = null
 ) {
     Card(
         border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,

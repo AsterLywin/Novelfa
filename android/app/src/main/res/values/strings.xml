@@ -141,4 +141,7 @@
     <string name="mode_horizontal">Horizontal</string>
     <string name="mode_vertical_continuous">Continuous vertical</string>
     <string name="mode_direction_hint">Horizontal page-turn direction follows the book\'s language automatically</string>
+    <string name="duplicate_file_title">Duplicate file</string>
+    <string name="duplicate_file_message">This file already exists in the app. Are you sure you want to import it? If confirmed, the old file will be overwritten with the new one.</string>
+    <string name="yes_overwrite">Yes, overwrite</string>
 </resources>

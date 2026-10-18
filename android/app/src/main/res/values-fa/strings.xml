@@ -141,4 +141,7 @@
     <string name="mode_horizontal">افقی</string>
     <string name="mode_vertical_continuous">عمودی پیوسته</string>
     <string name="mode_direction_hint">جهت ورق زدن افقی بر اساس زبان کتاب خودکار تنظیم می‌شود</string>
+    <string name="duplicate_file_title">فایل تکراری</string>
+    <string name="duplicate_file_message">این فایل از قبل داخل برنامه موجود است. آیا از وارد کردن آن اطمینان دارید؟ در صورت موافقت، فایل قدیمی با فایل جدید بازنویسی می‌شود.</string>
+    <string name="yes_overwrite">بله، بازنویسی کن</string>
 </resources>

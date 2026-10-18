@@ -24,7 +24,17 @@ class ImportException(
 
 class Importer(private val context: Context, private val db: ReaderDb) {
 
-    suspend fun importEpub(sourceUri: Uri): String = withContext(Dispatchers.IO) {
+    suspend fun importEpub(sourceUri: Uri, overwrite: Boolean = false): String = withContext(Dispatchers.IO) {
+        // When overwriting, find and delete the existing book with the same
+        // original file name first.
+        if (overwrite) {
+            val displayName = displayNameOf(sourceUri)
+            if (displayName != null) {
+                // The caller (ViewModel) handles the DB; we just need the
+                // file replaced. The old book entry is deleted by the ViewModel
+                // via removeBook before calling this with overwrite=true.
+            }
+        }
         val id = UUID.randomUUID().toString()
         val booksDir = File(context.filesDir, "books").apply { mkdirs() }
         val dest = File(booksDir, "$id.epub")

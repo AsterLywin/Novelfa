@@ -66,6 +66,9 @@ echo === :app:assembleDebug ===
 call "%SCRIPT_DIR%gradlew.bat" :app:assembleDebug --console=plain
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :fail
+rem Verify the APK was actually produced (Gradle can exit 0 without output on config errors)
+call :verify "app\build\outputs\apk\debug\app-debug.apk" "debug APK"
+if errorlevel 1 goto :fail
 :skip_debug
 
 if "%DO_RELEASE%"=="0" goto :skip_release
@@ -74,11 +77,15 @@ echo === :app:assembleRelease ===
 call "%SCRIPT_DIR%gradlew.bat" :app:assembleRelease --console=plain
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :fail
+call :verify "app\build\outputs\apk\release\app-release-unsigned.apk" "release APK"
+if errorlevel 1 goto :fail
 echo.
 echo === :app:bundleRelease ===
 call "%SCRIPT_DIR%gradlew.bat" :app:bundleRelease --console=plain
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :fail
+call :verify "app\build\outputs\bundle\release\app-release.aab" "release AAB"
+if errorlevel 1 goto :fail
 :skip_release
 
 echo.
@@ -115,6 +122,24 @@ goto :done
 :ksp_none
 echo   nothing to remove.
 goto :done
+
+:verify
+rem %1 = relative path to artifact, %2 = friendly name
+rem Fails if the file is missing or zero bytes (stale/failed build).
+if not exist "%~1" (
+    echo.
+    echo [FAILED] %~2 not found at "%~1".
+    echo         Gradle exited 0 but produced no output - the build did NOT succeed.
+    exit /b 1
+)
+for %%F in ("%~1") do (
+    if %%~zF==0 (
+        echo.
+        echo [FAILED] %~2 is 0 bytes - the build did NOT succeed.
+        exit /b 1
+    )
+)
+exit /b 0
 
 :report
 echo.

@@ -163,7 +163,11 @@ class LibraryViewModel(
     data class ImportSummary(
         val added: Int,
         val duplicates: Int,
-        val failed: Int
+        val failed: Int,
+        /** URIs that were skipped as duplicates (for overwrite confirmation). */
+        val duplicateUris: List<Uri> = emptyList(),
+        /** Display names of the duplicates (for the confirmation dialog). */
+        val duplicateNames: List<String> = emptyList()
     )
 
     /**
@@ -172,7 +176,10 @@ class LibraryViewModel(
      * ones repeated inside the batch. A single-URI batch rethrows so the
      * diagnostic import-error path keeps working.
      */
-    suspend fun importMultiple(uris: List<Uri>): ImportSummary {
+    suspend fun importMultiple(
+        uris: List<Uri>,
+        overwriteDuplicates: Boolean = false
+    ): ImportSummary {
         val imp = requireNotNull(importer) { "Importer not provided" }
         val known = dao.allBooks().first()
             .mapNotNull { it.originalFileName?.lowercase() }
@@ -180,14 +187,19 @@ class LibraryViewModel(
         var added = 0
         var duplicates = 0
         var failed = 0
+        val duplicateUris = mutableListOf<Uri>()
+        val duplicateNames = mutableListOf<String>()
         for (uri in uris) {
-            val key = imp.displayNameOf(uri)?.lowercase()
-            if (key != null && (key in known)) {
+            val displayName = imp.displayNameOf(uri)
+            val key = displayName?.lowercase()
+            if (!overwriteDuplicates && key != null && (key in known)) {
                 duplicates++
+                duplicateUris.add(uri)
+                if (displayName != null) duplicateNames.add(displayName)
                 continue
             }
             try {
-                imp.importEpub(uri)
+                imp.importEpub(uri, overwrite = overwriteDuplicates)
                 added++
                 if (key != null) known.add(key)
             } catch (e: CancellationException) {
@@ -199,7 +211,37 @@ class LibraryViewModel(
                 failed++
             }
         }
-        return ImportSummary(added, duplicates, failed)
+        return ImportSummary(added, duplicates, failed, duplicateUris, duplicateNames)
+    }
+
+    /**
+     * Overwrites existing books with the given URIs: removes the old book
+     * (by original file name match) then imports the new file.
+     */
+    suspend fun overwriteDuplicates(uris: List<Uri>): ImportSummary {
+        val imp = requireNotNull(importer) { "Importer not provided" }
+        var added = 0
+        var failed = 0
+        for (uri in uris) {
+            val displayName = imp.displayNameOf(uri)?.lowercase()
+            try {
+                // Remove the existing book with the same file name.
+                if (displayName != null) {
+                    val existing = dao.allBooks().first()
+                        .firstOrNull { it.originalFileName?.lowercase() == displayName }
+                    if (existing != null) {
+                        removeBook(existing)
+                    }
+                }
+                imp.importEpub(uri)
+                added++
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed++
+            }
+        }
+        return ImportSummary(added, 0, failed)
     }
 
     suspend fun toggleFavorite(book: BookEntity) {
