@@ -112,6 +112,7 @@ fun ReaderScreen(
     var vm by remember { mutableStateOf<ReaderViewModel?>(null) }
     var loadError by remember { mutableStateOf(false) }
     var pageHtml by remember { mutableStateOf("") }
+    var pendingLastPage by remember { mutableStateOf(false) }
     var pageBase by remember { mutableStateOf<String?>(null) }
     var rev by remember { mutableIntStateOf(0) }
     var webView by remember { mutableStateOf<android.webkit.WebView?>(null) }
@@ -259,14 +260,35 @@ fun ReaderScreen(
         val wv = webView ?: return
         wv.evaluateJavascript("rdrTurn(${if (forward) 1 else -1})") { result ->
             val r = result?.trim()?.trim { it == '"' }
+            // 'busy' = swipe landed mid-animation; the lock drops it.
+            if (r == "busy") return@evaluateJavascript
             scope.launch {
                 val vv = vm ?: return@launch
                 if (r == "end" && forward && vv.index + 1 < vv.chapters.size) {
                     gotoChapter(vv, vv.index + 1)
                 } else if (r == "start" && !forward && vv.index > 0) {
+                    // Land on the previous chapter's last page; the
+                    // onPageFinished hook fires rdrLast() once loaded.
+                    pendingLastPage = true
                     gotoChapter(vv, vv.index - 1)
                 }
             }
+        }
+    }
+
+    /**
+     * Chapter-level jump (bottom-bar buttons, Windows btnPrevChapter /
+     * btnNextChapter parity). Backward jumps land on the last page in
+     * paged mode; forward jumps start at the first page.
+     */
+    fun jumpChapter(v: ReaderViewModel, delta: Int) {
+        val i = v.index + delta
+        if (i !in v.chapters.indices) return
+        scope.launch {
+            if (delta < 0 && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
+                pendingLastPage = true
+            }
+            gotoChapter(v, i)
         }
     }
 
@@ -452,19 +474,15 @@ fun ReaderScreen(
                     ) {
                         TextButton(
                             onClick = {
-                                scope.launch {
-                                    val vv = vm ?: return@launch
-                                    gotoChapter(vv, vv.index - 1)
-                                }
+                                val vv = vm ?: return@TextButton
+                                jumpChapter(vv, -1)
                             },
                             enabled = v != null && v.index > 0
                         ) { Text(stringResource(R.string.previous_chapter)) }
                         TextButton(
                             onClick = {
-                                scope.launch {
-                                    val vv = vm ?: return@launch
-                                    gotoChapter(vv, vv.index + 1)
-                                }
+                                val vv = vm ?: return@TextButton
+                                jumpChapter(vv, 1)
                             },
                             enabled = v != null && v.index < v.chapters.size - 1
                         ) { Text(stringResource(R.string.next_chapter)) }
@@ -521,6 +539,18 @@ fun ReaderScreen(
                             scope.launch { snackbar.showSnackbar(chapterErr + details) }
                         },
                         onWebView = { webView = it },
+                        paged = modeNow == ReadingMode.PAGED_HORIZONTAL,
+                        onPageFinished = {
+                            // Backward chapter jump in paged mode lands on
+                            // the new chapter's last page (manga-reader
+                            // behavior); forward jumps start at page one.
+                            if (pendingLastPage) {
+                                pendingLastPage = false
+                                if (modeNow == ReadingMode.PAGED_HORIZONTAL) {
+                                    webView?.evaluateJavascript("rdrLast()", null)
+                                }
+                            }
+                        },
                         onSwipeLeft = {
                             val v = vm
                             if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {

@@ -11,6 +11,7 @@ import kotlin.math.abs
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
@@ -44,9 +45,15 @@ fun ReaderWebView(
     onWebView: (WebView) -> Unit = {},
     onPageFinished: () -> Unit = {},
     onSwipeLeft: () -> Unit = {},
-    onSwipeRight: () -> Unit = {}
+    onSwipeRight: () -> Unit = {},
+    // Paged (horizontal) mode: the page turn is fully programmatic
+    // (rdrTurn); the fling must be consumed so the WebView doesn't also
+    // fling-scroll natively and fight the turn animation.
+    paged: Boolean = false
 ) {
     val loaded = remember { mutableStateOf<String?>(null) }
+    // The WebView factory runs once; the mode can change afterwards.
+    val pagedNow = rememberUpdatedState(paged)
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
@@ -94,8 +101,11 @@ fun ReaderWebView(
                         }
                     })
                 setOnTouchListener { _, event ->
-                    swipeDetector.onTouchEvent(event)
-                    false
+                    val handled = swipeDetector.onTouchEvent(event)
+                    // In paged mode the turn is fully programmatic; consume
+                    // the fling so the WebView can't fling-scroll natively
+                    // and fight rdrTurn's animation.
+                    handled && pagedNow.value
                 }
                 addJavascriptInterface(bridge, "Android")
                 webViewClient = object : WebViewClient() {

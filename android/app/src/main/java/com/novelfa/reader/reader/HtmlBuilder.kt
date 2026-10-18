@@ -88,14 +88,8 @@ object HtmlBuilder {
             // multicol pager (one 100vw column = one page); side margins
             // move onto the chapter div so columns stay exactly 100vw.
             // This style block comes after #readerSpacing on purpose.
-            sb.append("<style id=\"rdrPaged\">")
-            sb.append("html.rdr-paged,html.rdr-paged body{height:100%;}")
-            sb.append("html.rdr-paged{overflow-x:auto;overflow-y:hidden;}")
-            sb.append("html.rdr-paged body{margin:0 !important;padding:16px 0 !important;")
-            sb.append("column-width:100vw;column-gap:0;box-sizing:border-box;}")
-            sb.append("html.rdr-paged .rdr-chap{padding:0 ").append(sideMargin)
-                .append("px;box-sizing:border-box;}")
-            sb.append("</style>")
+            sb.append("<style id=\"rdrPaged\">").append(pagedCss(sideMargin))
+                .append("</style>")
         }
         sb.append("<script>window.__rdrGen=").append(docGen).append(";</script>")
         sb.append("<script>(function(){")
@@ -115,7 +109,12 @@ object HtmlBuilder {
         // Horizontal page turning (paged mode). Returns 'page' when a page
         // turned, 'start'/'end' at the chapter edges so native code can move
         // to the adjacent chapter. RTL: scrollLeft runs 0 -> negative.
-        sb.append("function rdrTurn(d){try{var de=document.documentElement;")
+        sb.append("function rdrTurn(d){try{")
+        sb.append("var now=Date.now();")
+        // Animation lock: a second swipe mid-animation would compute the
+        // current page from a mid-flight offset and jump to the wrong page.
+        sb.append("if(window.__rdrLockT&&now<window.__rdrLockT)return 'busy';")
+        sb.append("var de=document.documentElement;")
         sb.append("if(!de.classList.contains('rdr-paged'))return 'page';")
         sb.append("var w=de.clientWidth||window.innerWidth||1;")
         sb.append("var rtl=de.getAttribute('dir')==='rtl';")
@@ -123,9 +122,46 @@ object HtmlBuilder {
         sb.append("var cur=rtl?Math.round(-sl/w):Math.round(sl/w);")
         sb.append("var count=Math.max(1,Math.round(de.scrollWidth/w));")
         sb.append("var n=cur+d;if(n<0)return 'start';if(n>=count)return 'end';")
+        sb.append("window.__rdrLockT=now+450;")
         sb.append("window.scrollTo({left:rtl?-n*w:n*w,behavior:'smooth'});")
         sb.append("return 'page';}catch(x){return 'page';}}")
+        // Jump to the last page (used when navigating to the previous
+        // chapter: a backwards page-turn should continue from its end).
+        sb.append("function rdrLast(){try{")
+        sb.append("var de=document.documentElement;")
+        sb.append("if(!de.classList.contains('rdr-paged'))return 'no';")
+        sb.append("var w=de.clientWidth||window.innerWidth||1;")
+        sb.append("var rtl=de.getAttribute('dir')==='rtl';")
+        sb.append("var count=Math.max(1,Math.round(de.scrollWidth/w));")
+        sb.append("var n=count-1;")
+        sb.append("window.scrollTo({left:rtl?-n*w:n*w});")
+        sb.append("return 'ok';}catch(x){return 'no';}}")
         sb.append("})();</script></head><body>").append(bodyContent).append("</body></html>")
+        return sb.toString()
+    }
+
+    /**
+     * Paged-mode overrides. Paging is fully programmatic (rdrTurn/rdrLast):
+     * native horizontal scrolling is disabled (overflow-x:hidden) so a fling
+     * can never fight the page-turn animation or land between pages.
+     * Refreshed live by ReaderViewModel.refreshSpacing() when the margin
+     * changes, so the margin must stay a parameter here.
+     */
+    fun pagedCss(sideMargin: Int): String {
+        val sb = StringBuilder()
+        sb.append("html.rdr-paged,html.rdr-paged body{height:100%;}")
+        sb.append("html.rdr-paged{overflow-x:hidden;overflow-y:hidden;}")
+        sb.append("html.rdr-paged body{margin:0 !important;padding:16px 0 !important;")
+        sb.append("column-width:100vw;column-gap:0;box-sizing:border-box;")
+        // Windows parity: chapter fades in on load (rdrFade .3s).
+        sb.append("animation:rdrFade .3s ease-out;}")
+        sb.append("@keyframes rdrFade{from{opacity:.3;}to{opacity:1;}}")
+        sb.append("html.rdr-paged .rdr-chap{padding:0 ").append(sideMargin)
+            .append("px;box-sizing:border-box;}")
+        // Never split media across the page boundary (vertical-scroll
+        // Windows never fragments, so this is paged-only parity).
+        sb.append("html.rdr-paged img,html.rdr-paged table,html.rdr-paged pre,")
+        sb.append("html.rdr-paged figure,html.rdr-paged blockquote{break-inside:avoid;}")
         return sb.toString()
     }
 

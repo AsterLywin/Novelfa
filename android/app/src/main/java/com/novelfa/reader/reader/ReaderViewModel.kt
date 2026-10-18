@@ -519,6 +519,13 @@ class ReaderViewModel(
         }
         html = Regex("<style id=\"readerSpacing\">[\\s\\S]*?</style>")
             .replace(html, "<style id=\"readerSpacing\">" + spacingCss() + "</style>")
+        // Paged mode bakes the side margin into #rdrPaged (on .rdr-chap, so
+        // columns stay exactly 100vw); rebuild it too or the margin change
+        // silently does nothing after the live #readerSpacing swap.
+        if (html.contains("id=\"rdrPaged\"")) {
+            html = Regex("<style id=\"rdrPaged\">[\\s\\S]*?</style>")
+                .replace(html, "<style id=\"rdrPaged\">" + HtmlBuilder.pagedCss(sideMargin) + "</style>")
+        }
     }
 
     private fun readPrepared(i: Int): String {
