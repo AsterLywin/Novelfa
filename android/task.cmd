@@ -1,6 +1,15 @@
 @echo off
 setlocal EnableExtensions
 
+rem ANSI colors (Windows 10+)
+for /F %%a in ('echo prompt $E^| cmd') do set "ESC=%%a"
+set "C_RED=%ESC%[91m"
+set "C_GREEN=%ESC%[92m"
+set "C_YELLOW=%ESC%[93m"
+set "C_CYAN=%ESC%[96m"
+set "C_GRAY=%ESC%[90m"
+set "C_RESET=%ESC%[0m"
+
 rem ============================================================
 rem  Novelfa Android - build task runner
 rem
@@ -17,7 +26,7 @@ rem ============================================================
 set "SCRIPT_DIR=%~dp0"
 pushd "%SCRIPT_DIR%" >nul
 if errorlevel 1 (
-    echo [ERROR] Cannot change to "%SCRIPT_DIR%"
+    echo %C_RED%[ERROR]%C_RESET% Cannot change to "%SCRIPT_DIR%"
     exit /b 1
 )
 
@@ -30,7 +39,7 @@ if /I "%~1"=="help"     goto :help
 if /I "%~1"=="--help"   goto :help
 if /I "%~1"=="-h"       goto :help
 
-echo [ERROR] Unknown task "%~1". Try "task help".
+echo %C_RED%[ERROR]%C_RESET% Unknown task "%~1". Try "task help".
 popd
 exit /b 1
 
@@ -39,13 +48,13 @@ if "%~2"=="" goto :pick
 if /I "%~2"=="debug"   ( set "DO_DEBUG=1" & set "DO_RELEASE=0" & goto :run )
 if /I "%~2"=="release" ( set "DO_DEBUG=0" & set "DO_RELEASE=1" & goto :run )
 if /I "%~2"=="both"    ( set "DO_DEBUG=1" & set "DO_RELEASE=1" & goto :run )
-echo [ERROR] Unknown build variant "%~2". Use: debug, release, both.
+echo %C_RED%[ERROR]%C_RESET% Unknown build variant "%~2". Use: debug, release, both.
 popd
 exit /b 1
 
 :pick
 echo.
-echo  Novelfa Android - choose a build variant
+echo %C_CYAN% Novelfa Android - choose a build variant%C_RESET%
 echo.
 echo    [1] Debug    fast build, debug-signed  -^> app-debug.apk
 echo    [2] Release  R8/minified final build  -^> app-release-unsigned.apk + app-release.aab
@@ -62,7 +71,7 @@ exit /b 1
 set "RC=0"
 if "%DO_DEBUG%"=="0" goto :skip_debug
 echo.
-echo === :app:assembleDebug ===
+echo %C_CYAN%=== :app:assembleDebug ===%C_RESET%
 call "%SCRIPT_DIR%gradlew.bat" :app:assembleDebug --console=plain
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :fail
@@ -73,14 +82,14 @@ if errorlevel 1 goto :fail
 
 if "%DO_RELEASE%"=="0" goto :skip_release
 echo.
-echo === :app:assembleRelease ===
+echo %C_CYAN%=== :app:assembleRelease ===%C_RESET%
 call "%SCRIPT_DIR%gradlew.bat" :app:assembleRelease --console=plain
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :fail
 call :verify "app\build\outputs\apk\release\app-release-unsigned.apk" "release APK"
 if errorlevel 1 goto :fail
 echo.
-echo === :app:bundleRelease ===
+echo %C_CYAN%=== :app:bundleRelease ===%C_RESET%
 call "%SCRIPT_DIR%gradlew.bat" :app:bundleRelease --console=plain
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :fail
@@ -89,28 +98,28 @@ if errorlevel 1 goto :fail
 :skip_release
 
 echo.
-echo [OK] Build finished successfully.
+echo %C_GREEN%[OK]%C_RESET% Build finished successfully.
 call :report
 goto :done
 
 :test
 echo.
-echo === :app:testDebugUnitTest ===
+echo %C_CYAN%=== :app:testDebugUnitTest ===%C_RESET%
 call "%SCRIPT_DIR%gradlew.bat" :app:testDebugUnitTest --console=plain
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :fail
 echo.
-echo [OK] Unit tests passed.
+echo %C_GREEN%[OK]%C_RESET% Unit tests passed.
 goto :done
 
 :clean
 echo.
-echo === gradlew clean ===
+echo %C_CYAN%=== gradlew clean ===%C_RESET%
 call "%SCRIPT_DIR%gradlew.bat" clean --console=plain
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :fail
 echo.
-echo [OK] Clean finished.
+echo %C_GREEN%[OK]%C_RESET% Clean finished.
 goto :done
 
 :kspclean
@@ -128,14 +137,14 @@ rem %1 = relative path to artifact, %2 = friendly name
 rem Fails if the file is missing or zero bytes (stale/failed build).
 if not exist "%~1" (
     echo.
-    echo [FAILED] %~2 not found at "%~1".
+    echo %C_RED%[FAILED]%C_RESET% %~2 not found at "%~1".
     echo         Gradle exited 0 but produced no output - the build did NOT succeed.
     exit /b 1
 )
 for %%F in ("%~1") do (
     if %%~zF==0 (
         echo.
-        echo [FAILED] %~2 is 0 bytes - the build did NOT succeed.
+        echo %C_RED%[FAILED]%C_RESET% %~2 is 0 bytes - the build did NOT succeed.
         exit /b 1
     )
 )
@@ -143,7 +152,7 @@ exit /b 0
 
 :report
 echo.
-echo Outputs:
+echo %C_CYAN%Outputs:%C_RESET%
 if exist "app\build\outputs\apk\debug\app-debug.apk" (
     for %%F in ("app\build\outputs\apk\debug\app-debug.apk") do echo   debug    %%~nxF  %%~zF bytes
 )
@@ -154,13 +163,13 @@ if exist "app\build\outputs\bundle\release\app-release.aab" (
     for %%F in ("app\build\outputs\bundle\release\app-release.aab") do echo   bundle   %%~nxF  %%~zF bytes
 )
 echo.
-echo NOTE: release artifacts are UNSIGNED unless a keystore is configured
+echo %C_YELLOW%NOTE:%C_RESET% release artifacts are UNSIGNED unless a keystore is configured
 echo       (see docs/PLAY-RELEASE.md). Never upload an unsigned APK to Play.
 goto :eof
 
 :fail
 echo.
-echo [FAILED] gradle exited with code %RC%.
+echo %C_RED%[FAILED]%C_RESET% gradle exited with code %RC%.
 popd
 exit /b %RC%
 
