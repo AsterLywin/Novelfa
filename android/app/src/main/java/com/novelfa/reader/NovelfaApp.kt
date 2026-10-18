@@ -23,7 +23,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import com.novelfa.reader.theme.AppPaletteExtras
 import com.novelfa.reader.theme.LocalAppPaletteExtras
 import com.novelfa.reader.theme.parseHex

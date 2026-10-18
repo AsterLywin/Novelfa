@@ -8,7 +8,8 @@ import androidx.compose.ui.graphics.Path
  * with comma/space-separated coordinates. The F0/F1 fill-rule prefix
  * is ignored (we always use the non-zero winding).
  */
-fun parseEmblemPath(data: String): Path {
+fun parseEmblemPath(data: String): Path? {
+    if (data.isBlank()) return null
     val path = Path()
     // Tokenize: commands and numbers
     val tokens = Regex("[MLCZmlcz]|-?\\d+\\.?\\d*").findAll(data).map { it.value }.toList()

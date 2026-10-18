@@ -77,7 +77,8 @@ import java.io.IOException
 import java.util.zip.ZipFile
 import androidx.compose.material3.rememberDrawerState
 import com.novelfa.reader.theme.CharacterThemes
-import com.novelfa.reader.ui.ParticleLayer
+import com.novelfa.reader.theme.ParticleLayer
+import com.novelfa.reader.theme.characterPages
 
 /**
  * Route `reader/{bookId}`: top bar (dir-aware chapter title + position
@@ -716,9 +717,9 @@ fun ReaderScreen(
                 }
             }
         )
-    }
+    } // Close fontOpen
         } // Close particle Box
-}
+} // Close ReaderScr
 
 @Composable
 private fun SpacingDialog(

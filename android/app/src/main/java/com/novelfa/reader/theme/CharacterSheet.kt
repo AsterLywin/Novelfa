@@ -129,7 +129,7 @@ private fun CharacterRow(
                 .background(hexToColor(accent)),
             contentAlignment = Alignment.Center
         ) {
-            val emblem = remember(theme?.id) { theme?.emblemPath() }
+            val emblem = remember(theme?.id) { theme?.emblemPath }
             if (emblem != null) {
                 Canvas(modifier = Modifier.size(28.dp)) {
                     // Scale the 100x100 emblem to fit

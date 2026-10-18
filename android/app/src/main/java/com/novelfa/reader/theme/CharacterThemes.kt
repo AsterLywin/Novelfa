@@ -67,6 +67,10 @@ data class CharacterTheme(
     val pageKeyDay: String get() = "rz.$id.day"
 
     fun palette(light: Boolean): ThemePalette = if (light) this.light else this.dark
+
+    /** Parsed emblem path (cached), null when emblemData is empty/invalid. */
+    val emblemPath: androidx.compose.ui.graphics.Path?
+        get() = parseEmblemPath(emblemData)
 }
 
 object CharacterThemes {

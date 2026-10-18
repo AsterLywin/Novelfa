@@ -140,8 +140,8 @@ fun buildPlainPalette(light: Boolean, accentHex: String): AppPalette {
         accentDark = hsl(h, s, al - 0.10)
     }
 
-    val (bg, sidebar, card, text, muted, hover, border, soft, hero1, hero2) =
-        if (light) {
+    val colorsList: List<Color> = run {
+        val list: List<Color> = if (light) {
             listOf(
                 hsl(h, 0.444 * tint, 0.965),  // bgDark
                 Color.White,                    // bgSidebar
@@ -168,6 +168,18 @@ fun buildPlainPalette(light: Boolean, accentHex: String): AppPalette {
                 hsl(h, 0.333 * tint, 0.124)   // hero2
             )
         }
+        list
+    }
+    val bg = colorsList[0]
+    val sidebar = colorsList[1]
+    val card = colorsList[2]
+    val text = colorsList[3]
+    val muted = colorsList[4]
+    val hover = colorsList[5]
+    val border = colorsList[6]
+    val soft = colorsList[7]
+    val hero1 = colorsList[8]
+    val hero2 = colorsList[9]
 
     val gradA = hsl(h, s, clamp(l + 0.14, 0.50, 0.80))
     val gradB = hsl(h, s, clamp(l - 0.04, 0.34, 0.60))

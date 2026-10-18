@@ -5,6 +5,8 @@ import com.novelfa.reader.data.BookEntity
 import com.novelfa.reader.model.Chapter
 import com.novelfa.reader.theme.ReaderTheme
 import com.novelfa.reader.theme.Themes
+import com.novelfa.reader.theme.CharacterThemes
+import com.novelfa.reader.theme.characterPages
 import java.io.File
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
