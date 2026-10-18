@@ -145,7 +145,10 @@ fun PinDialog(
                                 manager.setPin(first)
                                 onSuccess()
                             } catch (e: PinException) {
-                                error = e.message
+                                error = when (e.resId) {
+                                        R.string.wrong_pin -> wrongErr
+                                        else -> shortErr
+                                    }
                             }
                         }
                     }
@@ -166,7 +169,10 @@ fun PinDialog(
                                     manager.changePin(oldPin, first)
                                     onSuccess()
                                 } catch (e: PinException) {
-                                    error = e.message
+                                    error = when (e.resId) {
+                                        R.string.wrong_pin -> wrongErr
+                                        else -> shortErr
+                                    }
                                 }
                             }
                         }

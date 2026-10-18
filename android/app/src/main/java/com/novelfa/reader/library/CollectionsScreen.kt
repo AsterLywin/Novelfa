@@ -171,8 +171,7 @@ fun CollectionsScreen(
                                     Text(stringResource(R.string.rename))
                                 }
                                 TextButton(onClick = { deleteTarget = name }) {
-                                    // No generic "delete" Loc key; hardcoded fa (Task 7 precedent).
-                                    Text("حذف")
+                                    Text(stringResource(R.string.delete))
                                 }
                             }
                         }
@@ -253,8 +252,8 @@ fun CollectionsScreen(
                                 Text(if (book.isFavorite) "★" else "☆")
                             }
                             TextButton(onClick = { resetTarget = book }) {
-                                // "از اول" (start over), like the WPF restart prompt.
-                                Text("از اول")
+                                // Like the WPF restart prompt.
+                                Text(stringResource(R.string.start_over_button))
                             }
                             TextButton(onClick = { removeTarget = book }) {
                                 Text(stringResource(R.string.remove_book))
@@ -350,7 +349,7 @@ fun CollectionsScreen(
             onDismissRequest = { resetTarget = null },
             title = { Text(stringResource(R.string.start_over)) },
             // Mirrors the WPF restart prompt: progress resets to zero.
-            text = { Text("پیشرفت صفر میشه و از فصل ۱ شروع می‌کنی.") },
+            text = { Text(stringResource(R.string.reset_progress_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -375,7 +374,14 @@ fun CollectionsScreen(
             title = { Text(stringResource(R.string.remove_book)) },
             // Unlike WPF (which keeps the file), mobile removes the EPUB
             // file and the cover when unreferenced — the text says so.
-            text = { Text("«${displayTitle(target, books)}» از کتابخانه حذف بشه؟\nفایل EPUB و جلد هم پاک می‌شن.") },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.remove_book_confirm_message,
+                        displayTitle(target, books)
+                    )
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -403,6 +409,7 @@ fun RenameCollectionDialog(
 ) {
     var text by remember { mutableStateOf(current) }
     var error by remember { mutableStateOf<String?>(null) }
+    val blankErr = stringResource(R.string.collection_name_blank)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.rename_collection)) },
@@ -422,7 +429,7 @@ fun RenameCollectionDialog(
         confirmButton = {
             TextButton(onClick = {
                 if (text.isBlank()) {
-                    error = "اسم مجموعه نمی‌تونه خالی باشه."
+                    error = blankErr
                 } else {
                     onSave(text.trim())
                 }
@@ -449,6 +456,8 @@ private fun CreateCollectionDialog(
 ) {
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    val blankErr = stringResource(R.string.collection_name_blank)
+    val tooLongErr = stringResource(R.string.collection_name_too_long)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.new_collection)) },
@@ -468,9 +477,9 @@ private fun CreateCollectionDialog(
         confirmButton = {
             TextButton(onClick = {
                 if (text.isBlank()) {
-                    error = "اسم مجموعه نمی‌تونه خالی باشه."
+                    error = blankErr
                 } else if (text.trim().length > 60) {
-                    error = "اسم مجموعه حداکثر ۶۰ کاراکتره."
+                    error = tooLongErr
                 } else {
                     onSave(text.trim())
                 }

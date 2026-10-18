@@ -28,9 +28,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.novelfa.reader.R
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.RecommendedFonts
 import java.io.File
@@ -86,7 +88,7 @@ fun FontPickerDialog(
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             val err = withContext(Dispatchers.IO) {
-                importFont(context.contentResolver, uri, name, fontStore)
+                importFont(context, uri, name, fontStore)
             }
             if (err != null) {
                 error = err
@@ -102,25 +104,25 @@ fun FontPickerDialog(
         Card {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "فونت شخصی",
+                    text = stringResource(R.string.custom_font),
                     style = MaterialTheme.typography.titleLarge
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("اسم فونت") },
+                    label = { Text(stringResource(R.string.font_name)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Row {
                     Button(onClick = { picker.launch(arrayOf("*/*")) }) {
-                        Text("انتخاب فایل فونت")
+                        Text(stringResource(R.string.pick_font_file))
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     TextButton(onClick = onDismiss) {
-                        Text("بستن")
+                        Text(stringResource(R.string.close))
                     }
                 }
                 error?.let {
@@ -131,7 +133,7 @@ fun FontPickerDialog(
                 OutlinedTextField(
                     value = fontQuery,
                     onValueChange = { fontQuery = it },
-                    label = { Text("جست‌وجوی فونت") },
+                    label = { Text(stringResource(R.string.search_font)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -162,7 +164,7 @@ fun FontPickerDialog(
                                         }
                                     }
                                 }) {
-                                    Text("حذف")
+                                    Text(stringResource(R.string.delete))
                                 }
                             }
                         }
@@ -174,19 +176,20 @@ fun FontPickerDialog(
 }
 
 private fun importFont(
-    resolver: android.content.ContentResolver,
+    context: android.content.Context,
     uri: android.net.Uri,
     name: String,
     fontStore: FontStore
 ): String? {
-    if (name.isBlank()) return "اسم فونت نمی‌تونه خالی باشه."
+    val resolver = context.contentResolver
+    if (name.isBlank()) return context.getString(R.string.font_name_blank)
     // The name becomes a file name (FontStore) and a CSS font-family value:
     // reject path separators, traversal and markup to block self-XSS and
     // files escaping the fonts dir.
     if (name.contains('/') || name.contains('\\') || name.contains("..") ||
         name.contains('<') || name.contains('>')
     ) {
-        return "اسم فونت نباید شامل / \\ .. < > باشه."
+        return context.getString(R.string.font_name_invalid_chars)
     }
     val ext = uri.lastPathSegment
         ?.substringAfterLast('.', "")
@@ -199,9 +202,9 @@ private fun importFont(
         val tmp = File.createTempFile("font-import", ".$ext")
         resolver.openInputStream(uri)?.use { input ->
             tmp.outputStream().use { input.copyTo(it) }
-        } ?: return "فایل فونت پیدا نشد."
+        } ?: return context.getString(R.string.font_file_not_found)
         val bytes = tmp.length()
-        if (bytes < 4) return "این فایل یک فونت معتبر نیست."
+        if (bytes < 4) return context.getString(R.string.font_not_valid)
         val header = ByteArray(4)
         tmp.inputStream().use { it.read(header) }
         // Strict magic-byte check: 0x00010000 / 'true' / 'typ1' (TrueType),
@@ -211,16 +214,16 @@ private fun importFont(
         val isTtf = (header[0] == 0x00.toByte() && header[1] == 0x01.toByte()) ||
             headerStr == "OTTO" || headerStr == "true" || headerStr == "typ1"
         if (!isTtf) {
-            return "فقط فایل‌های ttf و otf پشتیبانی می‌شن."
+            return context.getString(R.string.font_only_ttf_otf)
         }
         val destName = "$name.${if (ext == "otf") "otf" else "ttf"}"
         if (fontStore.list().any { it.name.equals(destName, ignoreCase = true) }) {
-            return "فونتی با این اسم قبلاً اضافه شده."
+            return context.getString(R.string.font_already_added)
         }
         fontStore.addFont(destName, tmp)
         tmp.delete()
         null
     } catch (e: Exception) {
-        "کپی کردن فایل فونت انجام نشد."
+        context.getString(R.string.font_copy_failed)
     }
 }

@@ -2,6 +2,7 @@ package com.novelfa.reader.settings
 
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.library.PinGate
+import com.novelfa.reader.R
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -10,8 +11,8 @@ import javax.crypto.spec.PBEKeySpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** Thrown for PIN validation failures; message is user-facing fa text. */
-class PinException(messageFa: String) : IllegalArgumentException(messageFa)
+/** Thrown for PIN validation failures; carries a string resource ID. */
+class PinException(val resId: Int) : IllegalArgumentException()
 
 /**
  * Sync PIN-hash store. Production bridges Task 3 PrefsStore (DataStore) via
@@ -77,15 +78,15 @@ class PinManager(private val prefs: PinPrefs) : PinGate {
         true
     }
 
-    /** Stores a new PIN (always v2); rejects PINs shorter than 4 chars (fa message). Raw input, like C#. */
+    /** Stores a new PIN (always v2); rejects PINs shorter than 4 chars. Raw input, like C#. */
     suspend fun setPin(pin: String) = withContext(Dispatchers.Default) {
-        if (pin.length < 4) throw PinException("پین باید حداقل ۴ کاراکتر باشه")
+        if (pin.length < 4) throw PinException(R.string.the_pin_must_be_at_least_4_characters)
         prefs.setPinHash(hashPinSecure(pin))
     }
 
     /** Verifies the old PIN first, then stores the new one. */
     suspend fun changePin(old: String, new: String) = withContext(Dispatchers.Default) {
-        if (!verify(old)) throw PinException("پین اشتباهه")
+        if (!verify(old)) throw PinException(R.string.wrong_pin)
         setPin(new)
     }
 

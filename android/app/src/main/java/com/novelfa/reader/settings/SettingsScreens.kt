@@ -215,11 +215,11 @@ private fun ReaderDefaultsSection(viewModel: SettingsViewModel, fontStore: FontS
     var fontDialog by remember { mutableStateOf(false) }
     var familyEdit by remember { mutableStateOf(false) }
     var familyText by remember { mutableStateOf(fontFamily) }
+    val invalidFontMsg = stringResource(R.string.invalid_font_name)
 
     SectionCard(title = stringResource(R.string.reading_page)) {
         IntStepper(
-            // Hardcoded fa label (no short "font size" Loc key; Task 7 precedent).
-            label = "اندازه‌ی فونت",
+            label = stringResource(R.string.font_size),
             value = fontSize,
             step = 1,
             range = 10..72,
@@ -288,7 +288,7 @@ private fun ReaderDefaultsSection(viewModel: SettingsViewModel, fontStore: FontS
                         if (viewModel.setFontFamily(familyText)) {
                             familyEdit = false
                         } else {
-                            familyError = "اسم فونت معتبر نیست."
+                            familyError = invalidFontMsg
                         }
                     }
                 }) {
@@ -384,8 +384,7 @@ private fun PinSection(viewModel: SettingsViewModel, notify: (String) -> Unit) {
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 OutlinedButton(onClick = { removeConfirm = true }, modifier = Modifier.weight(1f)) {
-                    // No Loc key for PIN removal; hardcoded fa like Task 7 sheets.
-                    Text("حذف پین")
+                    Text(stringResource(R.string.remove_pin))
                 }
             }
         }
@@ -417,8 +416,8 @@ private fun PinSection(viewModel: SettingsViewModel, notify: (String) -> Unit) {
     if (removeConfirm) {
         AlertDialog(
             onDismissRequest = { removeConfirm = false },
-            title = { Text("حذف پین") },
-            text = { Text("پین حذف بشه و بخش خصوصی بدون قفل باز بشه؟") },
+            title = { Text(stringResource(R.string.remove_pin)) },
+            text = { Text(stringResource(R.string.remove_pin_confirm)) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
