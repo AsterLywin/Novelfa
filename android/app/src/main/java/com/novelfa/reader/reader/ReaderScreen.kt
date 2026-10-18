@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -66,6 +69,7 @@ import com.novelfa.reader.parser.EpubParser
 import com.novelfa.reader.settings.SupportDialog
 import com.novelfa.reader.settings.SupportTracker
 import com.novelfa.reader.theme.Themes
+import com.novelfa.reader.theme.ThemePreviewCard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -627,40 +631,55 @@ fun ReaderScreen(
         val v = vm
         // Combined list: static themes + character night/day pages (WPF parity).
         val allThemes = remember { Themes.ALL + characterPages() }
-        AlertDialog(
-            onDismissRequest = { themeOpen = false },
-            title = { Text(stringResource(R.string.choose_theme)) },
-            text = {
-                LazyColumn {
-                    items(allThemes.size) { i ->
-                        val t = allThemes[i]
-                        TextButton(onClick = {
-                            scope.launch {
-                                if (v?.applyTheme(t) == true) {
-                                    pageHtml = v.html
-                                    pageBase = v.baseUrl
-                                    rev++
-                                    // Persisted per book (WPF parity).
-                                    withContext(Dispatchers.IO) {
-                                        prefs.setReaderTheme(bookId, t.key)
+        val currentKey = v?.theme?.key
+        Dialog(onDismissRequest = { themeOpen = false }) {
+            Card(modifier = Modifier.padding(8.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.choose_theme),
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    // Two-column grid: each card shows a palette preview so
+                    // the user sees what the theme looks like before picking.
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.height(420.dp)
+                    ) {
+                        items(allThemes, key = { it.key }) { t ->
+                            ThemePreviewCard(
+                                theme = t,
+                                selected = t.key == currentKey,
+                                onClick = {
+                                    scope.launch {
+                                        if (v?.applyTheme(t) == true) {
+                                            pageHtml = v.html
+                                            pageBase = v.baseUrl
+                                            rev++
+                                            // Persisted per book (WPF parity).
+                                            withContext(Dispatchers.IO) {
+                                                prefs.setReaderTheme(bookId, t.key)
+                                            }
+                                        } else {
+                                            snackbar.showSnackbar(themeErr)
+                                        }
+                                        themeOpen = false
                                     }
-                                } else {
-                                    snackbar.showSnackbar(themeErr)
                                 }
-                                themeOpen = false
-                            }
-                        }) {
-                            Text(ReaderViewModel.themeDisplayName(t.key))
+                            )
                         }
                     }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { themeOpen = false }) {
-                    Text(stringResource(R.string.cancel))
+                    TextButton(
+                        onClick = { themeOpen = false },
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text(stringResource(R.string.cancel))
+                    }
                 }
             }
-        )
+        }
     }
 
     if (fontOpen) {
