@@ -32,7 +32,9 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -51,6 +53,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -72,6 +75,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -83,6 +87,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -191,6 +196,16 @@ fun LibraryScreen(
         }
     }
     var gridView by rememberSaveable { mutableStateOf(true) }
+    // Scroll states for the library grid/list: the import FAB turns
+    // translucent while the list sits at the very top so the book cards
+    // underneath stay visible, and opaque once scrolled.
+    val gridState = rememberLazyGridState()
+    val listState = rememberLazyListState()
+    val atTop = if (gridView) {
+        gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
+    } else {
+        listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+    }
     val books by remember(tab, debouncedQuery) { viewModel.filtered(tab, debouncedQuery) }
         .collectAsState(initial = emptyList())
     val allBooks by viewModel.books.collectAsState(initial = emptyList())
@@ -421,7 +436,10 @@ fun LibraryScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { launchImport() }) {
+            FloatingActionButton(
+                onClick = { launchImport() },
+                modifier = Modifier.alpha(if (atTop) 0.55f else 1f)
+            ) {
                 Text("+")
             }
         }
@@ -441,6 +459,7 @@ fun LibraryScreen(
             if (gridView) {
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(140.dp),
+                    state = gridState,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier
@@ -479,7 +498,7 @@ fun LibraryScreen(
                         if (query.isNotBlank() && allBooks.isNotEmpty()) {
                             NoSearchResults()
                         } else {
-                            EmptyLibrary(onImport = { launchImport() })
+                            EmptyLibrary(tab = tab, onImport = { launchImport() })
                         }
                     }
                 } else {
@@ -528,6 +547,7 @@ fun LibraryScreen(
             }
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 12.dp),
@@ -563,7 +583,7 @@ fun LibraryScreen(
                         if (query.isNotBlank() && allBooks.isNotEmpty()) {
                             NoSearchResults()
                         } else {
-                            EmptyLibrary(onImport = { launchImport() })
+                            EmptyLibrary(tab = tab, onImport = { launchImport() })
                         }
                     }
                 } else {
@@ -845,11 +865,62 @@ fun LibraryScreen(
         )
     }
 
+    // Duplicate import: the overwrite confirmation that importUris() arms.
+    // (This render was missing, so no dialog ever appeared.)
+    if (pendingDuplicates.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = {
+                pendingDuplicates = emptyList()
+                pendingDuplicateNames = emptyList()
+            },
+            title = { Text(stringResource(R.string.duplicate_file_title)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.duplicate_file_message))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        pendingDuplicateNames.take(5).joinToString("\n"),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (pendingDuplicateNames.size > 5) {
+                        Text(
+                            "… +${pendingDuplicateNames.size - 5}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val uris = pendingDuplicates
+                    pendingDuplicates = emptyList()
+                    pendingDuplicateNames = emptyList()
+                    scope.launch {
+                        val summary = viewModel.overwriteDuplicates(uris)
+                        val parts = mutableListOf<String>()
+                        if (summary.added > 0) parts.add(addedFmt.format(summary.added))
+                        if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
+                        if (parts.isNotEmpty()) {
+                            snackbar.showSnackbar(parts.joinToString("، "))
+                        }
+                    }
+                }) { Text(stringResource(R.string.yes_overwrite)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingDuplicates = emptyList()
+                    pendingDuplicateNames = emptyList()
+                }) { Text(stringResource(R.string.no)) }
+            }
+        )
+    }
+
     if (avatarOpen) {
         AlertDialog(
             onDismissRequest = { avatarOpen = false },
-            title = { Text(stringResource(R.string.choose_avatar)) },
-            text = {
+            title = { Text(stringResource(R.string.choose_avatar)) },            text = {
                 Column {
                     TextButton(onClick = {
                         scope.launch {
@@ -1352,17 +1423,34 @@ private fun SortViewRow(
 }
 
 @Composable
-private fun EmptyLibrary(onImport: () -> Unit) {
+private fun EmptyLibrary(tab: Tab, onImport: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(stringResource(R.string.empty_library))
-        Text(
-            stringResource(R.string.empty_library_hint),
-            style = MaterialTheme.typography.labelMedium
-        )
-        TextButton(onClick = onImport) { Text(stringResource(R.string.add_book)) }
+        if (tab == Tab.ALL) {
+            Text(stringResource(R.string.empty_library))
+            Text(
+                stringResource(R.string.empty_library_hint),
+                style = MaterialTheme.typography.labelMedium
+            )
+            TextButton(onClick = onImport) { Text(stringResource(R.string.add_book)) }
+        } else {
+            // Per-tab empty message: the library is not empty, this tab just
+            // has no books yet (e.g. «you haven't finished any book yet»).
+            Text(
+                stringResource(
+                    when (tab) {
+                        Tab.READING -> R.string.empty_tab_reading
+                        Tab.COMPLETED -> R.string.empty_tab_completed
+                        Tab.RECENT -> R.string.empty_tab_recent
+                        Tab.FAVORITES -> R.string.empty_tab_favorites
+                        Tab.PRIVATE -> R.string.empty_tab_private
+                        Tab.ALL -> R.string.empty_library // unreachable
+                    }
+                )
+            )
+        }
     }
 }
 
@@ -1640,6 +1728,22 @@ private fun BookMenuDialog(
     )
 }
 
+/**
+ * True when the text's first strong-directional character is RTL
+ * (Arabic/Persian/Hebrew). Empty or direction-neutral text defaults to RTL,
+ * matching the app's Persian UI.
+ */
+private fun isRtlText(s: String): Boolean {
+    for (c in s) {
+        when (Character.getDirectionality(c)) {
+            Character.DIRECTIONALITY_RIGHT_TO_LEFT,
+            Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC -> return true
+            Character.DIRECTIONALITY_LEFT_TO_RIGHT -> return false
+        }
+    }
+    return true
+}
+
 @Composable
 private fun ProfileNameDialog(
     title: String,
@@ -1661,6 +1765,11 @@ private fun ProfileNameDialog(
                     onValueChange = { text = it; error = false },
                     singleLine = true,
                     isError = error,
+                    // Align with the text's own direction: Persian names sit
+                    // on the right, Latin names on the left.
+                    textStyle = LocalTextStyle.current.copy(
+                        textAlign = if (isRtlText(text)) TextAlign.Right else TextAlign.Left
+                    ),
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                 )
             }
