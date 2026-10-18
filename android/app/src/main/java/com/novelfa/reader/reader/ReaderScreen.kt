@@ -377,8 +377,17 @@ fun ReaderScreen(
         val readerParticleType = remember(readerCharThemeId) {
             CharacterThemes.find(readerCharThemeId)?.particle.orEmpty()
         }
+        val readerParticleTheme = remember(readerCharThemeId) {
+            CharacterThemes.find(readerCharThemeId)
+        }
+        val readerThemeKey by prefs.theme.collectAsState(initial = "dark")
         Box(modifier = Modifier.fillMaxSize()) {
-            ParticleLayer(type = readerParticleType, enabled = particlesOn)
+            ParticleLayer(
+                type = readerParticleType,
+                enabled = particlesOn,
+                theme = readerParticleTheme,
+                light = readerThemeKey == "light"
+            )
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },
             containerColor = Color.Transparent,

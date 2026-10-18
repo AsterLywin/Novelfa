@@ -17,6 +17,7 @@ import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.buildPlainPalette
 import com.novelfa.reader.theme.hexToColor
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
@@ -71,7 +72,14 @@ fun NovelfaApp(
     }
     MaterialTheme(colorScheme = colorScheme) {
         CompositionLocalProvider(LocalAppPaletteExtras provides paletteExtras) {
-            Box(modifier = Modifier.fillMaxSize()) {
+            // The app background MUST come from the color scheme: screens like
+            // the library use a transparent Scaffold, so without this the
+            // dark Activity window background shows through even in light mode.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+            ) {
                 // Aura background layer (behind all content), Windows parity:
                 // two radial gradients at 0.22-0.30 alpha.
                 if (paletteExtras.hasCharacterTheme) {

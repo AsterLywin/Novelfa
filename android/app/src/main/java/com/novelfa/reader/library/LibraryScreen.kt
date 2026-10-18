@@ -409,16 +409,37 @@ fun LibraryScreen(
     val particleType = remember(charThemeId) {
         CharacterThemes.find(charThemeId)?.particle.orEmpty()
     }
+    val particleTheme = remember(charThemeId) { CharacterThemes.find(charThemeId) }
+    val appThemeKey by prefs.theme.collectAsState(initial = "dark")
 
     Box(modifier = Modifier.fillMaxSize()) {
-        ParticleLayer(type = particleType, enabled = particlesOn)
+        ParticleLayer(
+            type = particleType,
+            enabled = particlesOn,
+            theme = particleTheme,
+            light = appThemeKey == "light"
+        )
 
         Scaffold(
             containerColor = Color.Transparent,
             snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
+                // The Novelfa logo replaces the text title; white artwork on
+                // dark themes, black artwork on light themes. The PNGs live in
+                // drawable-nodpi/ (copied by Aster; binaries can't be pushed
+                // via the GitHub connector).
+                title = {
+                    Image(
+                        painter = painterResource(
+                            if (appThemeKey == "light") R.drawable.novelfa_logo_on_light
+                            else R.drawable.novelfa_logo_on_dark
+                        ),
+                        contentDescription = stringResource(R.string.app_name),
+                        modifier = Modifier.height(36.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                },
                 // Match the Windows version: header uses the background color
                 // (Bg), not the card/surface color.
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -1801,11 +1822,14 @@ private fun AboutDialog(onDismiss: () -> Unit) {
         }.getOrNull() ?: ""
     }
     // WPF parity: channel / donate / boost rows (DarkMessageBox.cs:636-638).
-    val links = remember {
+    val chLabel = stringResource(R.string.link_channel)
+    val doLabel = stringResource(R.string.link_donate)
+    val boLabel = stringResource(R.string.link_boost)
+    val links = remember(chLabel, doLabel, boLabel) {
         listOf(
-            Triple("کانال", "t.me/NoveIFa", "https://t.me/NoveIFa"),
-            Triple("دونیت", "Daramet.com/NovelFa", "http://Daramet.com/NovelFa"),
-            Triple("بوست", "t.me/NoveIFa?boost", "https://t.me/NoveIFa?boost")
+            Triple(chLabel, "t.me/NoveIFa", "https://t.me/NoveIFa"),
+            Triple(doLabel, "Daramet.com/NovelFa", "http://Daramet.com/NovelFa"),
+            Triple(boLabel, "t.me/NoveIFa?boost", "https://t.me/NoveIFa?boost")
         )
     }
     val copiedMsg = stringResource(R.string.copied)
