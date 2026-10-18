@@ -9,6 +9,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -114,6 +115,7 @@ import java.util.Calendar
 import androidx.compose.material3.CardDefaults
 import androidx.compose.ui.graphics.Brush
 import com.novelfa.reader.theme.LocalAppPaletteExtras
+import com.novelfa.reader.theme.ParticleLayer
 
 private val TABS = listOf(
     Tab.ALL to R.string.all_books,
@@ -164,6 +166,10 @@ fun LibraryScreen(
     val secretCodes = remember {
         listOf("BEAKO" to "beatrice", "EMT" to "emilia", "TEA" to "echidna")
     }
+    // Single rank-prefs bridge for the screen: it preloads on IO once and
+    // serves reads from memory (no runBlocking on the UI thread).
+    // Defined here (before handleQuery) so the secret-code unlock can use it.
+    val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
     fun handleQuery(newQuery: String) {
         query = newQuery
         val run = newQuery.takeLastWhile { it in 'A'..'Z' || it in 'a'..'z' }
@@ -293,14 +299,7 @@ fun LibraryScreen(
     var gateTick by remember { mutableIntStateOf(0) }
     // Task 8: refresh reading rank on first composition and whenever the tab
     // changes (approximation of "resume"), plus private-tab session unlock.
-    val context = LocalContext.current
-    // PrefsStore must be built on the application context: the DataStore
-    // delegate is process-wide, so an Activity context would leak the
-    // Activity on recreation (e.g. in-app language change).
-    val prefs = remember(context) { PrefsStore(context.applicationContext) }
-    // Single rank-prefs bridge for the screen: it preloads on IO once and
-    // serves reads from memory (no runBlocking on the UI thread).
-    val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
+    // (context/prefs/rankPrefs moved earlier, before handleQuery)
     // initial=null: the placeholder must be distinguishable from a real blank
     // value, otherwise the welcome dialog opens on every cold start before
     // DataStore delivers the saved name (and never closes afterwards).
@@ -519,7 +518,7 @@ fun LibraryScreen(
                             missingFile = book.id in missingIds,
                             selected = book.id in selection,
                             // Bite mark: completed books only, tsugi theme only.
-                            showBite = charThemeId == "tsugi" && isCompleted(book)
+                            showBite = charThemeId == "tsugi" && isCompleted(book),
                         )
                     }
                 }
@@ -601,9 +600,7 @@ fun LibraryScreen(
                             },
                             onMenuClick = { menuFor = book },
                             missingFile = book.id in missingIds,
-                            selected = book.id in selection,
-                            // Bite mark: completed books only, tsugi theme only.
-                            showBite = charThemeId == "tsugi" && isCompleted(book)
+                            selected = book.id in selection
                         )
                     }
                 }
@@ -1393,6 +1390,7 @@ private fun PrivateLockedGate(onUnlock: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 fun BookCard(
     book: BookEntity,
     title: String,
@@ -1531,6 +1529,7 @@ fun BookCard(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun BookRow(
     book: BookEntity,
     title: String,
