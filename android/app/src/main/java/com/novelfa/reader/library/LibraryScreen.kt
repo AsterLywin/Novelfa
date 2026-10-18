@@ -166,9 +166,13 @@ fun LibraryScreen(
     val secretCodes = remember {
         listOf("BEAKO" to "beatrice", "EMT" to "emilia", "TEA" to "echidna")
     }
+    val context = LocalContext.current
+    // PrefsStore must be built on the application context: the DataStore
+    // delegate is process-wide, so an Activity context would leak the
+    // Activity on recreation (e.g. in-app language change).
+    val prefs = remember(context) { PrefsStore(context.applicationContext) }
     // Single rank-prefs bridge for the screen: it preloads on IO once and
     // serves reads from memory (no runBlocking on the UI thread).
-    // Defined here (before handleQuery) so the secret-code unlock can use it.
     val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
     fun handleQuery(newQuery: String) {
         query = newQuery
@@ -299,7 +303,6 @@ fun LibraryScreen(
     var gateTick by remember { mutableIntStateOf(0) }
     // Task 8: refresh reading rank on first composition and whenever the tab
     // changes (approximation of "resume"), plus private-tab session unlock.
-    // (context/prefs/rankPrefs moved earlier, before handleQuery)
     // initial=null: the placeholder must be distinguishable from a real blank
     // value, otherwise the welcome dialog opens on every cold start before
     // DataStore delivers the saved name (and never closes afterwards).
@@ -1388,9 +1391,8 @@ private fun PrivateLockedGate(onUnlock: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-@OptIn(ExperimentalFoundationApi::class)
 fun BookCard(
     book: BookEntity,
     title: String,
