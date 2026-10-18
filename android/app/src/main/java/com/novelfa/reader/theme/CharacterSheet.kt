@@ -13,7 +13,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -65,6 +69,7 @@ fun CharacterSheet(
                         val locked = !isUnlocked(theme)
                         CharacterRow(
                             letter = theme.nameFa.firstOrNull()?.toString() ?: "؟",
+                            theme = theme,
                             name = theme.nameFa,
                             tagline = theme.taglineFa,
                             nightBg = theme.dark.card,
@@ -100,6 +105,7 @@ fun CharacterSheet(
 @Composable
 private fun CharacterRow(
     letter: String,
+    theme: CharacterTheme? = null,
     name: String,
     tagline: String,
     nightBg: String,
@@ -123,7 +129,27 @@ private fun CharacterRow(
                 .background(hexToColor(accent)),
             contentAlignment = Alignment.Center
         ) {
-            Text(text = letter, color = hexToColor(nightBg))
+            val emblem = remember(theme?.id) { theme?.emblemPath() }
+            if (emblem != null) {
+                Canvas(modifier = Modifier.size(28.dp)) {
+                    // Scale the 100x100 emblem to fit
+                    val scale = size.minDimension / 100f
+                    withTransform({ scale(scale, scale) }) {
+                        drawPath(
+                            path = emblem,
+                            brush = Brush.linearGradient(
+                                colors = listOf(
+                                    hexToColor(theme!!.dark.accent),
+                                    hexToColor(theme.dark.grad1)
+                                )
+                            ),
+                            alpha = 0.9f
+                        )
+                    }
+                }
+            } else {
+                Text(text = letter, color = hexToColor(nightBg))
+            }
         }
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {

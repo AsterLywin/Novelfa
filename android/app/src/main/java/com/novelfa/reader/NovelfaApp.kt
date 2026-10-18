@@ -14,7 +14,19 @@ import android.net.Uri
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.theme.Accent
 import com.novelfa.reader.theme.CharacterThemes
+import com.novelfa.reader.theme.buildPlainPalette
 import com.novelfa.reader.theme.hexToColor
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import com.novelfa.reader.theme.AppPaletteExtras
+import com.novelfa.reader.theme.LocalAppPaletteExtras
+import com.novelfa.reader.theme.parseHex
 
 /**
  * Root: the Material3 color scheme is fully driven by the user's settings.
@@ -42,11 +54,39 @@ fun NovelfaApp(
     val colorScheme = remember(isLight, accentHex, charThemeId) {
         buildAppColorScheme(isLight, accentHex, charThemeId)
     }
+    // Character-theme aura/gradient extras (Windows ThemeManager parity).
+    val paletteExtras = remember(charThemeId, isLight) {
+        val theme = charThemeId.takeIf { it.isNotBlank() }?.let { CharacterThemes.find(it) }
+        if (theme != null) {
+            val p = theme.palette(isLight)
+            AppPaletteExtras(
+                aura1 = parseHex(p.aura1),
+                aura2 = parseHex(p.aura2),
+                accentGrad1 = parseHex(p.grad1),
+                accentGrad2 = parseHex(p.grad2),
+                hasCharacterTheme = true
+            )
+        } else {
+            AppPaletteExtras()
+        }
+    }
     MaterialTheme(colorScheme = colorScheme) {
-        NavGraph(
-            openEpubUri = openEpubUri,
-            onEpubUriConsumed = onEpubUriConsumed
-        )
+        CompositionLocalProvider(LocalAppPaletteExtras provides paletteExtras) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                // Aura background layer (behind all content), Windows parity:
+                // two radial gradients at 0.22-0.30 alpha.
+                if (paletteExtras.hasCharacterTheme) {
+                    AuraBackground(
+                        aura1 = paletteExtras.aura1,
+                        aura2 = paletteExtras.aura2
+                    )
+                }
+                NavGraph(
+                    openEpubUri = openEpubUri,
+                    onEpubUriConsumed = onEpubUriConsumed
+                )
+            }
+        }
     }
 }
 
@@ -82,13 +122,24 @@ private fun buildAppColorScheme(
         }
     }
 
-    // Otherwise the accent preset recolors the primary roles of the scheme.
-    val accent = parseHex(accentHex, Accent.DEFAULT)
+    // Otherwise the accent preset tints the whole UI via the HSL palette
+    // (Windows ThemeManager parity): backgrounds, cards, text, borders, etc.
+    // all derive from the accent hue.
+    val palette = buildPlainPalette(isLight, accentHex)
     return base.copy(
-        primary = accent,
-        onPrimary = accent.contrastOn(),
-        primaryContainer = accent.copy(alpha = 0.25f),
-        onPrimaryContainer = accent.contrastOn()
+        primary = palette.accent,
+        onPrimary = palette.onAccent,
+        primaryContainer = palette.accentDark,
+        onPrimaryContainer = palette.onAccent,
+        secondary = palette.hero1,
+        tertiary = palette.hero2,
+        background = palette.bg,
+        onBackground = palette.text,
+        surface = palette.card,
+        onSurface = palette.text,
+        surfaceVariant = palette.soft,
+        onSurfaceVariant = palette.muted,
+        outline = palette.border
     )
 }
 
@@ -108,4 +159,40 @@ private fun parseHex(hex: String, fallback: Color): Color {
 private fun Color.contrastOn(): Color {
     val lum = 0.2126f * red + 0.7152f * green + 0.0722f * blue
     return if (lum > 0.55f) Color.Black else Color.White
+}
+
+/**
+ * Two radial-gradient aura blobs behind the app content,
+ * port of MainWindow.xaml:32-36 (ThemeAuraA/B borders).
+ */
+@androidx.compose.runtime.Composable
+private fun AuraBackground(aura1: Color, aura2: Color) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        // Top aura (0.85 radius, 0.22 alpha like Windows)
+        drawRect(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    aura1.copy(alpha = 0.22f),
+                    Color.Transparent
+                ),
+                center = androidx.compose.ui.geometry.Offset(w * 0.85f, h * 0.15f),
+                radius = w * 0.85f
+            ),
+            size = size
+        )
+        // Bottom aura (0.30 alpha)
+        drawRect(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    aura2.copy(alpha = 0.30f),
+                    Color.Transparent
+                ),
+                center = androidx.compose.ui.geometry.Offset(w * 0.15f, h * 0.85f),
+                radius = w * 0.85f
+            ),
+            size = size
+        )
+    }
 }

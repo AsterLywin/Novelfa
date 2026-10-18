@@ -69,12 +69,15 @@ import com.novelfa.reader.theme.Themes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 import java.util.zip.ZipFile
 import androidx.compose.material3.rememberDrawerState
+import com.novelfa.reader.theme.CharacterThemes
+import com.novelfa.reader.ui.ParticleLayer
 
 /**
  * Route `reader/{bookId}`: top bar (dir-aware chapter title + position
@@ -189,10 +192,12 @@ fun ReaderScreen(
             }
             val savedTheme = withContext(Dispatchers.IO) { prefs.getReaderTheme(bookId) }
             val savedMode = withContext(Dispatchers.IO) { prefs.getReadingMode() }
+            val charThemeId = withContext(Dispatchers.IO) { prefs.charTheme.first() }
+            val isLight = withContext(Dispatchers.IO) { prefs.theme.first() == "light" }
             val v = ReaderViewModel(
                 dao, bookId, entity.copy(totalChapters = parsed.chapters.size),
                 parsed.chapters,
-                theme = Themes.findStatic(savedTheme) ?: Themes.DARK,
+                theme = ReaderViewModel.themeForBook(savedTheme, charThemeId, isLight),
                 fontFiles = files
             )
             v.readingMode = ReadingMode.fromKey(savedMode)
@@ -360,8 +365,18 @@ fun ReaderScreen(
             }
         }
     ) {
+        // Windows parity: character-theme particles on the reading page
+        // (ThemeParticles.cs draws over the whole window including reader).
+        val particlesOn by prefs.themeParticles.collectAsState(initial = false)
+        val readerCharThemeId by prefs.charTheme.collectAsState(initial = "")
+        val readerParticleType = remember(readerCharThemeId) {
+            CharacterThemes.find(readerCharThemeId)?.particle.orEmpty()
+        }
+        Box(modifier = Modifier.fillMaxSize()) {
+            ParticleLayer(type = readerParticleType, enabled = particlesOn)
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },
+            containerColor = Color.Transparent,
             topBar = {
                 if (!fullscreenUi) {
                 val v = vm
@@ -609,13 +624,15 @@ fun ReaderScreen(
 
     if (themeOpen) {
         val v = vm
+        // Combined list: static themes + character night/day pages (WPF parity).
+        val allThemes = remember { Themes.ALL + characterPages() }
         AlertDialog(
             onDismissRequest = { themeOpen = false },
             title = { Text(stringResource(R.string.choose_theme)) },
             text = {
                 LazyColumn {
-                    items(Themes.ALL.size) { i ->
-                        val t = Themes.ALL[i]
+                    items(allThemes.size) { i ->
+                        val t = allThemes[i]
                         TextButton(onClick = {
                             scope.launch {
                                 if (v?.applyTheme(t) == true) {
@@ -632,7 +649,7 @@ fun ReaderScreen(
                                 themeOpen = false
                             }
                         }) {
-                            Text(Themes.NAMES_FA[t.key] ?: t.key)
+                            Text(ReaderViewModel.themeDisplayName(t.key))
                         }
                     }
                 }
@@ -700,6 +717,7 @@ fun ReaderScreen(
             }
         )
     }
+        } // Close particle Box
 }
 
 @Composable

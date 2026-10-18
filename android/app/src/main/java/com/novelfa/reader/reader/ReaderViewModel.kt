@@ -134,6 +134,55 @@ class ReaderViewModel(
          * "full" so the WebView reloads instead of appending.
          */
         const val MAX_WINDOW_SPAN = 7
+
+        /**
+         * Find a reader theme by key: first in Themes.ALL (static), then in
+         * characterPages() (rz.*). Port of MainWindow.FindTheme.
+         */
+        fun findTheme(key: String): ReaderTheme? {
+            Themes.ALL.firstOrNull { it.key == key }?.let { return it }
+            return characterPages().firstOrNull { it.key == key }
+        }
+
+        /**
+         * Resolve the theme for a book, port of MainWindow.GetThemeForBook:
+         * dark/white become the character's night/day page when a character
+         * theme is active; rz.* without a character falls back to dark/white.
+         */
+        fun themeForBook(
+            savedKey: String?,
+            charThemeId: String?,
+            isLight: Boolean
+        ): ReaderTheme {
+            var key = savedKey?.takeIf { it.isNotBlank() }
+                ?: if (isLight) "white" else "dark"
+            val ch = charThemeId?.takeIf { it.isNotBlank() }?.let { CharacterThemes.find(it) }
+            if (ch != null) {
+                if (key == "dark" || (key.startsWith("rz.") && key.endsWith(".night"))) {
+                    key = ch.pageKeyNight
+                } else if (key == "white" || (key.startsWith("rz.") && key.endsWith(".day"))) {
+                    key = ch.pageKeyDay
+                }
+            } else if (key.startsWith("rz.")) {
+                key = if (key.endsWith(".night")) "dark" else "white"
+            }
+            return findTheme(key) ?: Themes.DARK
+        }
+
+        /**
+         * Persian display name for a reader theme: static themes use
+         * Themes.NAMES_FA; character pages get "شبِ X" / "روزِ X".
+         */
+        fun themeDisplayName(key: String): String {
+            Themes.NAMES_FA[key]?.let { return it }
+            if (key.startsWith("rz.")) {
+                val id = key.removePrefix("rz.").substringBefore('.')
+                val name = CharacterThemes.find(id)?.nameFa ?: id
+                val suffix = if (key.endsWith(".night")) "شب" else "روز"
+                return "$suffixِ $name"
+            }
+            return key
+        }
     }
 
     private var lastSaveMs: Long = 0L
@@ -457,6 +506,7 @@ class ReaderViewModel(
         theme = t
         return if (html.isNotEmpty()) reloadForSettings() else true
     }
+
 
     fun spacingCss(): String =
         HtmlBuilder.spacingCss(lineHeight, sideMargin, paragraphSpacing)
