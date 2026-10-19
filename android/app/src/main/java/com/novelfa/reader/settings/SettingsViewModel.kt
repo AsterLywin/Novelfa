@@ -94,10 +94,11 @@ class SettingsViewModel(
         val idx = service.rankIndexFor(done)
         val current = RankService.Ranks[idx]
         val next = RankService.Ranks.getOrNull(idx + 1)
+        val isEnglish = prefs.lang.first().startsWith("en")
         return RankSummary(
             completed = done,
-            currentName = current.nameFa,
-            nextName = next?.nameFa,
+            currentName = current.displayName(isEnglish),
+            nextName = next?.displayName(isEnglish),
             remaining = if (next != null) (next.minBooks - done).coerceAtLeast(0) else 0
         )
     }
