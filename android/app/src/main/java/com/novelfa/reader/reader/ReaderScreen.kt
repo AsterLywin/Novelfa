@@ -13,8 +13,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -52,9 +56,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -497,6 +506,20 @@ fun ReaderScreen(
                             },
                             enabled = v != null
                         ) { Text("−A") }
+                        // Numeric size box between −A and +A (WPF txtFontSize
+                        // parity): shows the current size, tap to type one.
+                        FontSizeBox(
+                            fontSize = v?.fontSize ?: 18,
+                            enabled = v != null,
+                            onCommit = { size ->
+                                scope.launch {
+                                    val vv = vm ?: return@launch
+                                    vv.setFontSize(size)
+                                    pageHtml = vv.html
+                                    rev++
+                                }
+                            }
+                        )
                         TextButton(
                             onClick = {
                                 scope.launch {
@@ -941,4 +964,82 @@ private fun ReadingModeChoice(
             else MaterialTheme.colorScheme.onSurface
         )
     }
+}
+
+/**
+ * Numeric font-size box between −A and +A — port of WPF txtFontSize
+ * (MainWindow.xaml:101 + ApplyFontSize/CommitFontSizeText).
+ *
+ * Shows the current size; tap to type a new one. Windows parity:
+ * - digits only (MaxLength=2); Persian/Arabic digits are accepted and
+ *   normalized to English digits on commit (NormalizeDigits parity);
+ * - Done/Enter commits, clamped to 10..72;
+ * - focus loss commits (LostFocus parity);
+ * - invalid/empty input reverts to the current size;
+ * - A+/A− presses update the box via [fontSize].
+ */
+@Composable
+private fun FontSizeBox(
+    fontSize: Int,
+    enabled: Boolean,
+    onCommit: (Int) -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+    // Reset to the live size whenever it changes externally (A+/A−);
+    // while the user types, fontSize doesn't change so their input is kept.
+    var text by remember(fontSize) { mutableStateOf(fontSize.toString()) }
+    var wasFocused by remember { mutableStateOf(false) }
+
+    fun commit() {
+        // NormalizeDigits parity: keep every Unicode digit, map to 0-9.
+        val digits = text.filter { it.isDigit() }
+            .map { Character.getNumericValue(it) }
+            .joinToString("") { it.toString() }
+        val value = digits.toIntOrNull()
+        if (value != null) {
+            onCommit(value.coerceIn(10, 72))
+        }
+        // Revert the box to the current size (the remember(fontSize)
+        // above refreshes it once the ViewModel reports the new size).
+        text = fontSize.toString()
+    }
+
+    BasicTextField(
+        value = text,
+        onValueChange = { input ->
+            // PreviewTextInput parity: digits only, MaxLength=2.
+            text = input.filter { it.isDigit() }.take(2)
+        },
+        enabled = enabled,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.labelLarge.copy(
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurface
+        ),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Number,
+            imeAction = ImeAction.Done
+        ),
+        keyboardActions = KeyboardActions(
+            onDone = {
+                commit()
+                focusManager.clearFocus()
+            }
+        ),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        modifier = Modifier
+            .width(44.dp)
+            .onFocusChanged { state ->
+                if (wasFocused && !state.isFocused) {
+                    commit()
+                }
+                wasFocused = state.isFocused
+            }
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(6.dp)
+            )
+            .padding(vertical = 6.dp)
+    )
 }
