@@ -67,7 +67,6 @@ class ReaderViewModel(
     // the numeric box changes it (a plain var never notifies Compose).
     var fontSize by mutableIntStateOf(initialBook.fontSize.takeIf { it in 10..72 } ?: 18)
         private set
-        private set
     var lineHeight: Double
         private set
     var sideMargin: Int
