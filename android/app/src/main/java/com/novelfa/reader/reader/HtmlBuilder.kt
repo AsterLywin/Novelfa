@@ -47,7 +47,16 @@ object HtmlBuilder {
                 .append(if (isEnglish) "ltr" else "rtl").append("\"")
         }
         sb.append(themeAttr).append("><head><meta charset=\"utf-8\">")
-        sb.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+        if (paged) {
+            // Paged mode MUST render at scale 1: the 100vw pagination math
+            // (rdrTurn) breaks if the WebView zooms out to fit the whole
+            // N-page strip or the user pinch-zooms. maximum-scale=1 +
+            // user-scalable=no locks the scale; font size stays adjustable
+            // via the A+/A-/numeric controls.
+            sb.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no\">")
+        } else {
+            sb.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+        }
         sb.append("<base href=\"")
             .append(baseUrl).append("\">")
         sb.append("<style>html,body{margin:0;padding:0;background-color:")
