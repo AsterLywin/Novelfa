@@ -49,7 +49,7 @@ fun ParticleLayer(
         if (type == "butterflies") theme?.emblemPath else null
     }
     val glyphs = remember(type) {
-        p.glyph?.let { parseEmblemPath(GLYPH_DATA[it]) }
+        p.glyph?.let { g -> GLYPH_DATA[g]?.let { parseEmblemPath(it) } }
     }
     val seeds = remember(type) { List(p.count) { ParticleSeed(it, p) } }
     var tick by remember { mutableLongStateOf(0L) }
