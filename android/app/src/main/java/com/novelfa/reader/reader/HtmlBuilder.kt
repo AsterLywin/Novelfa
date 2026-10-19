@@ -136,6 +136,50 @@ object HtmlBuilder {
         sb.append("var n=count-1;")
         sb.append("window.scrollTo({left:rtl?-n*w:n*w});")
         sb.append("return 'ok';}catch(x){return 'no';}}")
+        // Fit images to the page (paged mode only). A short image needs no
+        // vertical scroll and is left untouched. An image taller than one
+        // page would otherwise be clipped by overflow-y:hidden — or, via
+        // the multicol balancer, force extra (near-empty) columns that
+        // rdrTurn counts as phantom pages. Instead it is wrapped in a
+        // vertically-scrollable box of exactly one page height: the image
+        // keeps its natural size and scrolls INSIDE the page. The wrapper
+        // is break-inside:avoid so it never splits across the page edge.
+        // Runs on DOMContentLoaded (cached images), window load, resize,
+        // and per-image load for images still fetching.
+        sb.append("function rdrFitImages(){try{")
+        sb.append("var de=document.documentElement;")
+        sb.append("if(!de.classList.contains('rdr-paged'))return;")
+        sb.append("var ch=Math.max(200,(de.clientHeight||window.innerHeight||600)-40);")
+        sb.append("var imgs=document.getElementsByTagName('img');")
+        sb.append("for(var i=0;i<imgs.length;i++){")
+        sb.append("var im=imgs[i];")
+        sb.append("if(im.__rdrWrapped)continue;")
+        sb.append("if(!im.complete||!im.naturalHeight||!im.naturalWidth)continue;")
+        sb.append("var h=im.getBoundingClientRect().height;")
+        sb.append("if(h>ch){")
+        sb.append("var w=document.createElement('div');w.className='rdr-imgwrap';")
+        sb.append("w.style.maxHeight=ch+'px';")
+        sb.append("im.parentNode.insertBefore(w,im);w.appendChild(im);")
+        sb.append("im.style.maxHeight='none';im.__rdrWrapped=true;")
+        sb.append("}}}catch(x){}}")
+        sb.append("function rdrHookImages(){try{")
+        sb.append("var de=document.documentElement;")
+        sb.append("if(!de.classList.contains('rdr-paged'))return;")
+        sb.append("var imgs=document.getElementsByTagName('img');")
+        sb.append("for(var i=0;i<imgs.length;i++){")
+        sb.append("var im=imgs[i];")
+        sb.append("if(im.__rdrHooked)continue;")
+        sb.append("im.__rdrHooked=true;")
+        sb.append("if(!(im.complete&&im.naturalHeight)){")
+        sb.append("im.addEventListener('load',function(){window.rdrFitImages();});")
+        sb.append("}}}catch(x){}}")
+        sb.append("window.rdrFitImages=rdrFitImages;")
+        sb.append("function rdrFitAll(){rdrHookImages();rdrFitImages();}")
+        sb.append("if(document.readyState==='loading'){")
+        sb.append("document.addEventListener('DOMContentLoaded',rdrFitAll);}")
+        sb.append("else{rdrFitAll();}")
+        sb.append("window.addEventListener('load',rdrFitAll);")
+        sb.append("window.addEventListener('resize',rdrFitImages);")
         sb.append("})();</script></head><body>").append(bodyContent).append("</body></html>")
         return sb.toString()
     }
@@ -146,13 +190,19 @@ object HtmlBuilder {
      * can never fight the page-turn animation or land between pages.
      * Refreshed live by ReaderViewModel.refreshSpacing() when the margin
      * changes, so the margin must stay a parameter here.
+     *
+     * column-fill:auto (not the default balance): columns fill SEQUENTIALLY,
+     * like real book pages — page 1 is completed before page 2 starts.
+     * With balance, the multicol balancer can push content into extra
+     * (near-empty) columns, which rdrTurn then counts as phantom pages.
      */
     fun pagedCss(sideMargin: Int): String {
         val sb = StringBuilder()
         sb.append("html.rdr-paged,html.rdr-paged body{height:100%;}")
         sb.append("html.rdr-paged{overflow-x:hidden;overflow-y:hidden;}")
         sb.append("html.rdr-paged body{margin:0 !important;padding:16px 0 !important;")
-        sb.append("column-width:100vw;column-gap:0;box-sizing:border-box;")
+        sb.append("column-width:100vw;column-gap:0;column-fill:auto;")
+        sb.append("-webkit-column-fill:auto;box-sizing:border-box;")
         // Windows parity: chapter fades in on load (rdrFade .3s).
         sb.append("animation:rdrFade .3s ease-out;}")
         sb.append("@keyframes rdrFade{from{opacity:.3;}to{opacity:1;}}")
@@ -162,6 +212,11 @@ object HtmlBuilder {
         // Windows never fragments, so this is paged-only parity).
         sb.append("html.rdr-paged img,html.rdr-paged table,html.rdr-paged pre,")
         sb.append("html.rdr-paged figure,html.rdr-paged blockquote{break-inside:avoid;}")
+        // Tall-image scroll box (created by rdrFitImages): the image keeps
+        // its natural size and scrolls vertically INSIDE the page instead
+        // of being clipped (overflow-y:hidden) or forcing phantom columns.
+        sb.append("html.rdr-paged .rdr-imgwrap{break-inside:avoid;overflow-y:auto;")
+        sb.append("overflow-x:hidden;-webkit-overflow-scrolling:touch;}")
         return sb.toString()
     }
 
