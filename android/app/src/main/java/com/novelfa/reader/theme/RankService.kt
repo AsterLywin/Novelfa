@@ -15,7 +15,10 @@ package com.novelfa.reader.theme
  * Task 3 PrefsStore via [PrefsStoreRankPrefs] (see PrefsStore.kt
  * additive keys MAX_RANK / SECRET_THEMES).
  */
-data class RankInfo(val index: Int, val nameFa: String, val minBooks: Int)
+data class RankInfo(val index: Int, val nameFa: String, val nameEn: String, val minBooks: Int) {
+    /** Display name in the app's UI language (English names ported from EpubReader/Services/LocStrings.cs). */
+    fun displayName(isEnglish: Boolean): String = if (isEnglish) nameEn else nameFa
+}
 
 /** Minimal sync string store backing RankService. */
 interface RankPrefs {
@@ -30,13 +33,13 @@ class RankService(private val prefs: RankPrefs) {
         const val SECRET_KEY = "SecretThemes"
 
         val Ranks: List<RankInfo> = listOf(
-            RankInfo(0, "تازه‌وارد", 0),
-            RankInfo(1, "کتاب‌باز", 1),
-            RankInfo(2, "کتاب‌خور", 3),
-            RankInfo(3, "کتابدار", 10),
-            RankInfo(4, "افسانه‌ی کتابخانه", 25),
-            RankInfo(5, "دانای پلایادس", 60),
-            RankInfo(6, "هیولای پلایادس", 80)
+            RankInfo(0, "تازه‌وارد", "Newcomer", 0),
+            RankInfo(1, "کتاب‌باز", "Book Lover", 1),
+            RankInfo(2, "کتاب‌خور", "Bookworm", 3),
+            RankInfo(3, "کتابدار", "Librarian", 10),
+            RankInfo(4, "افسانه‌ی کتابخانه", "Library Legend", 25),
+            RankInfo(5, "دانای پلایادس", "Sage of Pleiades", 60),
+            RankInfo(6, "هیولای پلایادس", "Monster of Pleiades", 80)
         )
 
         /** Desc loop, like RankService.RankIndexFor. */
