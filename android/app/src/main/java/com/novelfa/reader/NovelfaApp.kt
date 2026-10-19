@@ -10,6 +10,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import android.net.Uri
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.theme.Accent
@@ -51,6 +53,11 @@ fun NovelfaApp(
     val themeKey by prefs.theme.collectAsState(initial = "dark")
     val accentHex by prefs.accent.collectAsState(initial = Accent.DEFAULT)
     val charThemeId by prefs.charTheme.collectAsState(initial = "")
+    // App layout direction follows the IN-APP language choice (not the
+    // system locale): Persian -> RTL, English -> LTR.
+    val appLang by prefs.lang.collectAsState(initial = "fa")
+    val layoutDirection =
+        if (appLang.startsWith("en")) LayoutDirection.Ltr else LayoutDirection.Rtl
     val isLight = themeKey == "light"
     val colorScheme = remember(isLight, accentHex, charThemeId) {
         buildAppColorScheme(isLight, accentHex, charThemeId)
@@ -72,7 +79,10 @@ fun NovelfaApp(
         }
     }
     MaterialTheme(colorScheme = colorScheme, typography = rememberAppTypography()) {
-        CompositionLocalProvider(LocalAppPaletteExtras provides paletteExtras) {
+        CompositionLocalProvider(
+            LocalLayoutDirection provides layoutDirection,
+            LocalAppPaletteExtras provides paletteExtras
+        ) {
             // The app background MUST come from the color scheme: screens like
             // the library use a transparent Scaffold, so without this the
             // dark Activity window background shows through even in light mode.
