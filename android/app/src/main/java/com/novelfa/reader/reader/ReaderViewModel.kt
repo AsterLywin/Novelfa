@@ -7,6 +7,9 @@ import com.novelfa.reader.theme.ReaderTheme
 import com.novelfa.reader.theme.Themes
 import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.characterPages
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import java.io.File
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
@@ -60,7 +63,10 @@ class ReaderViewModel(
 
     var fontFamily: String = initialBook.fontFamily.ifBlank { "Tahoma" }
         private set
-    var fontSize: Int = initialBook.fontSize.takeIf { it in 10..72 } ?: 18
+    // Observable so the bottom-bar FontSizeBox recomposes when A+/A- or
+    // the numeric box changes it (a plain var never notifies Compose).
+    var fontSize by mutableIntStateOf(initialBook.fontSize.takeIf { it in 10..72 } ?: 18)
+        private set
         private set
     var lineHeight: Double
         private set
