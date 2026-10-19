@@ -322,6 +322,10 @@ fun LibraryScreen(
     // value, otherwise the welcome dialog opens on every cold start before
     // DataStore delivers the saved name (and never closes afterwards).
     val profileName by prefs.profileName.collectAsState(initial = null)
+    // UI language for hardcoded rank names (stringResource handles the rest
+    // via locale; RankInfo carries its own fa/en names).
+    val appLang by prefs.lang.collectAsState(initial = "fa")
+    val isEnglishUi = appLang.startsWith("en")
     var welcomeOpen by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var aboutOpen by remember { mutableStateOf(false) }
@@ -383,8 +387,8 @@ fun LibraryScreen(
     var removeFor by remember { mutableStateOf<BookEntity?>(null) }
 
     val finishedCount = remember(allBooks) { allBooks.count { isCompleted(it) } }
-    val rankName = remember(finishedCount) {
-        RankService.Ranks[RankService.rankIndexForStatic(finishedCount)].nameFa
+    val rankName = remember(finishedCount, isEnglishUi) {
+        RankService.Ranks[RankService.rankIndexForStatic(finishedCount)].displayName(isEnglishUi)
     }
     // Precompute display titles once per book-list emission (O(n), not O(n²)).
     val titleMap = remember(allBooks) { displayTitleMap(allBooks) }
@@ -704,7 +708,7 @@ fun LibraryScreen(
     // Rank-up celebration (WPF AnnounceUnlocks parity): «رتبه‌ات شد X!
     // تم ... برات باز شد. همین الان فعالش کنم؟»
     rankUp?.let { up ->
-        val rankName = RankService.Ranks.getOrNull(up.toRank)?.nameFa ?: ""
+        val rankName = RankService.Ranks.getOrNull(up.toRank)?.displayName(isEnglishUi) ?: ""
         val names = up.newThemes.joinToString("، ") { it.nameFa }
         AlertDialog(
             onDismissRequest = { rankUp = null },
@@ -1180,11 +1184,20 @@ private fun SelectionBar(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onDelete) {
                     TrashCanIcon(
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        // Standard destructive-action red (fixed vivid red so
+                        // it reads as "delete" in both light and dark themes).
+                        color = Color(0xFFE53935),
                         modifier = Modifier.size(22.dp)
                     )
                 }
-                TextButton(onClick = onCancel) { Text("\u2715") }
+                // Standard "cancel/close" yellow.
+                TextButton(onClick = onCancel) {
+                    Text(
+                        "\u2715",
+                        color = Color(0xFFFFC107),
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                }
             }
         }
     }
