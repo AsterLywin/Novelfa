@@ -433,7 +433,16 @@ class ReaderViewModel(
     }
 
     suspend fun changeFontSize(delta: Int) {
-        val next = (fontSize + delta).coerceIn(10, 72)
+        setFontSize(fontSize + delta)
+    }
+
+    /**
+     * Absolute font-size set — port of WPF ApplyFontSize: clamps to
+     * 10..72, no-op when unchanged, live-patches the loaded HTML and
+     * persists to the book row.
+     */
+    suspend fun setFontSize(size: Int) {
+        val next = size.coerceIn(10, 72)
         if (next == fontSize) {
             return
         }
