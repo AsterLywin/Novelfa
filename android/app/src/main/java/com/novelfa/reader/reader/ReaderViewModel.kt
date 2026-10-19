@@ -1,6 +1,7 @@
 package com.novelfa.reader.reader
 
 import com.novelfa.reader.data.BookDao
+import com.novelfa.reader.data.RecommendedFonts
 import com.novelfa.reader.data.BookEntity
 import com.novelfa.reader.model.Chapter
 import com.novelfa.reader.theme.ReaderTheme
@@ -58,7 +59,7 @@ class ReaderViewModel(
     /** In-memory cache of prepared chapter bodies (trimWindow rebuilds). */
     private val preparedCache = LinkedHashMap<Int, String>()
 
-    var fontFamily: String = initialBook.fontFamily.ifBlank { "Tahoma" }
+    var fontFamily: String = initialBook.fontFamily.ifBlank { RecommendedFonts.DEFAULT_FAMILY }
         private set
     var fontSize: Int = initialBook.fontSize.takeIf { it in 10..72 } ?: 18
         private set

@@ -63,6 +63,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
+import com.novelfa.reader.data.RecommendedFonts
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.parser.EpubParser
@@ -191,9 +192,16 @@ fun ReaderScreen(
                 ?: throw IOException("book not found")
             val parsed = withContext(Dispatchers.IO) { openParsed(context, entity.filePath, bookId) }
             val store = FontStore(context)
+            // Blank = never chose a font -> the Vazirmatn default. (A blank
+            // contains() would match EVERY file; resolve explicitly.)
+            val effFamily = entity.fontFamily.ifBlank { RecommendedFonts.DEFAULT_FAMILY }
             val files = withContext(Dispatchers.IO) {
-                store.list().filter {
-                    it.nameWithoutExtension.contains(entity.fontFamily, ignoreCase = true)
+                if (effFamily == RecommendedFonts.DEFAULT_FAMILY) {
+                    RecommendedFonts.defaultFiles(context)
+                } else {
+                    store.list().filter {
+                        it.nameWithoutExtension.contains(effFamily, ignoreCase = true)
+                    }
                 }
             }
             val savedTheme = withContext(Dispatchers.IO) { prefs.getReaderTheme(bookId) }
