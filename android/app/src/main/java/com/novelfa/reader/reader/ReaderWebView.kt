@@ -146,19 +146,21 @@ fun ReaderWebView(
                 // strip. Overview mode would zoom out to fit ALL pages side
                 // by side (a row of tiny pages) instead of showing one full
                 // page per screen — keep it off in paged mode so each 100vw
-                // column fills the viewport at scale 1.
+                // column fills the viewport at scale 1. (The paged viewport
+                // meta also locks maximum-scale=1 as a second barrier.)
                 wv.settings.loadWithOverviewMode = !paged
                 // Pinch-zoom is fundamentally incompatible with the 100vw
                 // pagination math (rdrTurn scrolls by CSS-px pages): a
                 // zoomed page turns wrong and looks broken. Disable it in
-                // paged mode (font size stays adjustable via A+/A-).
+                // paged mode (font size stays adjustable via A+/A- and the
+                // numeric box).
                 wv.settings.setSupportZoom(!paged)
                 lastPagedSettings.value = paged
-                if (paged && loaded.value != null) {
-                    // Drop any active pinch-zoom back to scale 1: a reload
-                    // restores the default scale.
-                    wv.reload()
-                }
+                // NOTE: no wv.reload() here — it races with the
+                // loadDataWithBaseURL below and can cancel an in-flight
+                // chapter load. The settings above apply to the next load,
+                // and mode switches always rebuild the chapter HTML (which
+                // reloads anyway).
             }
             if (loaded.value != html) {
                 loaded.value = html
