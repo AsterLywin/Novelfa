@@ -54,6 +54,11 @@ fun ReaderWebView(
     val loaded = remember { mutableStateOf<String?>(null) }
     // The WebView factory runs once; the mode can change afterwards.
     val pagedNow = rememberUpdatedState(paged)
+    // Tracks the mode loadWithOverviewMode was last applied for: the
+    // setting only takes effect on page load, so it must be refreshed
+    // whenever the mode flips (mode switches rebuild the chapter HTML,
+    // but this guards the case where they wouldn't).
+    val lastOverviewPaged = remember { mutableStateOf<Boolean?>(null) }
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
@@ -135,6 +140,15 @@ fun ReaderWebView(
         },
         update = { wv ->
             onWebView(wv)
+            if (lastOverviewPaged.value != paged) {
+                // Paged mode lays the chapter out as an N×100vw multicol
+                // strip. Overview mode would zoom out to fit ALL pages side
+                // by side (a row of tiny pages) instead of showing one full
+                // page per screen — keep it off in paged mode so each 100vw
+                // column fills the viewport at scale 1.
+                wv.settings.loadWithOverviewMode = !paged
+                lastOverviewPaged.value = paged
+            }
             if (loaded.value != html) {
                 loaded.value = html
                 wv.loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", null)
