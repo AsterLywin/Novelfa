@@ -54,3 +54,33 @@ dependencies {
     androidTestImplementation("androidx.test:core:1.6.1")
 }
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
+// App UI fonts (Vazirmatn) are generated at build time from the TTFs that
+// already ship in src/main/assets/fonts — no binary duplication in the repo
+// (the GitHub connector can't push binaries, so res/font can't be checked
+// in directly). The generated dir is registered as a res source set, so
+// R.font.vazirmatn_regular / R.font.vazirmatn_bold resolve like normal
+// resources. Runs before resource merging via the preBuild lifecycle task.
+android {
+    sourceSets {
+        getByName("main") {
+            res.srcDirs("${layout.buildDirectory.get()}/generated/ui-fonts/res")
+        }
+    }
+}
+
+val copyUiFonts by tasks.registering(Copy::class) {
+    from("src/main/assets/fonts") {
+        include("Vazirmatn-Regular.ttf")
+        rename("Vazirmatn-Regular.ttf", "vazirmatn_regular.ttf")
+    }
+    from("src/main/assets/fonts") {
+        include("Vazirmatn-Bold.ttf")
+        rename("Vazirmatn-Bold.ttf", "vazirmatn_bold.ttf")
+    }
+    into(layout.buildDirectory.dir("generated/ui-fonts/res/font"))
+}
+
+tasks.named("preBuild") {
+    dependsOn(copyUiFonts)
+}

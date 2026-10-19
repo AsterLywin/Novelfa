@@ -48,19 +48,4 @@ object RecommendedFonts {
         }
     }
 
-    /**
-     * The app's default reader family: Vazirmatn (regular 400 + bold 700),
-     * shipped in `assets/fonts/`. One CSS family name for both weights so
-     * `<b>`/`<strong>` use the real bold file instead of faux bold.
-     * Single source of truth for the default — ReaderViewModel and
-     * ReaderScreen both resolve through here.
-     */
-    const val DEFAULT_FAMILY = "Vazirmatn"
-
-    /** Installed files backing [DEFAULT_FAMILY] (empty when not installed). */
-    fun defaultFiles(context: Context): List<File> {
-        val dir = File(context.filesDir, "fonts")
-        return (dir.listFiles()?.toList() ?: emptyList())
-            .filter { it.nameWithoutExtension.contains("vazirmatn", ignoreCase = true) }
-    }
 }

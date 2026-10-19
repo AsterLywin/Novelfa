@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.LocalContext
 import android.net.Uri
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.theme.Accent
+import com.novelfa.reader.theme.rememberAppTypography
 import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.buildPlainPalette
 import com.novelfa.reader.theme.hexToColor
@@ -70,7 +71,7 @@ fun NovelfaApp(
             AppPaletteExtras()
         }
     }
-    MaterialTheme(colorScheme = colorScheme) {
+    MaterialTheme(colorScheme = colorScheme, typography = rememberAppTypography()) {
         CompositionLocalProvider(LocalAppPaletteExtras provides paletteExtras) {
             // The app background MUST come from the color scheme: screens like
             // the library use a transparent Scaffold, so without this the
