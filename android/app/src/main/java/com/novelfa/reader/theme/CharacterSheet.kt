@@ -141,7 +141,7 @@ private fun CharacterRow(
                 Canvas(modifier = Modifier.size(28.dp)) {
                     // Scale the 100x100 emblem to fit
                     val scale = size.minDimension / 100f
-                    withTransform({ scale(scale, scale) }) {
+                    withTransform({ scale(scale, scale, androidx.compose.ui.geometry.Offset.Zero) }) {
                         drawPath(
                             path = emblem,
                             brush = Brush.linearGradient(

@@ -137,7 +137,12 @@ fun CollectionsScreen(
                 }
                 Text(
                     if (selected == null) stringResource(R.string.library_collections) else selected!!,
-                    modifier = Modifier.align(Alignment.CenterVertically).weight(1f)
+                    modifier = Modifier.align(Alignment.CenterVertically).weight(1f),
+                    // Explicit color: outside any Surface/button there is
+                    // no LocalContentColor provider here, so an uncolored
+                    // Text falls back to black on the dark background.
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.titleMedium
                 )
                 // Upstream parity: manually create a collection (may stay empty).
                 TextButton(onClick = { createOpen = true }) {

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -88,7 +89,10 @@ fun AppIcon(
     val path = remember(kind) { parseIconPath(kind.data) }
     Canvas(modifier.size(size)) {
         val scale = this.size.width / 16f
-        withTransform({ scale(scale, scale) }) {
+        // Pivot must be explicit: DrawTransform.scale defaults to the
+        // canvas CENTER, which flings the 16-unit glyph off the top-left
+        // (small icons shift and clip, large ones vanish entirely).
+        withTransform({ scale(scale, scale, Offset.Zero) }) {
             if (filled) {
                 drawPath(path, color = tint)
             } else {
@@ -125,7 +129,7 @@ fun ContrastIcon(
     val half = remember { parseIconPath("M8,1.5 A6.5,6.5 0 0 1 8,14.5 Z") }
     Canvas(modifier.size(size)) {
         val scale = this.size.width / 16f
-        withTransform({ scale(scale, scale) }) {
+        withTransform({ scale(scale, scale, Offset.Zero) }) {
             drawPath(half, color = tint)
             drawPath(
                 circle,
