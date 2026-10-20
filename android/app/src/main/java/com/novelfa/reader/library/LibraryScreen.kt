@@ -76,6 +76,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -119,7 +120,13 @@ import java.io.IOException
 import java.util.Calendar
 import androidx.compose.material3.CardDefaults
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.layout.offset
+import com.novelfa.reader.theme.EmblemWatermark
 import com.novelfa.reader.theme.LocalAppPaletteExtras
+import com.novelfa.reader.theme.StitchDiagonal
+import com.novelfa.reader.theme.StitchDiagonalLarge
+import com.novelfa.reader.theme.StitchSeam
+import com.novelfa.reader.theme.StitchStrip
 import com.novelfa.reader.theme.ParticleLayer
 
 private val TABS = listOf(
@@ -424,6 +431,29 @@ fun LibraryScreen(
             light = appThemeKey == "light"
         )
 
+        // Emblem watermarks behind the content (Windows ThemeArt parity:
+        // 230dp centered at 7%, 420dp bleeding off the bottom-end at 6%).
+        val themeExtras = LocalAppPaletteExtras.current
+        if (themeExtras.hasCharacterTheme && themeExtras.emblemPath != null) {
+            EmblemWatermark(
+                path = themeExtras.emblemPath!!,
+                grad1 = themeExtras.accentGrad1,
+                grad2 = themeExtras.accentGrad2,
+                alpha = 0.07f,
+                modifier = Modifier.size(230.dp).align(Alignment.Center)
+            )
+            EmblemWatermark(
+                path = themeExtras.emblemPath!!,
+                grad1 = themeExtras.accentGrad1,
+                grad2 = themeExtras.accentGrad2,
+                alpha = 0.06f,
+                modifier = Modifier
+                    .size(420.dp)
+                    .align(Alignment.BottomEnd)
+                    .offset(x = 60.dp, y = 80.dp)
+            )
+        }
+
         Scaffold(
             containerColor = Color.Transparent,
             snackbarHost = { SnackbarHost(snackbar) },
@@ -461,11 +491,40 @@ fun LibraryScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { launchImport() },
-                modifier = Modifier.alpha(if (atTop) 0.55f else 1f)
-            ) {
-                Text("+")
+            val fabAlpha = if (atTop) 0.55f else 1f
+            if (themeExtras.hasCharacterTheme) {
+                // Windows parity: the primary action wears the theme's
+                // accent gradient (AccentGradient brush).
+                Box(
+                    modifier = Modifier
+                        .alpha(fabAlpha)
+                        .size(56.dp)
+                        .shadow(6.dp, RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(
+                            Brush.linearGradient(
+                                listOf(
+                                    themeExtras.accentGrad1,
+                                    themeExtras.accentGrad2
+                                )
+                            )
+                        )
+                        .clickable { launchImport() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "+",
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        style = MaterialTheme.typography.headlineMedium
+                    )
+                }
+            } else {
+                FloatingActionButton(
+                    onClick = { launchImport() },
+                    modifier = Modifier.alpha(fabAlpha)
+                ) {
+                    Text("+")
+                }
             }
         }
     ) { padding ->
@@ -566,6 +625,7 @@ fun LibraryScreen(
                             selected = book.id in selection,
                             // Bite mark: completed books only, tsugi theme only.
                             showBite = charThemeId == "tsugi" && isCompleted(book),
+                            showStitch = charThemeId == "tsugi",
                         )
                     }
                 }
@@ -1129,6 +1189,7 @@ private fun StatsStrip(
 ) {
     // Like the WPF stats strip: each card is one unit (count + label) and
     // tapping it selects the corresponding tab.
+    val extras = LocalAppPaletteExtras.current
     val cards = listOf(
         Triple(total, Tab.ALL, R.string.all_books),
         Triple(reading, Tab.READING, R.string.currently_reading),
@@ -1144,16 +1205,29 @@ private fun StatsStrip(
                 onClick = { onPick(t) },
                 modifier = Modifier.weight(1f)
             ) {
-                Column(
-                    modifier = Modifier.padding(vertical = 10.dp).fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text("$count", style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        stringResource(labelRes),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Box {
+                    Column(
+                        modifier = Modifier.padding(vertical = 10.dp).fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("$count", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            stringResource(labelRes),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    // Tsugi stitch in the top-end corner of each stat card
+                    // (Windows ThemeStitch parity).
+                    if (extras.charThemeId == "tsugi") {
+                        StitchDiagonal(
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 4.dp, end = 6.dp)
+                                .size(30.dp)
+                        )
+                    }
                 }
             }
         }
@@ -1276,7 +1350,10 @@ private fun TrashCanIcon(
  */
 @Composable
 private fun BiteOverlay(modifier: Modifier = Modifier) {
-    val bg = MaterialTheme.colorScheme.surface
+    // Windows fills the bite with the window background (BgDark), so the
+    // cover looks bitten through to what's behind the card.
+    val bg = MaterialTheme.colorScheme.background
+    val crumb = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
@@ -1285,6 +1362,23 @@ private fun BiteOverlay(modifier: Modifier = Modifier) {
         drawCircle(bg, radius = w * 0.34f, center = Offset(w * 1.02f, -h * 0.04f))
         drawCircle(bg, radius = w * 0.26f, center = Offset(w * 0.78f, -h * 0.10f))
         drawCircle(bg, radius = w * 0.22f, center = Offset(w * 1.06f, h * 0.22f))
+        // Crumbs scattered just inside the bite (Windows parity).
+        listOf(
+            Triple(0.58f, 0.80f, 0.055f),
+            Triple(0.74f, 0.93f, 0.04f),
+            Triple(0.44f, 0.95f, 0.045f)
+        ).forEach { (fx, fy, fr) ->
+            val cx = w * fx
+            val cy = h * fy
+            val r = w * fr
+            val tri = Path().apply {
+                moveTo(cx - r, cy + r * 0.6f)
+                lineTo(cx + r * 0.4f, cy - r)
+                lineTo(cx + r, cy + r * 0.8f)
+                close()
+            }
+            drawPath(tri, crumb)
+        }
     }
 }
 
@@ -1381,12 +1475,35 @@ private fun HeroCard(
                     )
                 )
         ) {
+        // Emblem watermark inside the hero (Windows: 190dp at 14%).
+        if (extras.hasCharacterTheme && extras.emblemPath != null) {
+            EmblemWatermark(
+                path = extras.emblemPath!!,
+                grad1 = extras.accentGrad1,
+                grad2 = extras.accentGrad2,
+                alpha = 0.14f,
+                modifier = Modifier
+                    .size(190.dp)
+                    .align(Alignment.CenterEnd)
+            )
+        }
         Row(modifier = Modifier.padding(12.dp)) {
             Box(modifier = Modifier.width(72.dp).aspectRatio(0.75f)) {
                 AsyncImage(
                     model = book.coverPath,
                     contentDescription = title,
                     modifier = Modifier.fillMaxSize()
+                )
+            }
+            // Tsugi torn seam between the cover and the text (Windows hero).
+            if (extras.charThemeId == "tsugi") {
+                StitchSeam(
+                    textColor = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .width(24.dp)
+                        .height(84.dp)
+                        .align(Alignment.CenterVertically)
                 )
             }
             Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
@@ -1410,6 +1527,16 @@ private fun HeroCard(
                     modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
                 )
             }
+        }
+        // Tsugi stitch in the hero's top-start corner (Windows: 64dp).
+        if (extras.charThemeId == "tsugi") {
+            StitchDiagonalLarge(
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .size(64.dp)
+            )
         }
         }  // Close gradient Box
     }
@@ -1536,7 +1663,9 @@ fun BookCard(
     onLongClick: (() -> Unit)? = null,
     // Upstream f352105: bite taken out of completed books' covers, visible
     // only with the «سوبارو · شکم‌پرستی» (tsugi) character theme.
-    showBite: Boolean = false
+    showBite: Boolean = false,
+    // Tsugi stitch strip under the cover (Windows grid-card parity).
+    showStitch: Boolean = false
 ) {
     Card(
         // Windows parity: 1dp border, 2dp primary when selected
@@ -1635,6 +1764,15 @@ fun BookCard(
                         modifier = Modifier.align(Alignment.TopStart)
                     ) { Text("⋯") }
                 }
+            }
+            if (showStitch) {
+                StitchStrip(
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp)
+                        .height(10.dp)
+                )
             }
             Column(modifier = Modifier.padding(8.dp)) {
                 Text(

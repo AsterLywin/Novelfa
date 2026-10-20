@@ -72,7 +72,9 @@ fun NovelfaApp(
                 aura2 = parseHex(p.aura2),
                 accentGrad1 = parseHex(p.grad1),
                 accentGrad2 = parseHex(p.grad2),
-                hasCharacterTheme = true
+                hasCharacterTheme = true,
+                charThemeId = theme.id,
+                emblemPath = theme.emblemPath
             )
         } else {
             AppPaletteExtras()
