@@ -26,6 +26,10 @@
     <string name="good_afternoon">ظهر بخیر</string>
     <string name="good_evening">عصر بخیر</string>
     <string name="good_night">شب بخیر</string>
+    <string name="greeting_sub_morning">صبح چی می‌خونی؟</string>
+    <string name="greeting_sub_afternoon">ظهر چی می‌خونی؟</string>
+    <string name="greeting_sub_evening">عصر چی می‌خونی؟</string>
+    <string name="greeting_sub_night">شب چی می‌خونی؟</string>
     <string name="currently_reading">در حال مطالعه</string>
     <string name="completed">تمام‌شده</string>
     <string name="favorites">علاقه‌مندی‌ها</string>

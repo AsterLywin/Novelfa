@@ -86,11 +86,13 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookEntity
@@ -138,12 +140,40 @@ private val TABS = listOf(
     Tab.PRIVATE to R.string.str_private
 )
 
-private fun greetingRes(): Int {
+/** Greeting + sub-line resources for the time of day (Windows GetPeriod ranges). */
+private fun greetingRes(): Pair<Int, Int> {
     return when (Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) {
-        in 5..11 -> R.string.good_morning
-        in 12..16 -> R.string.good_afternoon
-        in 17..19 -> R.string.good_evening
-        else -> R.string.good_night
+        in 5..11 -> R.string.good_morning to R.string.greeting_sub_morning
+        in 12..16 -> R.string.good_afternoon to R.string.greeting_sub_afternoon
+        in 17..20 -> R.string.good_evening to R.string.greeting_sub_evening
+        else -> R.string.good_night to R.string.greeting_sub_night
+    }
+}
+
+/**
+ * The time-of-day greeting block, Windows LibraryWindow parity
+ * (txtGreeting/txtGreetingSub): the greeting at 26sp bold in the theme
+ * text color, and below it the "… چی می‌خونی؟" line at 13sp muted with
+ * a 4dp gap. Colors are explicit — as a bare grid/list item there is no
+ * card supplying a content color, so an uncolored Text renders black
+ * on the dark background.
+ */
+@Composable
+private fun GreetingHeader() {
+    val (greeting, sub) = greetingRes()
+    Column {
+        Text(
+            stringResource(greeting),
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            stringResource(sub),
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }
 
@@ -1068,7 +1098,7 @@ private fun LazyGridScope.libraryHeaderSpan(
         )
     }
     item(span = { GridItemSpan(maxLineSpan) }) {
-        Text(stringResource(greetingRes()), style = MaterialTheme.typography.headlineSmall)
+        GreetingHeader()
     }
     item(span = { GridItemSpan(maxLineSpan) }) {
         StatsStrip(total = total, reading = reading, done = done, fav = fav, onPick = onTab)
@@ -1133,7 +1163,7 @@ private fun LazyListScope.libraryHeaderList(
         )
     }
     item {
-        Text(stringResource(greetingRes()), style = MaterialTheme.typography.headlineSmall)
+        GreetingHeader()
     }
     item { StatsStrip(total = total, reading = reading, done = done, fav = fav, onPick = onTab) }
     if (hero != null) {
@@ -1589,9 +1619,64 @@ private fun SortViewRow(
                 )
             }
         }
-        Row {
-            TextButton(onClick = { onView(true) }, enabled = !gridView) { Text("▦") }
-            TextButton(onClick = { onView(false) }, enabled = gridView) { Text("☰") }
+        // Windows-parity view toggle: a segmented pill (card bg, 1dp
+        // border, 10dp radius, 2dp padding) holding two 34x30 buttons;
+        // the active view gets the AccentSoft background + accent icon,
+        // the inactive one stays muted. (It used to be two TextButtons
+        // with font glyphs "▦"/"☰" and enabled-as-selection, which
+        // looked nothing like the desktop app.)
+        Row(
+            modifier = Modifier
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(10.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(10.dp))
+                .padding(2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ViewToggleButton(selected = gridView, onClick = { onView(true) }, grid = true)
+            ViewToggleButton(selected = !gridView, onClick = { onView(false) }, grid = false)
+        }
+    }
+}
+
+/** One half of the view toggle; [grid] picks the Windows IcoGrid/IcoList path. */
+@Composable
+private fun ViewToggleButton(selected: Boolean, onClick: () -> Unit, grid: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(width = 34.dp, height = 30.dp)
+            .background(
+                if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+                RoundedCornerShape(8.dp)
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        val color = if (selected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.onSurfaceVariant
+        Canvas(Modifier.size(16.dp)) {
+            val s = size.width / 16f
+            val path = Path()
+            if (grid) {
+                // IcoGrid: four outlined squares in a 16-unit box.
+                listOf(2.5f to 2.5f, 9f to 2.5f, 2.5f to 9f, 9f to 9f).forEach { (x, y) ->
+                    path.addRect(
+                        androidx.compose.ui.geometry.Rect(
+                            x * s, y * s, (x + 4.5f) * s, (y + 4.5f) * s
+                        )
+                    )
+                }
+            } else {
+                // IcoList: three plain horizontal lines.
+                listOf(4f, 8f, 12f).forEach { y ->
+                    path.moveTo(2.5f * s, y * s)
+                    path.lineTo(13.5f * s, y * s)
+                }
+            }
+            drawPath(
+                path,
+                color = color,
+                style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
         }
     }
 }

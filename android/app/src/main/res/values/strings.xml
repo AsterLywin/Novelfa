@@ -26,6 +26,10 @@
     <string name="good_afternoon">Good afternoon</string>
     <string name="good_evening">Good evening</string>
     <string name="good_night">Good night</string>
+    <string name="greeting_sub_morning">What are you reading this morning?</string>
+    <string name="greeting_sub_afternoon">What are you reading this afternoon?</string>
+    <string name="greeting_sub_evening">What are you reading this evening?</string>
+    <string name="greeting_sub_night">What are you reading tonight?</string>
     <string name="currently_reading">Currently reading</string>
     <string name="completed">" completed"</string>
     <string name="favorites">Favorites</string>

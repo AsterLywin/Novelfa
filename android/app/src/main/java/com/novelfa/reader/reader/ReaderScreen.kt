@@ -437,9 +437,15 @@ fun ReaderScreen(
                     // off-screen otherwise.
                     LaunchedEffect(drawerState.isOpen) {
                         if (drawerState.isOpen && v.chapters.isNotEmpty()) {
-                            chapterListState.scrollToItem(
-                                v.index.coerceIn(0, v.chapters.size - 1)
-                            )
+                            val target = v.index.coerceIn(0, v.chapters.size - 1)
+                            // Only pull the list when the current
+                            // chapter is actually off-screen — yanking
+                            // it on every open feels like a jump when
+                            // the list was being browsed by hand.
+                            val visible = chapterListState.layoutInfo.visibleItemsInfo
+                            if (visible.none { it.index == target }) {
+                                chapterListState.scrollToItem(target)
+                            }
                         }
                     }
                     LazyColumn(state = chapterListState) {
