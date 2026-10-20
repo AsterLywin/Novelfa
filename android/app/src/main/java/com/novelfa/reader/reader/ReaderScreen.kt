@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -260,8 +261,8 @@ fun ReaderScreen(
      * the current chapter file jumps in place, otherwise the target
      * chapter opens and its fragment is applied on page-finish.
      */
-    suspend fun handleInBookLink(v: ReaderViewModel, href: String) {
-        val (idx, frag) = v.resolveLink(href) ?: return
+    suspend fun handleInBookLink(v: ReaderViewModel, href: String, chap: Int) {
+        val (idx, frag) = v.resolveLink(href, chap) ?: return
         if (idx == v.index) {
             if (frag.isNotBlank()) jumpToAnchor(v, frag)
         } else {
@@ -289,9 +290,20 @@ fun ReaderScreen(
                 rev++
             }
             },
-            onLinkClick = { href ->
+            onLinkClick = { href, chap ->
                 val v = vm
-                if (v != null) scope.launch { handleInBookLink(v, href) }
+                if (v != null) scope.launch { handleInBookLink(v, href, chap) }
+            },
+            onChapterVisible = { ci, gen ->
+                scope.launch {
+                    val v = vm ?: return@launch
+                    // Same stale-page guard as the scroll bridge: a
+                    // report from the previous document must not move
+                    // the reading chapter of the new one.
+                    if (gen != v.docGen) return@launch
+                    v.onChapterVisible(ci)
+                    rev++
+                }
             }
         )
     }
@@ -419,7 +431,18 @@ fun ReaderScreen(
                 } else {
                     @Suppress("UNUSED_EXPRESSION")
                     rev
-                    LazyColumn {
+                    val chapterListState = rememberLazyListState()
+                    // Land on the chapter being read when the drawer
+                    // opens — with long books the current row can be far
+                    // off-screen otherwise.
+                    LaunchedEffect(drawerState.isOpen) {
+                        if (drawerState.isOpen && v.chapters.isNotEmpty()) {
+                            chapterListState.scrollToItem(
+                                v.index.coerceIn(0, v.chapters.size - 1)
+                            )
+                        }
+                    }
+                    LazyColumn(state = chapterListState) {
                         itemsIndexed(v.chapters, key = { _, c -> c.file.absolutePath }) { i, c ->
                             NavigationDrawerItem(
                                 label = { Text(c.title) },

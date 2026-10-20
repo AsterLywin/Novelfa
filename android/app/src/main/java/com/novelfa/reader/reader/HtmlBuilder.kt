@@ -103,11 +103,22 @@ object HtmlBuilder {
         }
         sb.append("<script>window.__rdrGen=").append(docGen).append(";</script>")
         sb.append("<script>(function(){")
-        sb.append("var lt=-1,lh=-1,lc=-1,lr=-1;")
+        sb.append("var lt=-1,lh=-1,lc=-1,lr=-1,lci=-1;")
         sb.append("function r(){try{var d=document.documentElement,b=document.body;")
         sb.append("var t=Math.round(Math.max(d.scrollTop||0,b.scrollTop||0)),")
         sb.append("h=Math.max(d.scrollHeight||0,b.scrollHeight||0),")
         sb.append("c=d.clientHeight||b.clientHeight||0;")
+        // Visible-chapter tracking: the chapter div whose span holds the
+        // viewport top is the chapter being READ. Reported on change via
+        // Android.onChapter — appends/prepends stitch the continuous
+        // window around the reading position and must not move it.
+        sb.append("var ci=-1;try{var chs=d.querySelectorAll('.rdr-chap');")
+        sb.append("for(var k=0;k<chs.length;k++){var o=chs[k].offsetTop,hh=chs[k].offsetHeight;")
+        sb.append("if(t>=o&&t<o+hh){ci=parseInt(chs[k].getAttribute('data-idx'),10);break;}}")
+        sb.append("if(ci<0&&chs.length){var fq=chs[0],lq=chs[chs.length-1];")
+        sb.append("if(t<(fq.offsetTop||0))ci=parseInt(fq.getAttribute('data-idx'),10);")
+        sb.append("else if(t>=(lq.offsetTop||0))ci=parseInt(lq.getAttribute('data-idx'),10);}}catch(x){}")
+        sb.append("if(ci!=lci){lci=ci;if(ci>=0){try{Android.onChapter(ci,window.__rdrGen);}catch(x){}}}")
         sb.append("if(t!=lt||h!=lh||c!=lc){lt=t;lh=h;lc=c;")
         sb.append("try{Android.onScroll(t,h,c,window.__rdrGen);}catch(x){}}")
         sb.append("else if(h>c){lr=t/(h-c);}}catch(x){}}")
@@ -1087,7 +1098,16 @@ object HtmlBuilder {
             return;
         }
         e.preventDefault();
-        try { if (window.Android && Android.onLink) Android.onLink(h); } catch (err) { }
+        // The href is relative to the chapter CONTAINING the link —
+        // in continuous mode several chapters share one document, so
+        // tell the app exactly which chapter this link lives in.
+        var ci = -1;
+        var cd = a.closest ? a.closest('.rdr-chap') : null;
+        if (cd) {
+            var dv = parseInt(cd.getAttribute('data-idx'), 10);
+            if (!isNaN(dv)) ci = dv;
+        }
+        try { if (window.Android && Android.onLink) Android.onLink(h, ci); } catch (err) { }
     }, true);
 })();"""
 }

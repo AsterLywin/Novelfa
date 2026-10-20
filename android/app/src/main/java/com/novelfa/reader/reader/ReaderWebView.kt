@@ -16,13 +16,16 @@ import androidx.compose.ui.viewinterop.AndroidView
 
 /**
  * JS bridge for the reader documents: the scroll reporter
- * (`Android.onScroll(t,h,c,gen)`) and in-book link taps handed over by
- * the LINK_JS interceptor in [HtmlBuilder.build] (`Android.onLink(href)`
- * with the raw authored href of a relative file reference).
+ * (`Android.onScroll(t,h,c,gen)`), the visible-chapter reporter
+ * (`Android.onChapter(ci,gen)` — the chapter at the viewport top), and
+ * in-book link taps handed over by the LINK_JS interceptor in
+ * [HtmlBuilder.build] (`Android.onLink(href, chapIdx)` with the raw
+ * authored href and the index of the chapter containing the link).
  */
 class ScrollBridge(
     private val onScroll: (Int, Int, Int, Int) -> Unit,
-    private val onLinkClick: (String) -> Unit = {}
+    private val onLinkClick: (String, Int) -> Unit = { _, _ -> },
+    private val onChapterVisible: (Int, Int) -> Unit = { _, _ -> }
 ) {
 
     @JavascriptInterface
@@ -31,8 +34,13 @@ class ScrollBridge(
     }
 
     @JavascriptInterface
-    fun onLink(href: String) {
-        onLinkClick(href)
+    fun onLink(href: String, chap: Long) {
+        onLinkClick(href, chap.toInt())
+    }
+
+    @JavascriptInterface
+    fun onChapter(ci: Long, gen: Long) {
+        onChapterVisible(ci.toInt(), gen.toInt())
     }
 }
 

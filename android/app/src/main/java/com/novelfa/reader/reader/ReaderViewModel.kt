@@ -285,12 +285,13 @@ class ReaderViewModel(
                     ChapterDivider.divider(chapters[next].title, theme) + body + "</div>"
                 html = html.replace("</body>", chunk + "</body>")
                 contLast = next
-                index = next
+                // NOTE: index/progress deliberately NOT touched here —
+                // index is the chapter being READ (reported by the page
+                // via onChapterVisible), not the newest stitched one.
                 lastChunk = chunk
                 lastChunkKind = "append"
                 lastError = null
                 trimWindow(keepTail = true)
-                saveProgress(next)
                 return true
             } catch (e: CancellationException) {
                 throw e
@@ -332,13 +333,12 @@ class ReaderViewModel(
                 val divider = ChapterDivider.divider(chapters[contFirst].title, theme)
                 html = html.replace("<body>", "<body>" + chunk + divider)
                 contFirst = prev
-                index = prev
+                // index/progress untouched — see appendNext.
                 lastChunk = chunk
                 lastPrependDivider = divider
                 lastChunkKind = "prepend"
                 lastError = null
                 trimWindow(keepTail = false)
-                saveProgress(prev)
                 return true
             } catch (e: CancellationException) {
                 throw e
@@ -419,6 +419,24 @@ class ReaderViewModel(
         } else if (top == 0) {
             prependPrev()
         }
+    }
+
+    /**
+     * The chapter at the viewport top, reported by the page's scroll
+     * reporter (Android.onChapter). [index] is the chapter being READ —
+     * the top bar, the chapter drawer and the saved progress all follow
+     * it. Appends/prepends only stitch the window around the reading
+     * position; they used to move [index] to the freshly stitched
+     * chapter, so all three pointed one chapter ahead of (or behind)
+     * what was actually on screen, and the book reopened at the wrong
+     * chapter.
+     */
+    suspend fun onChapterVisible(ci: Int) {
+        if (ci !in chapters.indices || ci == index) {
+            return
+        }
+        index = ci
+        saveProgress(ci)
     }
 
     suspend fun saveProgress(i: Int, force: Boolean = false) {
@@ -575,12 +593,14 @@ class ReaderViewModel(
     /**
      * Resolves an in-book link href (exactly as authored in the chapter
      * HTML) to the spine chapter it points at, plus its fragment id.
-     * EPUB hrefs are relative to the CURRENT chapter's folder. Returns
+     * EPUB hrefs are relative to the folder of the chapter CONTAINING
+     * the link ([baseIdx], reported by the LINK_JS interceptor — in
+     * continuous mode several chapters share one document). Returns
      * null when the target file is not one of the book's spine chapters
      * (external files, cover pages outside the spine, bad hrefs) — such
      * taps are ignored. The fragment is percent-decoded like file hrefs.
      */
-    suspend fun resolveLink(href: String): Pair<Int, String>? =
+    suspend fun resolveLink(href: String, baseIdx: Int): Pair<Int, String>? =
         withContext(Dispatchers.IO) {
             val filePart = href.substringBefore('#').substringBefore('?').trim()
             val fragRaw = href.substringAfter('#', "").trim()
@@ -588,7 +608,8 @@ class ReaderViewModel(
                 java.net.URLDecoder.decode(fragRaw, "UTF-8")
             }.getOrDefault(fragRaw)
             if (filePart.isEmpty()) return@withContext null
-            val folder = chapters[index].file.parentFile
+            val base = if (baseIdx in chapters.indices) baseIdx else index
+            val folder = chapters[base].file.parentFile
                 ?: return@withContext null
             val target = runCatching {
                 HrefResolver.resolve(folder, filePart).canonicalPath
