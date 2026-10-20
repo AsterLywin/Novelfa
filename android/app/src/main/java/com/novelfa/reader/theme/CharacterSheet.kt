@@ -29,6 +29,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.novelfa.reader.R
@@ -175,7 +177,20 @@ private fun CharacterRow(
                     }
                     Spacer(modifier = Modifier.width(6.dp))
                 }
-                Text(text = name, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = name,
+                    // Trim the font's built-in padding/leading so the
+                    // lock badge and check center on the visible glyphs
+                    // (Persian fonts carry very tall ascent metrics,
+                    // which pushed the row's icons a line too high).
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        platformStyle = PlatformTextStyle(includeFontPadding = false),
+                        lineHeightStyle = LineHeightStyle(
+                            alignment = LineHeightStyle.Alignment.Center,
+                            trim = LineHeightStyle.Trim.Both
+                        )
+                    )
+                )
                 if (active) {
                     Spacer(modifier = Modifier.width(6.dp))
                     AppIcon(

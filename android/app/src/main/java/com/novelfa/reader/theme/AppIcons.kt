@@ -9,12 +9,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.asComposePath
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.core.graphics.PathParser
 
 /**
  * The app icon set: the Windows client's drawn icons (App.xaml `Ico*`
@@ -69,7 +67,7 @@ enum class AppIconKind(val data: String) {
 }
 
 private fun parseIconPath(data: String): Path =
-    runCatching { PathParser.createPathFromPathData(data).asComposePath() }
+    runCatching { IconPathParser.parse(data) }
         .getOrElse { Path() }
 
 /**

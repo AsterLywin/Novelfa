@@ -533,10 +533,10 @@ fun LibraryScreen(
                         Text(stringResource(R.string.library_collections))
                     }
                     IconButton(onClick = { aboutOpen = true }) {
-                        AppIcon(AppIconKind.Info, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 19.dp)
+                        AppIcon(AppIconKind.Info, tint = MaterialTheme.colorScheme.onSurface, size = 19.dp)
                     }
                     IconButton(onClick = onOpenSettings) {
-                        AppIcon(AppIconKind.Gear, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 19.dp)
+                        AppIcon(AppIconKind.Gear, tint = MaterialTheme.colorScheme.onSurface, size = 19.dp)
                     }
                 }
             )
