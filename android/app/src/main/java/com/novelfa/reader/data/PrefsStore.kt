@@ -43,6 +43,11 @@ class PrefsStore(private val context: Context) {
         val THEME_PARTICLES = booleanPreferencesKey("themeParticles")
         // Reading layout mode (replaces the old continuous toggle).
         val READING_MODE = stringPreferencesKey("readingMode")
+        // Backup/restore: lifetime finished-books floor restored from a
+        // backup (see BackupService). Effective finished count is
+        // max(libraryFinished, floor) so a restored record survives an
+        // empty library on a new device; monotonic, never decreases.
+        val FINISHED_BOOKS_RESTORED = intPreferencesKey("FinishedBooksRestored")
         // Upstream CollectionRegistry parity: manually-created collection
         // names (including empty ones, which have no books to anchor them).
         val MANUAL_COLLECTIONS = stringSetPreferencesKey("manualCollections")
@@ -64,6 +69,9 @@ class PrefsStore(private val context: Context) {
     val profileName: Flow<String> = context.dataStore.data.map { it[PROFILE_NAME] ?: "" }
     /** Custom avatar file path; blank = default Novelfa icon. */
     val avatarPath: Flow<String> = context.dataStore.data.map { it[AVATAR] ?: "" }
+    /** Lifetime finished-books floor restored from a backup (default 0). */
+    val finishedBooksRestored: Flow<Int> =
+        context.dataStore.data.map { it[FINISHED_BOOKS_RESTORED] ?: 0 }
     /** Animated character-theme particles behind the library (default off). */
     val themeParticles: Flow<Boolean> = context.dataStore.data.map { it[THEME_PARTICLES] ?: false }
     /** Reading layout mode key: "paged" (default) or "continuous". */
@@ -116,6 +124,17 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setAvatarPath(value: String) {
         context.dataStore.edit { it[AVATAR] = value }
+    }
+
+    suspend fun getFinishedBooksRestored(): Int =
+        context.dataStore.data.map { it[FINISHED_BOOKS_RESTORED] ?: 0 }.first()
+
+    /** Monotonic: the floor only ever moves up. */
+    suspend fun raiseFinishedBooksRestored(value: Int) {
+        context.dataStore.edit {
+            val cur = it[FINISHED_BOOKS_RESTORED] ?: 0
+            if (value > cur) it[FINISHED_BOOKS_RESTORED] = value
+        }
     }
 
     suspend fun setThemeParticles(value: Boolean) {

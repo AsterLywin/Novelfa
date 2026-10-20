@@ -27,11 +27,16 @@ data class RankUp(
  */
 object RankHook {
 
-    suspend fun refreshRank(dao: BookDao, rankPrefs: PrefsStoreRankPrefs): RankUp? {
+    suspend fun refreshRank(dao: BookDao, rankPrefs: PrefsStoreRankPrefs, floor: Int = 0): RankUp? {
         // Wait for the bridge's DataStore preload: recordProgress is
         // monotonic, so it must read the real stored maxRank, not a default.
         rankPrefs.awaitLoaded()
-        val done = dao.allBooks().first().count { !it.isPrivate && isCompleted(it) }
+        // Backup floor (plan §7): a restored lifetime count keeps the
+        // record alive on an empty library; max() never double-counts.
+        val done = maxOf(
+            dao.allBooks().first().count { !it.isPrivate && isCompleted(it) },
+            floor
+        )
         val service = RankService(rankPrefs)
         val newRank = service.rankIndexFor(done)
         val oldMax = service.maxRank

@@ -178,4 +178,33 @@
     <string name="link_channel">کانال</string>
     <string name="link_donate">دونیت</string>
     <string name="link_boost">بوست</string>
+
+    <string name="backup_section_title">پشتیبان‌گیری و بازیابی</string>
+    <string name="backup_create">ایجاد بکاپ</string>
+    <string name="backup_restore">بازیابی از بکاپ</string>
+    <string name="backup_working">در حال انجام…</string>
+    <string name="backup_created">بکاپ ساخته شد.</string>
+    <string name="backup_export_failed">ساخت بکاپ انجام نشد.</string>
+    <string name="backup_summary_title">این بکاپ بازیابی شود؟</string>
+    <string name="backup_summary_created">ساخته‌شده در: %1$s</string>
+    <string name="backup_summary_platform">ساخته‌شده روی: %1$s</string>
+    <string name="backup_summary_rank">رنک: %1$s</string>
+    <string name="backup_summary_books">کتاب‌های تمام‌شده: %1$d</string>
+    <string name="backup_summary_fonts">فونت‌ها: %1$d</string>
+    <string name="backup_summary_avatar_yes">آواتار: دارد</string>
+    <string name="backup_summary_avatar_no">آواتار: ندارد</string>
+    <string name="backup_restore_button">بازیابی</string>
+    <string name="backup_result_ok">بکاپ بازیابی شد.</string>
+    <string name="backup_result_fonts_added">%1$d فونت اضافه شد</string>
+    <string name="backup_result_fonts_skipped">%1$d فونت از قبل بود (رد شد)</string>
+    <string name="backup_result_fonts_failed">%1$d فونت اضافه نشد</string>
+    <string name="backup_err_not_backup">این فایل بکاپ ناول‌فا نیست.</string>
+    <string name="backup_err_too_new">این بکاپ با نسخه‌ی جدیدتری از برنامه ساخته شده است.</string>
+    <string name="backup_err_corrupt">بکاپ خراب یا دست‌کاری شده است.</string>
+    <string name="backup_err_font">بکاپ شامل فایل فونت نامعتبر است.</string>
+    <string name="backup_err_image">بکاپ شامل تصویر آواتار نامعتبر است.</string>
+    <string name="backup_err_too_large">حجم بکاپ بیش از حد مجاز است.</string>
+    <string name="backup_err_unreadable">خواندن فایل بکاپ انجام نشد.</string>
+    <string name="platform_android">اندروید</string>
+    <string name="platform_windows">ویندوز</string>
 </resources>

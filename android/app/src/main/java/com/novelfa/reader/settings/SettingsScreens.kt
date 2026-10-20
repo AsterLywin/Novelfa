@@ -1,6 +1,8 @@
 package com.novelfa.reader.settings
 
 import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,10 +37,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.novelfa.reader.R
+import com.novelfa.reader.data.BackupError
+import com.novelfa.reader.data.BackupPreview
+import com.novelfa.reader.data.BackupService
 import com.novelfa.reader.data.FontStore
+import com.novelfa.reader.data.InspectResult
 import com.novelfa.reader.theme.AccentSheet
 import com.novelfa.reader.theme.CharacterSheet
 import com.novelfa.reader.theme.FontPickerDialog
+import com.novelfa.reader.theme.PrefsStoreRankPrefs
+import com.novelfa.reader.theme.RankService
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.launch
 
 /**
@@ -82,6 +93,12 @@ fun SettingsRoute(
                 )
             }
             item { RankSection(viewModel) }
+            item {
+                BackupSection(
+                    viewModel = viewModel,
+                    notify = { msg -> scope.launch { snackbar.showSnackbar(msg) } }
+                )
+            }
             item {
                 TextButton(onClick = onClose, modifier = Modifier.padding(horizontal = 12.dp)) {
                     Text(stringResource(R.string.close))
@@ -465,6 +482,178 @@ private fun RankSection(viewModel: SettingsViewModel) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val lang by viewModel.lang.collectAsState(initial = "fa")
+    val isEnglishUi = lang.startsWith("en")
+    val rankPrefs = remember(viewModel.prefs) { PrefsStoreRankPrefs(viewModel.prefs) }
+    val service = remember {
+        BackupService(context.applicationContext, viewModel.prefs, viewModel.dao, rankPrefs)
+    }
+    var busy by remember { mutableStateOf(false) }
+    var preview by remember { mutableStateOf<BackupPreview?>(null) }
+
+    // Hoisted strings: launcher/coroutine callbacks are not composable.
+    val createdMsg = stringResource(R.string.backup_created)
+    val exportFailedMsg = stringResource(R.string.backup_export_failed)
+    val resultOkMsg = stringResource(R.string.backup_result_ok)
+    val addedFmt = stringResource(R.string.backup_result_fonts_added)
+    val skippedFmt = stringResource(R.string.backup_result_fonts_skipped)
+    val failedFmt = stringResource(R.string.backup_result_fonts_failed)
+    val errNotBackup = stringResource(R.string.backup_err_not_backup)
+    val errTooNew = stringResource(R.string.backup_err_too_new)
+    val errCorrupt = stringResource(R.string.backup_err_corrupt)
+    val errFont = stringResource(R.string.backup_err_font)
+    val errImage = stringResource(R.string.backup_err_image)
+    val errTooLarge = stringResource(R.string.backup_err_too_large)
+    val errUnreadable = stringResource(R.string.backup_err_unreadable)
+    fun errorText(e: BackupError): String = when (e) {
+        BackupError.NOT_A_BACKUP -> errNotBackup
+        BackupError.TOO_NEW -> errTooNew
+        BackupError.CORRUPT -> errCorrupt
+        BackupError.FONT_INVALID -> errFont
+        BackupError.IMAGE_INVALID -> errImage
+        BackupError.TOO_LARGE -> errTooLarge
+        BackupError.UNREADABLE -> errUnreadable
+    }
+
+    val createLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        scope.launch {
+            try {
+                val ok = context.contentResolver.openOutputStream(uri)?.use { out ->
+                    service.exportBackup(out)
+                    true
+                } ?: false
+                notify(if (ok) createdMsg else exportFailedMsg)
+            } catch (e: Exception) {
+                notify(exportFailedMsg)
+            } finally {
+                busy = false
+            }
+        }
+    }
+    val openLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        scope.launch {
+            try {
+                when (val result = context.contentResolver.openInputStream(uri)
+                    ?.use { service.inspectBackup(it) }) {
+                    is InspectResult.Ok -> preview = result.preview
+                    is InspectResult.Failed -> notify(errorText(result.error))
+                    null -> notify(errUnreadable)
+                }
+            } catch (e: Exception) {
+                notify(errUnreadable)
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    SectionCard(title = stringResource(R.string.backup_section_title)) {
+        Row {
+            OutlinedButton(
+                enabled = !busy,
+                onClick = {
+                    val stamp = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+                    createLauncher.launch("novelfa-backup-$stamp.novelfabak")
+                },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(stringResource(R.string.backup_create))
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            OutlinedButton(
+                enabled = !busy,
+                onClick = { openLauncher.launch(arrayOf("*/*")) },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(stringResource(R.string.backup_restore))
+            }
+        }
+        if (busy) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(stringResource(R.string.backup_working))
+        }
+    }
+
+    preview?.let { p ->
+        val rankName = RankService.Ranks
+            .getOrNull(p.maxRank.coerceAtLeast(0))
+            ?.displayName(isEnglishUi)
+            ?: ""
+        val platformLabel = when (p.platform) {
+            "android" -> stringResource(R.string.platform_android)
+            "windows" -> stringResource(R.string.platform_windows)
+            else -> p.platform
+        }
+        AlertDialog(
+            onDismissRequest = {
+                service.discard(p)
+                preview = null
+            },
+            title = { Text(stringResource(R.string.backup_summary_title)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.backup_summary_created, p.createdAt.take(19).replace('T', ' ')))
+                    Text(stringResource(R.string.backup_summary_platform, platformLabel))
+                    if (p.profileName.isNotBlank()) {
+                        Text(p.profileName)
+                    }
+                    Text(stringResource(R.string.backup_summary_rank, rankName))
+                    Text(stringResource(R.string.backup_summary_books, p.finishedBooks))
+                    Text(stringResource(R.string.backup_summary_fonts, p.fonts.size))
+                    Text(
+                        stringResource(
+                            if (p.avatar != null) R.string.backup_summary_avatar_yes
+                            else R.string.backup_summary_avatar_no
+                        )
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    preview = null
+                    busy = true
+                    scope.launch {
+                        try {
+                            val r = service.applyBackup(p)
+                            val parts = mutableListOf(resultOkMsg)
+                            if (r.fontsAdded > 0) parts += addedFmt.format(r.fontsAdded)
+                            if (r.fontsSkipped > 0) parts += skippedFmt.format(r.fontsSkipped)
+                            if (r.fontsFailed > 0) parts += failedFmt.format(r.fontsFailed)
+                            notify(parts.joinToString(" — "))
+                        } catch (e: Exception) {
+                            notify(errUnreadable)
+                        } finally {
+                            busy = false
+                        }
+                    }
+                }) {
+                    Text(stringResource(R.string.backup_restore_button))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    service.discard(p)
+                    preview = null
+                }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
     }
 }
 

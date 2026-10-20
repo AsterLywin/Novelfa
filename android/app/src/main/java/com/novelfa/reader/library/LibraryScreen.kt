@@ -333,7 +333,7 @@ fun LibraryScreen(
     LaunchedEffect(tab) {
         gateTick++
         runCatching {
-            RankHook.refreshRank(viewModel.dao, rankPrefs)?.let { rankUp = it }
+            RankHook.refreshRank(viewModel.dao, rankPrefs, prefs.getFinishedBooksRestored())?.let { rankUp = it }
         }
     }
     // Also re-check on resume: the PIN can be set/removed in Settings, and

@@ -89,7 +89,13 @@ class SettingsViewModel(
     }
 
     suspend fun currentRank(): RankSummary {
-        val done = dao.allBooks().first().count { !it.isPrivate && isCompleted(it) }
+        // Effective finished count includes the backup-restored floor, so
+        // the settings rank display matches the restored record even on an
+        // empty library (plan §7).
+        val done = maxOf(
+            dao.allBooks().first().count { !it.isPrivate && isCompleted(it) },
+            prefs.getFinishedBooksRestored()
+        )
         val service = rankService()
         val idx = service.rankIndexFor(done)
         val current = RankService.Ranks[idx]

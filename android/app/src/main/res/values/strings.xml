@@ -178,4 +178,33 @@
     <string name="link_channel">Channel</string>
     <string name="link_donate">Donate</string>
     <string name="link_boost">Boost</string>
+
+    <string name="backup_section_title">Backup &amp; Restore</string>
+    <string name="backup_create">Create Backup</string>
+    <string name="backup_restore">Restore from Backup</string>
+    <string name="backup_working">Working…</string>
+    <string name="backup_created">Backup created.</string>
+    <string name="backup_export_failed">Couldn\'t create the backup.</string>
+    <string name="backup_summary_title">Restore this backup?</string>
+    <string name="backup_summary_created">Created: %1$s</string>
+    <string name="backup_summary_platform">Made on: %1$s</string>
+    <string name="backup_summary_rank">Rank: %1$s</string>
+    <string name="backup_summary_books">Books finished: %1$d</string>
+    <string name="backup_summary_fonts">Fonts: %1$d</string>
+    <string name="backup_summary_avatar_yes">Avatar: included</string>
+    <string name="backup_summary_avatar_no">Avatar: none</string>
+    <string name="backup_restore_button">Restore</string>
+    <string name="backup_result_ok">Backup restored.</string>
+    <string name="backup_result_fonts_added">%1$d fonts added</string>
+    <string name="backup_result_fonts_skipped">%1$d already present (skipped)</string>
+    <string name="backup_result_fonts_failed">%1$d fonts couldn\'t be added</string>
+    <string name="backup_err_not_backup">This file is not a Novelfa backup.</string>
+    <string name="backup_err_too_new">This backup was made by a newer version of the app.</string>
+    <string name="backup_err_corrupt">The backup is damaged or was modified.</string>
+    <string name="backup_err_font">The backup contains an invalid font file.</string>
+    <string name="backup_err_image">The backup contains an invalid avatar image.</string>
+    <string name="backup_err_too_large">The backup is larger than allowed.</string>
+    <string name="backup_err_unreadable">Couldn\'t read the backup file.</string>
+    <string name="platform_android">Android</string>
+    <string name="platform_windows">Windows</string>
 </resources>
