@@ -2,8 +2,11 @@ package com.novelfa.reader.theme
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntSize
+import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -31,11 +34,23 @@ fun EmblemWatermark(
     grad1: Color,
     grad2: Color,
     alpha: Float,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    contentAlignment: Alignment = Alignment.Center
 ) {
     Canvas(modifier = modifier) {
-        val scale = size.minDimension / 100f
-        withTransform({ scale(scale, scale) }) {
+        // The emblem is drawn at the canvas's smaller dimension and placed
+        // per contentAlignment, so a wide/short canvas (e.g. the hero card
+        // via matchParentSize) still shows it whole, at the wanted side.
+        val side = size.minDimension
+        val scale = side / 100f
+        val topLeft = contentAlignment.align(
+            IntSize(side.roundToInt(), side.roundToInt()),
+            IntSize(size.width.roundToInt(), size.height.roundToInt())
+        )
+        withTransform({
+            translate(topLeft.x.toFloat(), topLeft.y.toFloat())
+            scale(scale, scale, Offset.Zero)
+        }) {
             drawPath(
                 path = path,
                 brush = Brush.linearGradient(colors = listOf(grad1, grad2)),

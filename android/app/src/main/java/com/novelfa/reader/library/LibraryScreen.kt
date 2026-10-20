@@ -1482,9 +1482,11 @@ private fun HeroCard(
                 grad1 = extras.accentGrad1,
                 grad2 = extras.accentGrad2,
                 alpha = 0.14f,
-                modifier = Modifier
-                    .size(190.dp)
-                    .align(Alignment.CenterEnd)
+                // matchParentSize: decoration only — it must not drive the
+                // hero's height (a fixed 190dp here stretched the card and
+                // left a void under the content).
+                modifier = Modifier.matchParentSize(),
+                contentAlignment = Alignment.CenterEnd
             )
         }
         Row(modifier = Modifier.padding(12.dp)) {
