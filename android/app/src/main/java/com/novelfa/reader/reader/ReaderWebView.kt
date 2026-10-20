@@ -15,14 +15,24 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
- * JS bridge for the adapted scroll reporter in [HtmlBuilder.build]
- * (`Android.onScroll(t,h,c,gen)`).
+ * JS bridge for the reader documents: the scroll reporter
+ * (`Android.onScroll(t,h,c,gen)`) and in-book link taps handed over by
+ * the LINK_JS interceptor in [HtmlBuilder.build] (`Android.onLink(href)`
+ * with the raw authored href of a relative file reference).
  */
-class ScrollBridge(private val onScroll: (Int, Int, Int, Int) -> Unit) {
+class ScrollBridge(
+    private val onScroll: (Int, Int, Int, Int) -> Unit,
+    private val onLinkClick: (String) -> Unit = {}
+) {
 
     @JavascriptInterface
     fun onScroll(t: Long, h: Long, c: Long, gen: Long) {
         onScroll(t.toInt(), h.toInt(), c.toInt(), gen.toInt())
+    }
+
+    @JavascriptInterface
+    fun onLink(href: String) {
+        onLinkClick(href)
     }
 }
 
@@ -34,6 +44,16 @@ fun WebView.updateSpacingJs(css: String) {
 /** Paged mode: replaces the #rdrPaged style element, then repaginates. */
 fun WebView.updatePagedStyleJs(css: String) {
     evaluateJavascript(HtmlBuilder.pagedStyleUpdateJs(css), null)
+}
+
+/** Paged mode: jump to the page holding the element with id [frag]. */
+fun WebView.goToAnchorPaged(frag: String) {
+    evaluateJavascript(HtmlBuilder.anchorJumpJs(frag), null)
+}
+
+/** Vertical mode: scroll the element with id [frag] into view. */
+fun WebView.scrollToAnchor(frag: String) {
+    evaluateJavascript(HtmlBuilder.anchorScrollJs(frag), null)
 }
 
 /**

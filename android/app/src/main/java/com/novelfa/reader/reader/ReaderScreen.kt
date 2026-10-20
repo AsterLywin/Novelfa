@@ -122,6 +122,9 @@ fun ReaderScreen(
     var loadError by remember { mutableStateOf(false) }
     var pageHtml by remember { mutableStateOf("") }
     var pendingLastPage by remember { mutableStateOf(false) }
+    // Fragment to land on after a cross-chapter in-book link opens its
+    // chapter; applied (and cleared) by the onPageFinished hook.
+    var pendingAnchor by remember { mutableStateOf<String?>(null) }
     var pageBase by remember { mutableStateOf<String?>(null) }
     var rev by remember { mutableIntStateOf(0) }
     var webView by remember { mutableStateOf<android.webkit.WebView?>(null) }
@@ -175,7 +178,8 @@ fun ReaderScreen(
     }
 
     val bridge = remember {
-        ScrollBridge { t, h, c, gen ->
+        ScrollBridge(
+            onScroll = { t, h, c, gen ->
             scope.launch {
                 val v = vm ?: return@launch
                 // Stale-page guard: a drawer jump / theme change bumps
@@ -191,7 +195,12 @@ fun ReaderScreen(
                 applyIncrementalJs(v, last, first)
                 rev++
             }
-        }
+            },
+            onLinkClick = { href ->
+                val v = vm
+                if (v != null) scope.launch { handleInBookLink(v, href) }
+            }
+        )
     }
 
     LaunchedEffect(bookId) {
@@ -257,6 +266,32 @@ fun ReaderScreen(
             rev++
         } else {
             showVmError(v)
+        }
+    }
+
+    /** Jumps to an in-book anchor in the currently shown chapter. */
+    fun jumpToAnchor(v: ReaderViewModel, frag: String) {
+        val wv = webView ?: return
+        if (v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
+            wv.goToAnchorPaged(frag)
+        } else {
+            wv.scrollToAnchor(frag)
+        }
+    }
+
+    /**
+     * In-book link tap (from the LINK_JS interceptor via the bridge):
+     * resolves the authored href to a spine chapter; a link back into
+     * the current chapter file jumps in place, otherwise the target
+     * chapter opens and its fragment is applied on page-finish.
+     */
+    suspend fun handleInBookLink(v: ReaderViewModel, href: String) {
+        val (idx, frag) = v.resolveLink(href) ?: return
+        if (idx == v.index) {
+            if (frag.isNotBlank()) jumpToAnchor(v, frag)
+        } else {
+            if (frag.isNotBlank()) pendingAnchor = frag
+            gotoChapter(v, idx)
         }
     }
 
@@ -572,6 +607,13 @@ fun ReaderScreen(
                                 if (modeNow == ReadingMode.PAGED_HORIZONTAL) {
                                     webView?.evaluateJavascript("rdrLast()", null)
                                 }
+                            }
+                            // In-book link landing: jump to the linked
+                            // fragment (the pager queues the jump if
+                            // pagination is still running).
+                            pendingAnchor?.let { frag ->
+                                pendingAnchor = null
+                                vm?.let { jumpToAnchor(it, frag) }
                             }
                         },
                         onSwipeLeft = {

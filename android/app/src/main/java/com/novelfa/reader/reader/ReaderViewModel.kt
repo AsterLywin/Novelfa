@@ -3,6 +3,7 @@ package com.novelfa.reader.reader
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.BookEntity
 import com.novelfa.reader.model.Chapter
+import com.novelfa.reader.parser.HrefResolver
 import com.novelfa.reader.theme.ReaderTheme
 import com.novelfa.reader.theme.Themes
 import com.novelfa.reader.theme.CharacterThemes
@@ -570,6 +571,33 @@ class ReaderViewModel(
         preparedCache[i] = prepared
         return prepared
     }
+
+    /**
+     * Resolves an in-book link href (exactly as authored in the chapter
+     * HTML) to the spine chapter it points at, plus its fragment id.
+     * EPUB hrefs are relative to the CURRENT chapter's folder. Returns
+     * null when the target file is not one of the book's spine chapters
+     * (external files, cover pages outside the spine, bad hrefs) — such
+     * taps are ignored. The fragment is percent-decoded like file hrefs.
+     */
+    suspend fun resolveLink(href: String): Pair<Int, String>? =
+        withContext(Dispatchers.IO) {
+            val filePart = href.substringBefore('#').substringBefore('?').trim()
+            val fragRaw = href.substringAfter('#', "").trim()
+            val frag = runCatching {
+                java.net.URLDecoder.decode(fragRaw, "UTF-8")
+            }.getOrDefault(fragRaw)
+            if (filePart.isEmpty()) return@withContext null
+            val folder = chapters[index].file.parentFile
+                ?: return@withContext null
+            val target = runCatching {
+                HrefResolver.resolve(folder, filePart).canonicalPath
+            }.getOrNull() ?: return@withContext null
+            val idx = chapters.indexOfFirst {
+                runCatching { it.file.canonicalPath }.getOrNull() == target
+            }
+            if (idx < 0) null else idx to frag
+        }
 
     private fun baseUrl(i: Int): String =
         chapters[i].file.parentFile?.toURI()?.toString() ?: ""

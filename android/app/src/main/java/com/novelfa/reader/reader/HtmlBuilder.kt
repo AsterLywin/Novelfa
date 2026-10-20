@@ -117,6 +117,10 @@ object HtmlBuilder {
         sb.append("var nt=Math.round(lr*Math.max(h-c,0));d.scrollTop=nt;b.scrollTop=nt;}}catch(x){}r();}")
         sb.append("window.addEventListener('scroll',r);window.addEventListener('resize',z);setInterval(r,200);")
         sb.append("})();</script>")
+        // In-book link interception for every build (see LINK_JS):
+        // without it a tapped link navigates the WebView itself out of
+        // the reader shell.
+        sb.append("<script>").append(LINK_JS).append("</script>")
         if (paged) {
             // rdrPager: deterministic block-level pagination (see PAGER_JS).
             // Runs before <body> is parsed; its boot waits for
@@ -192,6 +196,27 @@ object HtmlBuilder {
             "if(s.styleSheet){s.styleSheet.cssText='$esc';}else{s.innerHTML='$esc';}return 'ok';})();" +
             REPAGINATE_JS
     }
+
+    private fun jsStringLiteral(s: String): String =
+        "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+    /**
+     * Paged mode: jump to the page holding the element with id [frag]
+     * (rdrGoToAnchor queues the jump if pagination is still running).
+     */
+    fun anchorJumpJs(frag: String): String =
+        "(function(){try{if(window.rdrGoToAnchor)window.rdrGoToAnchor(" +
+            jsStringLiteral(frag) + ");}catch(e){}})();"
+
+    /**
+     * Vertical mode: scroll the element with id [frag] (or a legacy
+     * <a name>) into view — used for in-book links whose target lives in
+     * another chapter file.
+     */
+    fun anchorScrollJs(frag: String): String =
+        "(function(){try{var id=" + jsStringLiteral(frag) + ";" +
+            "var el=document.getElementById(id)||document.querySelector('a[name=\"'+id+'\"]');" +
+            "if(el){el.scrollIntoView();return 'ok';}return 'miss';}catch(e){return 'err';}})();"
 
     /** Ask the pager (if present) to rebuild after a live style swap. */
     private const val REPAGINATE_JS =
@@ -272,11 +297,13 @@ object HtmlBuilder {
     /**
      * rdrPager script (paged builds only) — GENERATED, DO NOT REINDENT.
      * Byte-identical to the pager.js verified in headless Chromium
-     * (416 checks: text integrity, per-page fit, turn contract, RTL+LTR
-     * geometry, repagination anchors). It assigns window.rdrTurn /
-     * window.rdrLast explicitly: the old multicol versions were declared
-     * inside the reporter script's IIFE and were never callable from
-     * native code (verified: typeof window.rdrTurn === 'undefined').
+     * (488 pagination checks + 68 link checks: text integrity, per-page
+     * fit, turn contract, RTL+LTR geometry, repagination anchors,
+     * in-book link navigation). It assigns window.rdrTurn /
+     * window.rdrLast / window.rdrGoToAnchor explicitly: the old multicol
+     * versions were declared inside the reporter script's IIFE and were
+     * never callable from native code (verified:
+     * typeof window.rdrTurn === 'undefined').
      */
     private const val PAGER_JS = """// rdrPager — deterministic block-level pagination for Novelfa paged mode.
 //
@@ -313,6 +340,7 @@ object HtmlBuilder {
     var ready = false;
     var lockUntil = 0;
     var pendingLast = false;
+    var pendingAnchor = null;
     var autoRepag = 0;
     var repagTimer = 0;
     var building = false;
@@ -781,7 +809,12 @@ object HtmlBuilder {
         window.__rdrPagerBuilding = false;
         ready = true;
         window.__rdrPagerReady = true;
-        if (pendingLast) {
+        if (pendingAnchor) {
+            var pa = pendingAnchor;
+            pendingAnchor = null;
+            pendingLast = false;
+            if (!goToAnchorNow(pa)) show(pageForAnchor(anchor), true);
+        } else if (pendingLast) {
             pendingLast = false;
             show(pages.length - 1, true);
         } else {
@@ -845,6 +878,47 @@ object HtmlBuilder {
         if (!ready) return -1;
         show(i, true);
         return cur;
+    };
+    // In-book link navigation: jump to the page containing the element
+    // with the given id (or <a name>). Pre-ready calls are queued and
+    // applied when the build finishes (cross-chapter link landings).
+    function findAnchor(id) {
+        var i, j, all, el;
+        for (i = 0; i < pages.length; i++) {
+            all = pages[i].el.getElementsByTagName('*');
+            for (j = 0; j < all.length; j++) {
+                el = all[j];
+                if (el.id === id) return { page: i, el: el };
+                if (el.tagName === 'A' && el.getAttribute('name') === id) return { page: i, el: el };
+            }
+        }
+        return null;
+    }
+    function goToAnchorNow(id) {
+        var hit = findAnchor(id);
+        if (!hit) return false;
+        show(hit.page, true);
+        // Target inside an internally-scrolling tall page: scroll the
+        // wrap so the target is visible.
+        var n = hit.el, wrap = null;
+        while (n && n !== strip) {
+            if (n.className && (' ' + n.className + ' ').indexOf(' rdr-tallwrap ') >= 0) { wrap = n; break; }
+            n = n.parentNode;
+        }
+        if (wrap) {
+            try {
+                var dy = hit.el.getBoundingClientRect().top - wrap.getBoundingClientRect().top;
+                wrap.scrollTop += dy - 8;
+            } catch (e) { }
+        }
+        return true;
+    }
+    window.rdrGoToAnchor = function (id) {
+        try {
+            if (!id) return false;
+            if (!ready || building) { pendingAnchor = String(id); return false; }
+            return goToAnchorNow(String(id));
+        } catch (e) { return false; }
     };
     window.rdrPageCount = function () { return ready ? pages.length : 0; };
     window.rdrCurrentPage = function () { return ready ? cur : 0; };
@@ -927,5 +1001,56 @@ object HtmlBuilder {
         lastW = chap ? chap.clientWidth : 0;
         lastH = chap ? chap.clientHeight : 0;
     }
+})();"""
+    /**
+     * In-book link interception (ALL builds) — GENERATED, DO NOT REINDENT.
+     * Byte-identical to the links.js verified in headless Chromium
+     * (68 link checks together with the pager suite). Intercepts clicks
+     * on <a href>: '#frag' jumps via the pager in paged mode (native
+     * fragment scroll in vertical mode), relative file hrefs are handed
+     * to Android.onLink for chapter resolution, external schemes are
+     * swallowed (the reader is offline; the WebView must never navigate
+     * itself out of the reader shell).
+     */
+    private const val LINK_JS = """// Novelfa in-book link interception — injected into EVERY reader document
+// (paged and vertical). EPUB chapters link to footnotes/endnotes and to
+// other chapter files; the WebView must never navigate itself (it would
+// leave the reader shell and load a raw XHTML file). Instead:
+//   - "#frag"        -> paged: rdrGoToAnchor jumps to the target's page;
+//                       vertical: native fragment scroll (left untouched).
+//   - "file.xhtml#f" -> Android.onLink(rawHref); the app resolves it
+//                       against the current chapter folder, opens that
+//                       chapter, then lands on the fragment.
+//   - http/mailto/…  -> swallowed (the reader is fully offline).
+(function () {
+    document.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.nodeType !== 1) t = t.parentElement;
+        if (!t || !t.closest) return;
+        var a = t.closest('a[href]');
+        if (!a) return;
+        var raw = a.getAttribute('href');
+        if (raw == null) return;
+        var h = raw.trim();
+        if (!h) { e.preventDefault(); return; }
+        if (h.charAt(0) === '#') {
+            if (window.rdrGoToAnchor) {
+                e.preventDefault();
+                var id = h.substring(1);
+                try { id = decodeURIComponent(id); } catch (err) { }
+                if (id) window.rdrGoToAnchor(id);
+            }
+            return;
+        }
+        var low = h.toLowerCase();
+        if (low.indexOf('http:') === 0 || low.indexOf('https:') === 0 ||
+            low.indexOf('mailto:') === 0 || low.indexOf('tel:') === 0 ||
+            low.indexOf('javascript:') === 0 || low.indexOf('data:') === 0) {
+            e.preventDefault();
+            return;
+        }
+        e.preventDefault();
+        try { if (window.Android && Android.onLink) Android.onLink(h); } catch (err) { }
+    }, true);
 })();"""
 }
