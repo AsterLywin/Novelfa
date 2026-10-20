@@ -6,6 +6,8 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -246,11 +248,6 @@ fun LibraryScreen(
     // underneath stay visible, and opaque once scrolled.
     val gridState = rememberLazyGridState()
     val listState = rememberLazyListState()
-    val atTop = if (gridView) {
-        gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
-    } else {
-        listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-    }
     val books by remember(tab, debouncedQuery) { viewModel.filtered(tab, debouncedQuery) }
         .collectAsState(initial = emptyList())
     val allBooks by viewModel.books.collectAsState(initial = emptyList())
@@ -531,7 +528,20 @@ fun LibraryScreen(
             )
         },
         floatingActionButton = {
-            val fabAlpha = if (atTop) 0.55f else 1f
+            // Translucent ONLY while the list is actively scrolling;
+            // at rest the button is fully opaque at ANY scroll position
+            // (it used to key off the scroll position instead, which
+            // left it faded on a stationary scrolled page).
+            val scrolling = if (gridView) {
+                gridState.isScrollInProgress
+            } else {
+                listState.isScrollInProgress
+            }
+            val fabAlpha by animateFloatAsState(
+                targetValue = if (scrolling) 0.55f else 1f,
+                animationSpec = tween(durationMillis = 150),
+                label = "fabAlpha"
+            )
             if (themeExtras.hasCharacterTheme) {
                 // Windows parity: the primary action wears the theme's
                 // accent gradient (AccentGradient brush).
@@ -1548,27 +1558,27 @@ private fun HeroCard(
             )
         }
         Row(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
+            modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // The Windows "tilted book": an accent-gradient plate rotated
             // -10° behind the cover; the cover itself rotated +4°, with
             // 12dp rounded corners, crop fill and a soft shadow. (It used
-            // to be a small flat 72dp rectangle with sharp corners.)
+            // at the card's original compact footprint.)
             val plateColors = if (extras.accentGrad1 == Color.Transparent) {
                 listOf(scheme.primary, scheme.secondary)
             } else {
                 listOf(extras.accentGrad1, extras.accentGrad2)
             }
             Box(
-                modifier = Modifier.width(118.dp).height(150.dp),
+                modifier = Modifier.width(92.dp).height(106.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Box(
                     modifier = Modifier
-                        .size(width = 84.dp, height = 120.dp)
+                        .size(width = 72.dp, height = 96.dp)
                         .rotate(-10f)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(9.dp))
                         .background(
                             Brush.linearGradient(
                                 colors = plateColors.map { it.copy(alpha = 0.85f) }
@@ -1580,10 +1590,10 @@ private fun HeroCard(
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .size(width = 84.dp, height = 120.dp)
-                        .shadow(12.dp, RoundedCornerShape(10.dp))
+                        .size(width = 72.dp, height = 96.dp)
+                        .shadow(10.dp, RoundedCornerShape(9.dp))
                         .rotate(4f)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(9.dp))
                         .background(scheme.surfaceVariant)
                 )
             }
@@ -1594,28 +1604,28 @@ private fun HeroCard(
                     modifier = Modifier
                         .padding(start = 8.dp)
                         .width(24.dp)
-                        .height(84.dp)
+                        .height(72.dp)
                         .align(Alignment.CenterVertically)
                 )
             }
-            Column(modifier = Modifier.padding(start = 16.dp).weight(1f)) {
+            Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
                 // Windows text styles, with explicit colors (an uncolored
                 // Text here renders in the default content color, which
                 // read as near-black on the hero gradient).
                 Text(
                     stringResource(R.string.continue_reading),
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = scheme.primary
                 )
                 Text(
                     title,
-                    fontSize = 28.sp,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     color = scheme.onSurface,
-                    maxLines = 3,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 10.dp, bottom = 8.dp)
+                    modifier = Modifier.padding(top = 3.dp, bottom = 2.dp)
                 )
                 Text(
                     stringResource(
@@ -1623,28 +1633,28 @@ private fun HeroCard(
                         book.lastChapterIndex + 1,
                         book.totalChapters
                     ),
-                    fontSize = 13.sp,
+                    fontSize = 11.sp,
                     color = scheme.onSurfaceVariant
                 )
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 22.dp, bottom = 6.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 3.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
                         stringResource(R.string.progress),
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         color = scheme.onSurfaceVariant
                     )
                     Text(
                         stringResource(R.string.percent_value, percentDisplay(book)),
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = scheme.onSurface
                     )
                 }
                 LinearProgressIndicator(
                     progress = { (progressPercent(book) / 100.0).toFloat() },
-                    modifier = Modifier.fillMaxWidth().height(6.dp),
+                    modifier = Modifier.fillMaxWidth().height(5.dp),
                     color = scheme.primary,
                     trackColor = scheme.outline
                 )
@@ -1656,20 +1666,20 @@ private fun HeroCard(
                 Button(
                     onClick = onContinue,
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 11.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (lightScheme) scheme.primary else scheme.onSurface,
                         contentColor = btnFg
                     ),
-                    modifier = Modifier.padding(top = 22.dp)
+                    modifier = Modifier.padding(top = 8.dp)
                 ) {
                     Text(
                         stringResource(R.string.continue_keep_reading),
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     )
-                    Spacer(Modifier.width(10.dp))
-                    Canvas(Modifier.size(16.dp)) {
+                    Spacer(Modifier.width(8.dp))
+                    Canvas(Modifier.size(12.dp)) {
                         // IcoArrowForward, mirrored with the layout direction.
                         val sc = size.width / 16f
                         val path = Path()
