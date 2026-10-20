@@ -38,6 +38,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -76,11 +78,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -91,6 +96,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -122,6 +129,7 @@ import java.io.IOException
 import java.util.Calendar
 import androidx.compose.material3.CardDefaults
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.offset
 import com.novelfa.reader.theme.EmblemWatermark
 import com.novelfa.reader.theme.LocalAppPaletteExtras
@@ -1486,11 +1494,15 @@ private fun HeroCard(
     onContinue: () -> Unit
 ) {
     val extras = LocalAppPaletteExtras.current
+    val scheme = MaterialTheme.colorScheme
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     Card(
         onClick = onContinue,
         modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
         // Windows parity: 1dp border + hero gradient background
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        border = BorderStroke(1.dp, scheme.outline),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent)
     ) {
         Box(
@@ -1498,12 +1510,26 @@ private fun HeroCard(
                 .fillMaxWidth()
                 .background(
                     Brush.horizontalGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.secondary,
-                            MaterialTheme.colorScheme.tertiary
-                        )
+                        colors = listOf(scheme.secondary, scheme.tertiary)
                     )
                 )
+                // Windows accent glow: a radial wash of the accent color
+                // at 32% fading out from the cover-side top corner.
+                .drawBehind {
+                    drawRect(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                scheme.primary.copy(alpha = 0.32f),
+                                Color.Transparent
+                            ),
+                            center = Offset(
+                                if (rtl) size.width * 0.88f else size.width * 0.12f,
+                                size.height * 0.1f
+                            ),
+                            radius = size.width * 0.75f
+                        )
+                    )
+                }
         ) {
         // Emblem watermark inside the hero (Windows: 190dp at 14%).
         if (extras.hasCharacterTheme && extras.emblemPath != null) {
@@ -1519,18 +1545,50 @@ private fun HeroCard(
                 contentAlignment = Alignment.CenterEnd
             )
         }
-        Row(modifier = Modifier.padding(12.dp)) {
-            Box(modifier = Modifier.width(72.dp).aspectRatio(0.75f)) {
+        Row(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // The Windows "tilted book": an accent-gradient plate rotated
+            // -10° behind the cover; the cover itself rotated +4°, with
+            // 12dp rounded corners, crop fill and a soft shadow. (It used
+            // to be a small flat 72dp rectangle with sharp corners.)
+            val plateColors = if (extras.accentGrad1 == Color.Transparent) {
+                listOf(scheme.primary, scheme.secondary)
+            } else {
+                listOf(extras.accentGrad1, extras.accentGrad2)
+            }
+            Box(
+                modifier = Modifier.width(118.dp).height(150.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 84.dp, height = 120.dp)
+                        .rotate(-10f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = plateColors.map { it.copy(alpha = 0.85f) }
+                            )
+                        )
+                )
                 AsyncImage(
                     model = book.coverPath,
                     contentDescription = title,
-                    modifier = Modifier.fillMaxSize()
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(width = 84.dp, height = 120.dp)
+                        .shadow(12.dp, RoundedCornerShape(10.dp))
+                        .rotate(4f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(scheme.surfaceVariant)
                 )
             }
             // Tsugi torn seam between the cover and the text (Windows hero).
             if (extras.charThemeId == "tsugi") {
                 StitchSeam(
-                    textColor = MaterialTheme.colorScheme.onSurface,
+                    textColor = scheme.onSurface,
                     modifier = Modifier
                         .padding(start = 8.dp)
                         .width(24.dp)
@@ -1538,13 +1596,24 @@ private fun HeroCard(
                         .align(Alignment.CenterVertically)
                 )
             }
-            Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
-                Text(stringResource(R.string.continue_reading), style = MaterialTheme.typography.labelMedium)
+            Column(modifier = Modifier.padding(start = 16.dp).weight(1f)) {
+                // Windows text styles, with explicit colors (an uncolored
+                // Text here renders in the default content color, which
+                // read as near-black on the hero gradient).
+                Text(
+                    stringResource(R.string.continue_reading),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = scheme.primary
+                )
                 Text(
                     title,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = scheme.onSurface,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 10.dp, bottom = 8.dp)
                 )
                 Text(
                     stringResource(
@@ -1552,18 +1621,82 @@ private fun HeroCard(
                         book.lastChapterIndex + 1,
                         book.totalChapters
                     ),
-                    style = MaterialTheme.typography.labelSmall
+                    fontSize = 13.sp,
+                    color = scheme.onSurfaceVariant
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 22.dp, bottom = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        stringResource(R.string.progress),
+                        fontSize = 11.sp,
+                        color = scheme.onSurfaceVariant
+                    )
+                    Text(
+                        stringResource(R.string.percent_value, percentDisplay(book)),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = scheme.onSurface
+                    )
+                }
                 LinearProgressIndicator(
                     progress = { (progressPercent(book) / 100.0).toFloat() },
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                    modifier = Modifier.fillMaxWidth().height(6.dp),
+                    color = scheme.primary,
+                    trackColor = scheme.outline
                 )
+                // Windows LightButton: in light themes it is accent with
+                // on-accent text; in dark themes the text color is the
+                // background and the page background is the foreground.
+                val lightScheme = scheme.background.luminance() > 0.5f
+                val btnFg = if (lightScheme) scheme.onPrimary else scheme.background
+                Button(
+                    onClick = onContinue,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 11.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (lightScheme) scheme.primary else scheme.onSurface,
+                        contentColor = btnFg
+                    ),
+                    modifier = Modifier.padding(top = 22.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.continue_keep_reading),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Canvas(Modifier.size(16.dp)) {
+                        // IcoArrowForward, mirrored with the layout direction.
+                        val sc = size.width / 16f
+                        val path = Path()
+                        if (rtl) {
+                            path.moveTo(13f * sc, 8f * sc); path.lineTo(3f * sc, 8f * sc)
+                            path.moveTo(7f * sc, 4f * sc); path.lineTo(3f * sc, 8f * sc)
+                            path.lineTo(7f * sc, 12f * sc)
+                        } else {
+                            path.moveTo(3f * sc, 8f * sc); path.lineTo(13f * sc, 8f * sc)
+                            path.moveTo(9f * sc, 4f * sc); path.lineTo(13f * sc, 8f * sc)
+                            path.lineTo(9f * sc, 12f * sc)
+                        }
+                        drawPath(
+                            path,
+                            color = btnFg,
+                            style = Stroke(
+                                width = 1.6.dp.toPx(),
+                                cap = StrokeCap.Round,
+                                join = StrokeJoin.Round
+                            )
+                        )
+                    }
+                }
             }
         }
         // Tsugi stitch in the hero's top-start corner (Windows: 64dp).
         if (extras.charThemeId == "tsugi") {
             StitchDiagonalLarge(
-                color = MaterialTheme.colorScheme.primary,
+                color = scheme.primary,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(6.dp)

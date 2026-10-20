@@ -80,6 +80,7 @@
     <string name="save">Save</string>
     <string name="collection">Collection</string>
     <string name="continue_reading">Continue reading</string>
+    <string name="continue_keep_reading">Keep reading</string>
     <string name="rename">Rename</string>
     <string name="all_books">All books</string>
     <string name="privacy">Privacy</string>
