@@ -64,7 +64,17 @@ data class BackupApplyResult(
     val fontsAdded: Int,
     val fontsSkipped: Int,
     val fontsFailed: Int,
-    val avatarApplied: Boolean
+    val avatarApplied: Boolean,
+    /** Effective rank index before the merge (for the result dialog). */
+    val rankBefore: Int,
+    /** Effective rank index after the merge. */
+    val rankAfter: Int,
+    /** Effective finished-books count before the merge. */
+    val finishedBefore: Int,
+    /** Finished-books count carried by the backup itself. */
+    val finishedAdded: Int,
+    /** Merged total: [finishedBefore] + [finishedAdded]. */
+    val finishedTotal: Int
 )
 
 /**
@@ -654,24 +664,50 @@ class BackupService(
                 avatarApplied = true
             }
 
-            // --- profile + rank (monotonic merges, never down) ---
+            // --- profile + rank merge ---
+            // Finished books are SUMMED (Aster's spec): the backup's count is
+            // added on top of the current effective count (library-derived or
+            // the restored floor, whichever is higher) and the sum becomes
+            // the new persisted floor. Rank is unified across both sides —
+            // the max of the current rank, the backup's stored rank and the
+            // rank implied by the summed count — and never goes down.
+            // Secret themes union (in RankService via secretUnlock).
+            val libraryFinished = dao.allBooks().first()
+                .count { !it.isPrivate && isCompleted(it) }
+            val finishedBefore = maxOf(
+                libraryFinished,
+                prefs.getFinishedBooksRestored()
+            )
+            val finishedTotal = (finishedBefore + preview.finishedBooks)
+                .coerceAtMost(MAX_FINISHED_BOOKS)
             if (preview.profileName.isNotBlank()) {
                 prefs.setProfileName(preview.profileName)
             }
             rankPrefs.awaitLoaded()
             val service = RankService(rankPrefs)
-            val targetRank = maxOf(
+            val rankBefore = maxOf(
                 service.maxRank,
+                RankService.rankIndexForStatic(finishedBefore)
+            )
+            val targetRank = maxOf(
+                rankBefore,
                 preview.maxRank,
-                RankService.rankIndexForStatic(preview.finishedBooks)
+                RankService.rankIndexForStatic(finishedTotal)
             )
             if (targetRank > service.maxRank) {
                 service.maxRank = targetRank
             }
             preview.secretThemes.forEach { service.secretUnlock(it) }
-            prefs.raiseFinishedBooksRestored(preview.finishedBooks)
+            prefs.raiseFinishedBooksRestored(finishedTotal)
 
             discard(preview)
-            BackupApplyResult(added, skipped, failed, avatarApplied)
+            BackupApplyResult(
+                added, skipped, failed, avatarApplied,
+                rankBefore = rankBefore,
+                rankAfter = targetRank,
+                finishedBefore = finishedBefore,
+                finishedAdded = preview.finishedBooks,
+                finishedTotal = finishedTotal
+            )
         }
 }

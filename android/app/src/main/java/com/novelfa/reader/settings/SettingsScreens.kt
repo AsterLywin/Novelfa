@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.novelfa.reader.R
+import com.novelfa.reader.data.BackupApplyResult
 import com.novelfa.reader.data.BackupError
 import com.novelfa.reader.data.BackupPreview
 import com.novelfa.reader.data.BackupService
@@ -497,14 +498,11 @@ private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit
     }
     var busy by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<BackupPreview?>(null) }
+    var result by remember { mutableStateOf<BackupApplyResult?>(null) }
 
     // Hoisted strings: launcher/coroutine callbacks are not composable.
     val createdMsg = stringResource(R.string.backup_created)
     val exportFailedMsg = stringResource(R.string.backup_export_failed)
-    val resultOkMsg = stringResource(R.string.backup_result_ok)
-    val addedFmt = stringResource(R.string.backup_result_fonts_added)
-    val skippedFmt = stringResource(R.string.backup_result_fonts_skipped)
-    val failedFmt = stringResource(R.string.backup_result_fonts_failed)
     val errNotBackup = stringResource(R.string.backup_err_not_backup)
     val errTooNew = stringResource(R.string.backup_err_too_new)
     val errCorrupt = stringResource(R.string.backup_err_corrupt)
@@ -629,12 +627,7 @@ private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit
                     busy = true
                     scope.launch {
                         try {
-                            val r = service.applyBackup(p)
-                            val parts = mutableListOf(resultOkMsg)
-                            if (r.fontsAdded > 0) parts += addedFmt.format(r.fontsAdded)
-                            if (r.fontsSkipped > 0) parts += skippedFmt.format(r.fontsSkipped)
-                            if (r.fontsFailed > 0) parts += failedFmt.format(r.fontsFailed)
-                            notify(parts.joinToString(" — "))
+                            result = service.applyBackup(p)
                         } catch (e: Exception) {
                             notify(errUnreadable)
                         } finally {
@@ -651,6 +644,53 @@ private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit
                     preview = null
                 }) {
                     Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    // Post-restore announcement: what the merge produced (rank move,
+    // summed finished-books total, fonts added).
+    result?.let { r ->
+        val rankBeforeName = RankService.Ranks
+            .getOrNull(r.rankBefore.coerceAtLeast(0))
+            ?.displayName(isEnglishUi)
+            ?: ""
+        val rankAfterName = RankService.Ranks
+            .getOrNull(r.rankAfter.coerceAtLeast(0))
+            ?.displayName(isEnglishUi)
+            ?: ""
+        AlertDialog(
+            onDismissRequest = { result = null },
+            title = { Text(stringResource(R.string.backup_result_title)) },
+            text = {
+                Column {
+                    if (r.rankAfter > r.rankBefore) {
+                        Text(
+                            stringResource(
+                                R.string.backup_result_rank_upgraded,
+                                rankBeforeName,
+                                rankAfterName
+                            )
+                        )
+                    } else {
+                        Text(stringResource(R.string.backup_result_rank, rankAfterName))
+                    }
+                    Text(stringResource(R.string.backup_result_books_total, r.finishedTotal))
+                    if (r.fontsAdded > 0) {
+                        Text(stringResource(R.string.backup_result_fonts_added, r.fontsAdded))
+                    }
+                    if (r.fontsSkipped > 0) {
+                        Text(stringResource(R.string.backup_result_fonts_skipped, r.fontsSkipped))
+                    }
+                    if (r.fontsFailed > 0) {
+                        Text(stringResource(R.string.backup_result_fonts_failed, r.fontsFailed))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { result = null }) {
+                    Text(stringResource(R.string.close))
                 }
             }
         )

@@ -194,7 +194,10 @@
     <string name="backup_summary_avatar_yes">آواتار: دارد</string>
     <string name="backup_summary_avatar_no">آواتار: ندارد</string>
     <string name="backup_restore_button">بازیابی</string>
-    <string name="backup_result_ok">بکاپ بازیابی شد.</string>
+    <string name="backup_result_title">نتیجه‌ی بازیابی</string>
+    <string name="backup_result_rank_upgraded">رنک از %1$s به %2$s ارتقا پیدا کرد</string>
+    <string name="backup_result_rank">رنک: %1$s</string>
+    <string name="backup_result_books_total">مجموع کتاب‌های خوانده‌شده: %1$d</string>
     <string name="backup_result_fonts_added">%1$d فونت اضافه شد</string>
     <string name="backup_result_fonts_skipped">%1$d فونت از قبل بود (رد شد)</string>
     <string name="backup_result_fonts_failed">%1$d فونت اضافه نشد</string>
