@@ -31,6 +31,11 @@ fun WebView.updateSpacingJs(css: String) {
     evaluateJavascript(HtmlBuilder.spacingUpdateJs(css), null)
 }
 
+/** Paged mode: replaces the #rdrPaged style element, then repaginates. */
+fun WebView.updatePagedStyleJs(css: String) {
+    evaluateJavascript(HtmlBuilder.pagedStyleUpdateJs(css), null)
+}
+
 /**
  * WebView owner. JS enabled, no zoom buttons, base URL = chapter folder URI
  * so relative images resolve. Reloads only when [html] changes; continuous

@@ -617,6 +617,7 @@ fun ReaderScreen(
                         try {
                             v.applySpacing(lh.toDouble(), margin, para.toDouble())
                             webView?.updateSpacingJs(v.spacingCss())
+                            webView?.updatePagedStyleJs(v.pagedCss())
                             pageHtml = v.html
                             rev++
                         } finally {
@@ -630,6 +631,7 @@ fun ReaderScreen(
                         try {
                             v.applySpacing(1.8, 24, 0.0)
                             webView?.updateSpacingJs(v.spacingCss())
+                            webView?.updatePagedStyleJs(v.pagedCss())
                             pageHtml = v.html
                             rev++
                         } finally {

@@ -14,8 +14,9 @@ import java.util.Locale
  * Dropped per spec (no keyboard on mobile): the shortcut-key script and the
  * `chrome.webview.postMessage` bridge. The scroll reporter is kept, adapted
  * to `Android.onScroll(t,h,c,gen)` via a JavascriptInterface, including the
- * lr-restore `z()` used after prepend. `rdrTurn(d)` drives horizontal page
- * turns in paged mode.
+ * lr-restore `z()` used after prepend. Horizontal page turns in paged mode
+ * are driven by the rdrPager script (PAGER_JS at the bottom of this file):
+ * `window.rdrTurn(d)` / `window.rdrLast()`.
  */
 object HtmlBuilder {
 
@@ -115,76 +116,47 @@ object HtmlBuilder {
         sb.append("c=d.clientHeight||b.clientHeight||0;")
         sb.append("var nt=Math.round(lr*Math.max(h-c,0));d.scrollTop=nt;b.scrollTop=nt;}}catch(x){}r();}")
         sb.append("window.addEventListener('scroll',r);window.addEventListener('resize',z);setInterval(r,200);")
-        // Horizontal page turning (paged mode). Returns 'page' when a page
-        // turned, 'start'/'end' at the chapter edges so native code can move
-        // to the adjacent chapter. RTL: scrollLeft runs 0 -> negative.
-        sb.append("function rdrTurn(d){try{")
-        sb.append("var now=Date.now();")
-        // Animation lock: a second swipe mid-animation would compute the
-        // current page from a mid-flight offset and jump to the wrong page.
-        sb.append("if(window.__rdrLockT&&now<window.__rdrLockT)return 'busy';")
-        sb.append("var de=document.documentElement;")
-        sb.append("if(!de.classList.contains('rdr-paged'))return 'page';")
-        sb.append("var w=de.clientWidth||window.innerWidth||1;")
-        sb.append("var rtl=de.getAttribute('dir')==='rtl';")
-        sb.append("var sl=window.pageXOffset||de.scrollLeft||0;")
-        sb.append("var cur=rtl?Math.round(-sl/w):Math.round(sl/w);")
-        sb.append("var count=Math.max(1,Math.round(de.scrollWidth/w));")
-        sb.append("var n=cur+d;if(n<0)return 'start';if(n>=count)return 'end';")
-        sb.append("window.__rdrLockT=now+450;")
-        sb.append("window.scrollTo({left:rtl?-n*w:n*w,behavior:'smooth'});")
-        sb.append("return 'page';}catch(x){return 'page';}}")
-        // Jump to the last page (used when navigating to the previous
-        // chapter: a backwards page-turn should continue from its end).
-        sb.append("function rdrLast(){try{")
-        sb.append("var de=document.documentElement;")
-        sb.append("if(!de.classList.contains('rdr-paged'))return 'no';")
-        sb.append("var w=de.clientWidth||window.innerWidth||1;")
-        sb.append("var rtl=de.getAttribute('dir')==='rtl';")
-        sb.append("var count=Math.max(1,Math.round(de.scrollWidth/w));")
-        sb.append("var n=count-1;")
-        sb.append("window.scrollTo({left:rtl?-n*w:n*w});")
-        sb.append("return 'ok';}catch(x){return 'no';}}")
-        sb.append("})();</script></head><body>").append(bodyContent).append("</body></html>")
+        sb.append("})();</script>")
+        if (paged) {
+            // rdrPager: deterministic block-level pagination (see PAGER_JS).
+            // Runs before <body> is parsed; its boot waits for
+            // DOMContentLoaded, then for fonts/images to settle.
+            sb.append("<script>").append(PAGER_JS).append("</script>")
+        }
+        sb.append("</head><body>").append(bodyContent).append("</body></html>")
         return sb.toString()
     }
 
     /**
-     * Paged-mode overrides. Paging is fully programmatic (rdrTurn/rdrLast):
-     * native horizontal scrolling is disabled (overflow-x:hidden) so a fling
-     * can never fight the page-turn animation or land between pages.
-     * Refreshed live by ReaderViewModel.refreshSpacing() when the margin
-     * changes, so the margin must stay a parameter here.
-     *
-     * column-fill:auto (not the default balance): columns fill SEQUENTIALLY,
-     * like real book pages — page 1 is completed before page 2 starts.
-     * With balance, the multicol balancer can push content into extra
-     * (near-empty) columns, which rdrTurn then counts as phantom pages.
+     * Paged-mode overrides (v2, rdrPager). The chapter div becomes a
+     * fixed stage; the pager script measures the chapter's blocks and
+     * packs them into explicit .rdr-page boxes inside a transformed
+     * .rdr-strip. No multicol, no scroll geometry: page positions are
+     * constructed in JS pixels. The side margin lives on .rdr-page
+     * padding; ReaderViewModel.refreshSpacing() rebuilds this block so
+     * margin changes apply on the next load (live swaps go through
+     * pagedStyleUpdateJs + rdrPaginate()).
      */
     fun pagedCss(sideMargin: Int): String {
         val sb = StringBuilder()
         sb.append("html.rdr-paged,html.rdr-paged body{height:100%;}")
-        sb.append("html.rdr-paged{overflow-x:hidden;overflow-y:hidden;}")
-        sb.append("html.rdr-paged body{margin:0 !important;padding:16px 0 !important;")
-        sb.append("column-width:100vw;column-gap:0;column-fill:auto;")
-        sb.append("-webkit-column-fill:auto;box-sizing:border-box;")
+        sb.append("html.rdr-paged{overflow:hidden;}")
+        sb.append("html.rdr-paged body{margin:0 !important;padding:0 !important;")
         // Windows parity: chapter fades in on load (rdrFade .3s).
         sb.append("animation:rdrFade .3s ease-out;}")
         sb.append("@keyframes rdrFade{from{opacity:.3;}to{opacity:1;}}")
-        sb.append("html.rdr-paged .rdr-chap{padding:0 ").append(sideMargin)
-            .append("px;box-sizing:border-box;}")
-        // Never split media across the page boundary (vertical-scroll
-        // Windows never fragments, so this is paged-only parity).
-        sb.append("html.rdr-paged img,html.rdr-paged table,html.rdr-paged pre,")
-        sb.append("html.rdr-paged figure,html.rdr-paged blockquote{break-inside:avoid;}")
-        // Windows parity for images: the image always fits COMPLETELY
-        // inside one page (no clipping, no scroll) — like the Windows
-        // reader, which never cuts an image. max-height scales the image
-        // down proportionally (height:auto) when it would otherwise
-        // overflow the page; 100vh minus body padding (32px), image
-        // margins (24px) and slack. This also guarantees images can never
-        // force phantom extra columns.
-        sb.append("html.rdr-paged img{max-height:calc(100vh - 72px) !important;}")
+        sb.append("html.rdr-paged .rdr-chap{position:absolute;inset:0;overflow:hidden;}")
+        sb.append(".rdr-strip{position:absolute;top:0;bottom:0;left:0;")
+        sb.append("transition:transform .28s ease;}")
+        sb.append(".rdr-strip.rdr-notrans{transition:none !important;}")
+        sb.append(".rdr-page{position:absolute;top:0;height:100%;overflow:hidden;")
+        sb.append("box-sizing:border-box;padding:16px ").append(sideMargin).append("px;}")
+        sb.append(".rdr-tallwrap{height:100%;overflow-y:auto;}")
+        // Windows parity for images: an image always fits COMPLETELY inside
+        // one page. The cap leaves room for the page padding (32px), the
+        // image's own margins (24px) and a possible caption, so a figure
+        // can never overflow its page or force a phantom page.
+        sb.append("html.rdr-paged img{max-height:calc(100vh - 128px) !important;}")
         return sb.toString()
     }
 
@@ -204,8 +176,26 @@ object HtmlBuilder {
     fun spacingUpdateJs(css: String): String {
         val esc = css.replace("\\", "\\\\").replace("'", "\\'")
         return "(function(){var s=document.getElementById('readerSpacing');if(!s){return 'no';}" +
-            "if(s.styleSheet){s.styleSheet.cssText='$esc';}else{s.innerHTML='$esc';}return 'ok';})();"
+            "if(s.styleSheet){s.styleSheet.cssText='$esc';}else{s.innerHTML='$esc';}return 'ok';})();" +
+            REPAGINATE_JS
     }
+
+    /**
+     * Live swap of the #rdrPaged style element (paged mode's margin lives
+     * there, on .rdr-page padding) followed by a repagination, since page
+     * geometry depends on it. No-op in continuous documents (no such
+     * element, no rdrPaginate global).
+     */
+    fun pagedStyleUpdateJs(css: String): String {
+        val esc = css.replace("\\", "\\\\").replace("'", "\\'")
+        return "(function(){var s=document.getElementById('rdrPaged');if(!s){return 'no';}" +
+            "if(s.styleSheet){s.styleSheet.cssText='$esc';}else{s.innerHTML='$esc';}return 'ok';})();" +
+            REPAGINATE_JS
+    }
+
+    /** Ask the pager (if present) to rebuild after a live style swap. */
+    private const val REPAGINATE_JS =
+        "(function(){try{if(window.rdrPaginate)window.rdrPaginate();}catch(e){}})();"
 
     /**
      * Port of AppendFontFace: weight 700 if the filename contains "bold"
@@ -278,4 +268,664 @@ object HtmlBuilder {
             "b.insertAdjacentHTML('afterbegin','" + HtmlText.escapeForJs(chunk) + "');" +
             "var ph=H();S(ot+(ph-oh));" +
             "return 1;})();"
+
+    /**
+     * rdrPager script (paged builds only) — GENERATED, DO NOT REINDENT.
+     * Byte-identical to the pager.js verified in headless Chromium
+     * (416 checks: text integrity, per-page fit, turn contract, RTL+LTR
+     * geometry, repagination anchors). It assigns window.rdrTurn /
+     * window.rdrLast explicitly: the old multicol versions were declared
+     * inside the reporter script's IIFE and were never callable from
+     * native code (verified: typeof window.rdrTurn === 'undefined').
+     */
+    private const val PAGER_JS = """// rdrPager — deterministic block-level pagination for Novelfa paged mode.
+//
+// Replaces the CSS-multicol pager. Why: multicol page geometry was DERIVED
+// from Blink's fragmentation layout (scrollWidth / scrollLeft), which is
+// inexact — phantom pages, sliced images, RTL scroll-model drift. Here the
+// geometry is CONSTRUCTED: after fonts/images settle, the chapter's blocks
+// are measured at the exact page content size and packed into explicit
+// .rdr-page boxes; navigation is a physical translateX on the strip.
+// No vw units, no scrollWidth, no scrollLeft anywhere.
+//
+// Contract with native code (unchanged from the multicol version):
+//   rdrTurn(d)  -> 'page' | 'start' | 'end' | 'busy'
+//   rdrLast()   -> 'ok' | 'no'   (land on the last page)
+//   Android.onScroll(t,h,c,gen) is fed synthesized values
+//   (t = page*clientH, h = pages*clientH) so the bridge stays meaningful.
+// Extra: rdrPaginate() rebuilds (spacing/margin/font/resize), restoring the
+// reading position by anchor block; rdrPageCount()/rdrCurrentPage().
+(function () {
+    var de = document.documentElement;
+    if (!de.classList.contains('rdr-paged')) return;
+
+    var EPS = 1.5;              // packing tolerance (px)
+    var ANIM_MS = 280;          // must match the .rdr-strip CSS transition
+    var SETTLE_TIMEOUT = 2500;  // max wait for fonts/images before paginating
+    var MAX_AUTO_REPAGINATE = 3;
+
+    var rtl = de.getAttribute('dir') === 'rtl';
+    var chap = null;            // .rdr-chap — becomes the stage
+    var source = null;          // .rdr-source — pristine chapter content (display:none)
+    var strip = null;           // .rdr-strip — transformed page strip
+    var pages = [];             // [{el, firstLi, firstTok}]
+    var cur = 0;
+    var ready = false;
+    var lockUntil = 0;
+    var pendingLast = false;
+    var autoRepag = 0;
+    var repagTimer = 0;
+    var building = false;
+
+    // ------------------------------------------------------------------
+    // Tag classification (structure-based; EPUB XHTML is semantic enough
+    // that computed styles are not needed to classify blocks).
+    // ------------------------------------------------------------------
+    var ATOMIC_TAGS = {
+        IMG: 1, TABLE: 1, PRE: 1, HR: 1, FIGURE: 1, VIDEO: 1, AUDIO: 1,
+        IFRAME: 1, SVG: 1, CANVAS: 1, OBJECT: 1, EMBED: 1, FORM: 1,
+        FIELDSET: 1, MATH: 1
+    };
+    var TEXT_TAGS = {
+        P: 1, H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1, LI: 1, DT: 1, DD: 1,
+        SUMMARY: 1, FIGCAPTION: 1, CAPTION: 1, TD: 1, TH: 1
+    };
+    var BLOCK_TAGS = {
+        P: 1, DIV: 1, SECTION: 1, ARTICLE: 1, ASIDE: 1, NAV: 1, HEADER: 1,
+        FOOTER: 1, MAIN: 1, H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1,
+        UL: 1, OL: 1, LI: 1, DL: 1, DT: 1, DD: 1, BLOCKQUOTE: 1, FIGURE: 1,
+        FIGCAPTION: 1, TABLE: 1, PRE: 1, HR: 1, FORM: 1, FIELDSET: 1,
+        ADDRESS: 1, DETAILS: 1
+    };
+    // Elements that make a text block unsafe to split (splitting would
+    // need to reason about their layout) — such blocks fall back instead.
+    var UNSPLITTABLE_INSIDE = 'img,svg,table,video,audio,iframe,object,embed,pre,math,canvas';
+
+    function isBlockLevel(node) {
+        return node.nodeType === 1 && !!BLOCK_TAGS[node.tagName];
+    }
+
+    // Group a container's children into top-level items: block elements
+    // stand alone; runs of text/inline nodes are wrapped in .rdr-anon so
+    // they become measurable, movable blocks.
+    function topItems(container) {
+        var items = [], run = null, i, n;
+        function flush() {
+            if (run && run.childNodes.length) items.push(run);
+            run = null;
+        }
+        for (i = 0; i < container.childNodes.length; i++) {
+            n = container.childNodes[i];
+            if (isBlockLevel(n)) {
+                flush();
+                items.push(n);
+            } else if (n.nodeType === 3 && !/\S/.test(n.nodeValue)) {
+                // whitespace-only text between blocks: layout-irrelevant
+                continue;
+            } else {
+                if (!run) {
+                    run = document.createElement('div');
+                    run.className = 'rdr-anon';
+                }
+                run.appendChild(n.cloneNode(true));
+            }
+        }
+        flush();
+        return items;
+    }
+
+    function hasBlockChild(el) {
+        for (var i = 0; i < el.childNodes.length; i++) {
+            if (isBlockLevel(el.childNodes[i])) return true;
+        }
+        return false;
+    }
+
+    // Flatten the chapter tree into an ordered leaf stream. Containers are
+    // descended into; each leaf remembers its wrapper chain (outermost
+    // first) so page fragments can be wrapped in shallow clones of the
+    // original containers (styles, backgrounds, indents preserved).
+    // Returns [{chain:[el,...], leaf:el}]
+    function flatten(container, chain, out) {
+        var items = topItems(container), i, it;
+        for (i = 0; i < items.length; i++) {
+            it = items[i];
+            if (!ATOMIC_TAGS[it.tagName] && !TEXT_TAGS[it.tagName] && hasBlockChild(it)) {
+                flatten(it, chain.concat([it]), out);
+            } else {
+                out.push({ chain: chain, leaf: it });
+            }
+        }
+        return out;
+    }
+
+    // Wrap a leaf clone in shallow clones of its chain (innermost last).
+    function wrapFragment(chain, leafClone) {
+        var node = leafClone, i, w;
+        for (i = chain.length - 1; i >= 0; i--) {
+            w = chain[i].cloneNode(false);
+            w.appendChild(node);
+            node = w;
+        }
+        return node;
+    }
+
+    // ------------------------------------------------------------------
+    // Text splitting. A splittable leaf (pure text + inline markup) is
+    // tokenized into words / atomic inline elements, each token knowing
+    // its inline-ancestor chain. Fragments are rebuilt by replaying a
+    // token range and cloning the chain — so a split never loses or
+    // duplicates a character (the token stream partitions the text).
+    // ------------------------------------------------------------------
+    function tokenize(leaf) {
+        var tokens = [];
+        function walk(node, chain) {
+            var i, ch, m, last, re;
+            for (i = 0; i < node.childNodes.length; i++) {
+                ch = node.childNodes[i];
+                if (ch.nodeType === 3) {
+                    var s = ch.nodeValue;
+                    re = /\S+\s*/g; last = 0;
+                    while ((m = re.exec(s)) !== null) {
+                        if (m.index > last) {
+                            tokens.push({ t: 'w', text: s.slice(last, m.index), chain: chain.slice() });
+                        }
+                        tokens.push({ t: 'w', text: m[0], chain: chain.slice() });
+                        last = m.index + m[0].length;
+                    }
+                    if (last < s.length) {
+                        tokens.push({ t: 'w', text: s.slice(last), chain: chain.slice() });
+                    }
+                } else if (ch.nodeType === 1) {
+                    if (ch.tagName === 'BR' || !hasText(ch)) {
+                        tokens.push({ t: 'e', el: ch, chain: chain.slice() });
+                    } else {
+                        walk(ch, chain.concat([ch]));
+                    }
+                }
+            }
+        }
+        function hasText(el) {
+            return /\S/.test(el.textContent || '');
+        }
+        walk(leaf, []);
+        return tokens;
+    }
+
+    function buildFragment(leaf, tokens, from, to) {
+        var frag = leaf.cloneNode(false);
+        frag.className = (frag.className ? frag.className + ' ' : '') + 'rdr-frag';
+        var open = []; // [{src, el}]
+        function parentEl() { return open.length ? open[open.length - 1].el : frag; }
+        for (var i = from; i < to; i++) {
+            var tok = tokens[i], want = tok.chain, k = 0, j, c;
+            while (k < open.length && k < want.length && open[k].src === want[k]) k++;
+            open.length = k;
+            for (j = k; j < want.length; j++) {
+                c = want[j].cloneNode(false);
+                parentEl().appendChild(c);
+                open.push({ src: want[j], el: c });
+            }
+            if (tok.t === 'w') parentEl().appendChild(document.createTextNode(tok.text));
+            else parentEl().appendChild(tok.el.cloneNode(true));
+        }
+        return frag;
+    }
+
+    function isSplittable(leaf) {
+        if (ATOMIC_TAGS[leaf.tagName]) return false;
+        if (!TEXT_TAGS[leaf.tagName] && hasBlockChild(leaf)) return false;
+        if (leaf.querySelector && leaf.querySelector(UNSPLITTABLE_INSIDE)) return false;
+        return true;
+    }
+
+    // ------------------------------------------------------------------
+    // Page construction.
+    // ------------------------------------------------------------------
+    function newPageEl() {
+        var p = document.createElement('div');
+        p.className = 'rdr-page';
+        return p;
+    }
+
+    function physLeft(i, count, w) {
+        return rtl ? (count - 1 - i) * w : i * w;
+    }
+
+    function buildPages() {
+        var Wpx = chap.clientWidth, Hpx = chap.clientHeight;
+        strip.innerHTML = '';
+        pages = [];
+        strip.style.visibility = 'hidden';
+
+        // Pages MUST carry their final width from the start: an
+        // absolutely-positioned page without a width shrink-wraps, and
+        // every measurement taken inside it would be garbage.
+        function mkPage() {
+            var p = newPageEl();
+            p.style.width = Wpx + 'px';
+            p.style.left = '0px';
+            return p;
+        }
+
+        var probe = mkPage();
+        strip.appendChild(probe);
+        var pcs = window.getComputedStyle(probe);
+        var padT = parseFloat(pcs.paddingTop) || 0;
+        var padB = parseFloat(pcs.paddingBottom) || 0;
+        var contentH = Hpx - padT - padB;
+
+        var leaves = flatten(source, [], []);
+        var cur1 = { el: probe, frags: [] };
+
+        function probeTop() { return probe.getBoundingClientRect().top + padT; }
+        function usedH() {
+            var last = probe.lastElementChild;
+            if (!last) return 0;
+            return last.getBoundingClientRect().bottom - probeTop();
+        }
+        function tagFrag(root, li, tokFrom, tokTo) {
+            root.setAttribute('data-rdr-li', li);
+            root.setAttribute('data-rdr-tok', tokFrom);
+            root.setAttribute('data-rdr-tokend', tokTo);
+        }
+        function finalizePage() {
+            if (cur1.frags.length) {
+                pages.push(cur1);
+            } else if (probe.parentNode === strip) {
+                // Empty construction page (e.g. finalize called twice in a
+                // row around a tall page): discard it — a stray .rdr-page
+                // left in the strip would corrupt the page geometry.
+                strip.removeChild(probe);
+            }
+            probe = mkPage();
+            strip.appendChild(probe);
+            cur1 = { el: probe, frags: [] };
+        }
+        function emitTallPage(chain, leaf, li, tokFrom, tokTo) {
+            // finalizePage leaves a fresh empty probe as the construction
+            // page; insert the tall page BEFORE it (keeps DOM order ==
+            // page order) and keep building into that same probe. (An
+            // earlier version created a second probe here and orphaned
+            // the first one as a stray .rdr-page in the strip.)
+            finalizePage();
+            var pg = mkPage();
+            pg.className = 'rdr-page rdr-tall';
+            var wrap = document.createElement('div');
+            wrap.className = 'rdr-tallwrap';
+            var frag = wrapFragment(chain, leaf.cloneNode(true));
+            tagFrag(frag, li, tokFrom || 0, (tokTo === undefined ? -1 : tokTo));
+            wrap.appendChild(frag);
+            pg.appendChild(wrap);
+            strip.insertBefore(pg, probe);
+            pages.push({ el: pg, frags: [frag] });
+        }
+
+        // Try to place a whole leaf on the current page; returns true if placed.
+        function tryWhole(chain, leaf, li) {
+            var frag = wrapFragment(chain, leaf.cloneNode(true));
+            tagFrag(frag, li, 0, -1);
+            probe.appendChild(frag);
+            if (usedH() <= contentH + EPS) {
+                cur1.frags.push(frag);
+                return true;
+            }
+            probe.removeChild(frag);
+            return false;
+        }
+
+        // Split a text leaf across pages. The first fragment may use the
+        // current page's remaining space; later fragments get full pages.
+        // A fragment fits iff the probe's used height (which includes the
+        // fragment, appended after the items already on the page) stays
+        // within contentH — the same measure the packer uses for whole
+        // blocks, so a kept fragment can never overflow its real page.
+        // Consumes the leaf completely.
+        function splitLeaf(chain, leaf, li, availH) {
+            var tokens = tokenize(leaf);
+            if (!tokens.length) return;
+            var from = 0, first = true, fragIndex = 0;
+            var lineH = 0;
+            try {
+                lineH = parseFloat(window.getComputedStyle(leaf).lineHeight) || 0;
+            } catch (e) { }
+            if (!lineH) lineH = 24;
+            while (from < tokens.length) {
+                var avail = first ? availH : contentH;
+                if (avail < lineH) { finalizePage(); avail = contentH; }
+                var hi = tokens.length, best = from, trial = null;
+                function measure(end) {
+                    if (trial) { probe.removeChild(trial); trial = null; }
+                    var f = buildFragment(leaf, tokens, from, end);
+                    if (fragIndex > 0) f.style.marginTop = '0px';
+                    if (end < tokens.length) f.style.marginBottom = '0px';
+                    var w = wrapFragment(chain, f);
+                    tagFrag(w, li, from, end);
+                    probe.appendChild(w);
+                    trial = w;
+                    return usedH() <= contentH + EPS;
+                }
+                if (measure(hi)) {
+                    best = hi;
+                } else {
+                    var a = from, b = hi;
+                    while (a < b) {
+                        var mid = (a + b + 1) >> 1;
+                        if (measure(mid)) a = mid; else b = mid - 1;
+                    }
+                    best = a;
+                    if (best > from) measure(best); // leave the best trial in the probe
+                }
+                if (best === from) {
+                    if (trial) { probe.removeChild(trial); trial = null; }
+                    if (usedH() > 0) {
+                        // Not even one token fits in THIS page's remaining
+                        // space (margin collapsing can eat more room than
+                        // the line-height estimate suggested) — that is
+                        // normal: finish the page and retry on a fresh one
+                        // before concluding the token is oversize.
+                        finalizePage();
+                        first = false;
+                        continue;
+                    }
+                    // Even on an empty page one token does not fit: force
+                    // it onto its own tall page rather than losing it or
+                    // looping forever.
+                    var one = buildFragment(leaf, tokens, from, from + 1);
+                    if (fragIndex > 0) one.style.marginTop = '0px';
+                    if (from + 1 < tokens.length) one.style.marginBottom = '0px';
+                    emitTallPage(chain, one, li, from, from + 1);
+                    from += 1;
+                    fragIndex++;
+                    first = false;
+                    continue;
+                }
+                // The trial in the probe is exactly the chosen fragment.
+                cur1.frags.push(trial);
+                trial = null;
+                from = best;
+                fragIndex++;
+                first = false;
+                if (from < tokens.length) finalizePage();
+            }
+        }
+
+        var li;
+        for (li = 0; li < leaves.length; li++) {
+            var chain = leaves[li].chain, leaf = leaves[li].leaf;
+            if (tryWhole(chain, leaf, li)) continue;
+            var avail = contentH - usedH();
+            var lineH = 0;
+            try { lineH = parseFloat(window.getComputedStyle(leaf).lineHeight) || 0; } catch (e) { }
+            if (isSplittable(leaf) && (cur1.frags.length === 0 || avail >= (lineH || 24))) {
+                splitLeaf(chain, leaf, li, avail);
+            } else if (cur1.frags.length) {
+                finalizePage();
+                if (!tryWhole(chain, leaf, li)) {
+                    if (isSplittable(leaf)) splitLeaf(chain, leaf, li, contentH);
+                    else emitTallPage(chain, leaf, li);
+                }
+            } else {
+                emitTallPage(chain, leaf, li);
+            }
+        }
+        finalizePage();
+        // Drop the trailing empty construction page finalizePage created.
+        if (probe.parentNode === strip && !probe.childNodes.length) {
+            strip.removeChild(probe);
+        }
+        if (!pages.length) {
+            var only = newPageEl();
+            strip.appendChild(only);
+            pages.push({ el: only, frags: [] });
+        }
+        // Geometry: explicit px positions, direction-aware.
+        var i;
+        for (i = 0; i < pages.length; i++) {
+            pages[i].el.style.left = physLeft(i, pages.length, Wpx) + 'px';
+            pages[i].el.style.width = Wpx + 'px';
+        }
+        strip.style.width = (pages.length * Wpx) + 'px';
+        strip.style.visibility = '';
+    }
+
+    // ------------------------------------------------------------------
+    // Navigation.
+    // ------------------------------------------------------------------
+    function stageH() { return chap ? chap.clientHeight : 0; }
+
+    function report() {
+        try {
+            if (window.Android && Android.onScroll) {
+                var h = stageH();
+                Android.onScroll(cur * h, pages.length * h, h, window.__rdrGen || 0);
+            }
+        } catch (e) { }
+    }
+
+    function show(i, instant) {
+        if (!pages.length) return;
+        cur = Math.max(0, Math.min(i, pages.length - 1));
+        var tx = -physLeft(cur, pages.length, chap.clientWidth);
+        if (instant) strip.classList.add('rdr-notrans');
+        strip.style.transform = 'translate3d(' + tx + 'px,0,0)';
+        if (instant) {
+            // Force reflow so the no-transition jump applies before the
+            // class is removed again.
+            void strip.offsetWidth;
+            strip.classList.remove('rdr-notrans');
+        } else {
+            lockUntil = Date.now() + ANIM_MS;
+        }
+        report();
+    }
+
+    function currentAnchor() {
+        if (!pages.length || !pages[cur].frags.length) return { li: 0, tok: 0 };
+        var f = pages[cur].frags[0];
+        return {
+            li: parseInt(f.getAttribute('data-rdr-li'), 10) || 0,
+            tok: parseInt(f.getAttribute('data-rdr-tok'), 10) || 0
+        };
+    }
+
+    function pageForAnchor(a) {
+        var best = 0, i, j;
+        for (i = 0; i < pages.length; i++) {
+            for (j = 0; j < pages[i].frags.length; j++) {
+                var f = pages[i].frags[j];
+                var li = parseInt(f.getAttribute('data-rdr-li'), 10) || 0;
+                var tok = parseInt(f.getAttribute('data-rdr-tok'), 10) || 0;
+                if (li < a.li || (li === a.li && tok <= a.tok)) best = i;
+                else return best;
+            }
+        }
+        return best;
+    }
+
+    // ------------------------------------------------------------------
+    // (Re)pagination with anchor restore + a defensive fallback: if
+    // anything throws, the chapter degrades to one tall scrolling page —
+    // readable, never a blank screen.
+    // ------------------------------------------------------------------
+    function paginate() {
+        if (!chap || building) return;
+        var anchor = ready ? currentAnchor() : { li: 0, tok: 0 };
+        building = true;
+        window.__rdrPagerBuilding = true;
+        try {
+            buildPages();
+            window.__rdrPagerError = null;
+        } catch (e) {
+            window.__rdrPagerError = String(e && e.message || e);
+            try {
+                strip.innerHTML = '';
+                pages = [];
+                var pg = newPageEl();
+                pg.className = 'rdr-page rdr-tall';
+                var wrap = document.createElement('div');
+                wrap.className = 'rdr-tallwrap';
+                var leaves = flatten(source, [], []), i;
+                for (i = 0; i < leaves.length; i++) {
+                    wrap.appendChild(wrapFragment(leaves[i].chain, leaves[i].leaf.cloneNode(true)));
+                }
+                pg.appendChild(wrap);
+                pg.style.left = '0px';
+                pg.style.width = chap.clientWidth + 'px';
+                strip.appendChild(pg);
+                strip.style.width = chap.clientWidth + 'px';
+                pages = [{ el: pg, frags: [] }];
+            } catch (e2) { }
+        }
+        building = false;
+        window.__rdrPagerBuilding = false;
+        ready = true;
+        window.__rdrPagerReady = true;
+        if (pendingLast) {
+            pendingLast = false;
+            show(pages.length - 1, true);
+        } else {
+            show(pageForAnchor(anchor), true);
+        }
+        watchLateImages();
+    }
+
+    function scheduleRepaginate() {
+        if (!ready || building) return;
+        if (repagTimer) clearTimeout(repagTimer);
+        repagTimer = setTimeout(function () {
+            repagTimer = 0;
+            paginate();
+        }, 120);
+    }
+
+    // Images cloned into pages load independently of the (already loaded)
+    // source images; if one arrives late and changes a page's layout, the
+    // heights measured earlier may be stale — rebuild (bounded).
+    function watchLateImages() {
+        if (autoRepag >= MAX_AUTO_REPAGINATE) return;
+        var imgs = strip.querySelectorAll('img'), i, pending = false;
+        for (i = 0; i < imgs.length; i++) {
+            if (!imgs[i].complete) {
+                pending = true;
+                imgs[i].addEventListener('load', onLateSettle);
+                imgs[i].addEventListener('error', onLateSettle);
+            }
+        }
+        function onLateSettle() {
+            if (autoRepag >= MAX_AUTO_REPAGINATE) return;
+            autoRepag++;
+            scheduleRepaginate();
+        }
+        return pending;
+    }
+
+    // ------------------------------------------------------------------
+    // Public API (same names/contract as the multicol version).
+    // ------------------------------------------------------------------
+    window.rdrTurn = function (d) {
+        try {
+            if (!ready || building) return 'busy';
+            if (Date.now() < lockUntil) return 'busy';
+            var n = cur + d;
+            if (n < 0) return 'start';
+            if (n >= pages.length) return 'end';
+            show(n, false);
+            return 'page';
+        } catch (e) { return 'page'; }
+    };
+    window.rdrLast = function () {
+        try {
+            if (!ready) { pendingLast = true; return 'ok'; }
+            show(pages.length - 1, true);
+            return 'ok';
+        } catch (e) { return 'no'; }
+    };
+    window.rdrGoToPage = function (i) {
+        if (!ready) return -1;
+        show(i, true);
+        return cur;
+    };
+    window.rdrPageCount = function () { return ready ? pages.length : 0; };
+    window.rdrCurrentPage = function () { return ready ? cur : 0; };
+    window.rdrPaginate = function () { scheduleRepaginate(); };
+
+    // ------------------------------------------------------------------
+    // Boot: park the original chapter content in .rdr-source, create the
+    // strip, wait for fonts + images to settle, then paginate.
+    // ------------------------------------------------------------------
+    function boot() {
+        chap = document.querySelector('.rdr-chap');
+        if (!chap) return;
+        source = document.createElement('div');
+        source.className = 'rdr-source';
+        source.style.display = 'none';
+        while (chap.firstChild) source.appendChild(chap.firstChild);
+        chap.appendChild(source);
+        strip = document.createElement('div');
+        strip.className = 'rdr-strip';
+        chap.appendChild(strip);
+
+        var done = false;
+        function finish() {
+            if (done) return;
+            done = true;
+            paginate();
+        }
+        var imgs = source.querySelectorAll('img'), i, waiting = 0;
+        for (i = 0; i < imgs.length; i++) {
+            if (!imgs[i].complete) {
+                waiting++;
+                imgs[i].addEventListener('load', one);
+                imgs[i].addEventListener('error', one);
+            }
+        }
+        function one() { if (--waiting <= 0 && fontsDone) finish(); }
+        var fontsDone = false;
+        if (document.fonts && document.fonts.ready) {
+            document.fonts.ready.then(function () {
+                fontsDone = true;
+                if (waiting <= 0) finish();
+            });
+        } else {
+            fontsDone = true;
+        }
+        if (waiting <= 0 && fontsDone) finish();
+        setTimeout(finish, SETTLE_TIMEOUT);
+        if (document.fonts && document.fonts.addEventListener) {
+            document.fonts.addEventListener('loadingdone', function () {
+                if (ready && autoRepag < MAX_AUTO_REPAGINATE) {
+                    autoRepag++;
+                    scheduleRepaginate();
+                }
+            });
+        }
+    }
+
+    var lastW = 0, lastH = 0, resizeTimer = 0;
+    window.addEventListener('resize', function () {
+        if (!ready) return;
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () {
+            resizeTimer = 0;
+            if (!chap) return;
+            if (Math.abs(chap.clientWidth - lastW) >= 2 || Math.abs(chap.clientHeight - lastH) >= 2) {
+                lastW = chap.clientWidth; lastH = chap.clientHeight;
+                paginate();
+            }
+        }, 180);
+    });
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () {
+            lastW = 0; boot();
+            lastW = chap ? chap.clientWidth : 0;
+            lastH = chap ? chap.clientHeight : 0;
+        });
+    } else {
+        boot();
+        lastW = chap ? chap.clientWidth : 0;
+        lastH = chap ? chap.clientHeight : 0;
+    }
+})();"""
 }

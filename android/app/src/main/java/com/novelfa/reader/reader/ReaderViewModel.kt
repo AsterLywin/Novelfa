@@ -534,6 +534,10 @@ class ReaderViewModel(
     fun spacingCss(): String =
         HtmlBuilder.spacingCss(lineHeight, sideMargin, paragraphSpacing)
 
+    /** Current paged-mode CSS (side margin on .rdr-page) for live swaps. */
+    fun pagedCss(): String =
+        HtmlBuilder.pagedCss(sideMargin)
+
     private fun refreshSpacing() {
         if (html.isEmpty()) {
             return
