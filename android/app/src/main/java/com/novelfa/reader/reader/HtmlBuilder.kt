@@ -149,7 +149,7 @@ object HtmlBuilder {
         // Windows parity: chapter fades in on load (rdrFade .3s).
         sb.append("animation:rdrFade .3s ease-out;}")
         sb.append("@keyframes rdrFade{from{opacity:.3;}to{opacity:1;}}")
-        sb.append("html.rdr-paged .rdr-chap{position:absolute;inset:0;overflow:hidden;}")
+        sb.append("html.rdr-paged .rdr-chap{position:absolute;top:0;right:0;bottom:0;left:0;overflow:hidden;}")
         sb.append(".rdr-strip{position:absolute;top:0;bottom:0;left:0;")
         sb.append("transition:transform .28s ease;}")
         sb.append(".rdr-strip.rdr-notrans{transition:none !important;}")
@@ -520,8 +520,26 @@ object HtmlBuilder {
         return rtl ? (count - 1 - i) * w : i * w;
     }
 
+    // The stage (.rdr-chap) must exactly fill the viewport. If its CSS
+    // fails on an old WebView (e.g. no `inset` support -> shrink-wrapped
+    // stage), chap.clientWidth/Height are garbage (max-content width,
+    // full-chapter height) and every page lands off-screen: a completely
+    // blank reader. The window size is the ground truth in that case.
+    function stageW() {
+        var w = chap ? chap.clientWidth : 0;
+        var iw = window.innerWidth || 0;
+        if (iw && (!w || Math.abs(w - iw) > 2)) return iw;
+        return w || iw;
+    }
+    function stageH() {
+        var h = chap ? chap.clientHeight : 0;
+        var ih = window.innerHeight || 0;
+        if (ih && (!h || Math.abs(h - ih) > 2)) return ih;
+        return h || ih;
+    }
+
     function buildPages() {
-        var Wpx = chap.clientWidth, Hpx = chap.clientHeight;
+        var Wpx = stageW(), Hpx = stageH();
         strip.innerHTML = '';
         pages = [];
         strip.style.visibility = 'hidden';
@@ -720,8 +738,6 @@ object HtmlBuilder {
     // ------------------------------------------------------------------
     // Navigation.
     // ------------------------------------------------------------------
-    function stageH() { return chap ? chap.clientHeight : 0; }
-
     function report() {
         try {
             if (window.Android && Android.onScroll) {
@@ -734,7 +750,7 @@ object HtmlBuilder {
     function show(i, instant) {
         if (!pages.length) return;
         cur = Math.max(0, Math.min(i, pages.length - 1));
-        var tx = -physLeft(cur, pages.length, chap.clientWidth);
+        var tx = -physLeft(cur, pages.length, stageW());
         if (instant) strip.classList.add('rdr-notrans');
         strip.style.transform = 'translate3d(' + tx + 'px,0,0)';
         if (instant) {
@@ -772,38 +788,61 @@ object HtmlBuilder {
     }
 
     // ------------------------------------------------------------------
-    // (Re)pagination with anchor restore + a defensive fallback: if
-    // anything throws, the chapter degrades to one tall scrolling page —
-    // readable, never a blank screen.
+    // (Re)pagination with anchor restore + a catastrophic-failure escape
+    // hatch: if anything throws (or the stage measures zero), TEAR DOWN
+    // to a normal flowing document — the pristine source children move
+    // back into .rdr-chap, the strip is dropped, and the rdr-paged class
+    // is removed so every paged CSS rule stops applying. Whatever goes
+    // wrong on a given device, the chapter stays readable as a scrolling
+    // page instead of a blank screen.
     // ------------------------------------------------------------------
+    var tornDown = false;
+    function teardown(err) {
+        if (tornDown) return;
+        tornDown = true;
+        window.__rdrPagerError = String(err && err.message || err || 'teardown');
+        window.__rdrPagerFailed = true;
+        try {
+            if (strip && strip.parentNode) strip.parentNode.removeChild(strip);
+            if (source && chap) {
+                while (source.firstChild) chap.appendChild(source.firstChild);
+                if (source.parentNode) source.parentNode.removeChild(source);
+            }
+            if (document.documentElement) document.documentElement.classList.remove('rdr-paged');
+            // Let in-book '#frag' taps fall back to native fragment
+            // scrolling in the restored flow document.
+            window.rdrGoToAnchor = undefined;
+        } catch (e) { }
+        pages = [];
+        building = false;
+        window.__rdrPagerBuilding = false;
+        ready = false;
+    }
+
     function paginate() {
-        if (!chap || building) return;
+        if (!chap || building || tornDown) return;
         var anchor = ready ? currentAnchor() : { li: 0, tok: 0 };
         building = true;
         window.__rdrPagerBuilding = true;
         try {
+            if (window.__rdrPagerTestFail) throw new Error('test-forced failure');
             buildPages();
+            if (stageW() <= 0 || stageH() <= 0) throw new Error('zero-size stage');
+            if (!pages.length && source && source.childNodes.length) {
+                throw new Error('no pages from non-empty source');
+            }
+            if (pages.length && stageH() > 0) {
+                // A collapsed stage (old WebView dropping the stage
+                // offsets) can leave JS geometry "valid" while the pages
+                // render a few px tall: garbage that throws nothing.
+                // Detect it visually and tear down to the readable flow.
+                var pr = pages[0].el.getBoundingClientRect();
+                if (pr && pr.height < stageH() * 0.5) throw new Error('page height collapse');
+            }
             window.__rdrPagerError = null;
         } catch (e) {
-            window.__rdrPagerError = String(e && e.message || e);
-            try {
-                strip.innerHTML = '';
-                pages = [];
-                var pg = newPageEl();
-                pg.className = 'rdr-page rdr-tall';
-                var wrap = document.createElement('div');
-                wrap.className = 'rdr-tallwrap';
-                var leaves = flatten(source, [], []), i;
-                for (i = 0; i < leaves.length; i++) {
-                    wrap.appendChild(wrapFragment(leaves[i].chain, leaves[i].leaf.cloneNode(true)));
-                }
-                pg.appendChild(wrap);
-                pg.style.left = '0px';
-                pg.style.width = chap.clientWidth + 'px';
-                strip.appendChild(pg);
-                strip.style.width = chap.clientWidth + 'px';
-                pages = [{ el: pg, frags: [] }];
-            } catch (e2) { }
+            teardown(e);
+            return;
         }
         building = false;
         window.__rdrPagerBuilding = false;
@@ -983,8 +1022,8 @@ object HtmlBuilder {
         resizeTimer = setTimeout(function () {
             resizeTimer = 0;
             if (!chap) return;
-            if (Math.abs(chap.clientWidth - lastW) >= 2 || Math.abs(chap.clientHeight - lastH) >= 2) {
-                lastW = chap.clientWidth; lastH = chap.clientHeight;
+            if (Math.abs(stageW() - lastW) >= 2 || Math.abs(stageH() - lastH) >= 2) {
+                lastW = stageW(); lastH = stageH();
                 paginate();
             }
         }, 180);
@@ -993,13 +1032,11 @@ object HtmlBuilder {
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function () {
             lastW = 0; boot();
-            lastW = chap ? chap.clientWidth : 0;
-            lastH = chap ? chap.clientHeight : 0;
+            lastW = stageW(); lastH = stageH();
         });
     } else {
         boot();
-        lastW = chap ? chap.clientWidth : 0;
-        lastH = chap ? chap.clientHeight : 0;
+        lastW = stageW(); lastH = stageH();
     }
 })();"""
     /**
