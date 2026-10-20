@@ -177,31 +177,6 @@ fun ReaderScreen(
         v.clearDropped()
     }
 
-    val bridge = remember {
-        ScrollBridge(
-            onScroll = { t, h, c, gen ->
-            scope.launch {
-                val v = vm ?: return@launch
-                // Stale-page guard: a drawer jump / theme change bumps
-                // docGen and reloads; the old page's 200ms interval can
-                // still fire once afterwards. Without this, appendNext
-                // would advance contLast while the gen-guarded chunk JS
-                // gets rejected — desyncing the ViewModel window from the
-                // DOM (the "can't advance after drawer select" bug).
-                if (gen != v.docGen) return@launch
-                val last = v.contLast
-                val first = v.contFirst
-                v.onScroll(t, h, c)
-                applyIncrementalJs(v, last, first)
-                rev++
-            }
-            },
-            onLinkClick = { href ->
-                val v = vm
-                if (v != null) scope.launch { handleInBookLink(v, href) }
-            }
-        )
-    }
 
     LaunchedEffect(bookId) {
         try {
@@ -293,6 +268,32 @@ fun ReaderScreen(
             if (frag.isNotBlank()) pendingAnchor = frag
             gotoChapter(v, idx)
         }
+    }
+
+    val bridge = remember {
+        ScrollBridge(
+            onScroll = { t, h, c, gen ->
+            scope.launch {
+                val v = vm ?: return@launch
+                // Stale-page guard: a drawer jump / theme change bumps
+                // docGen and reloads; the old page's 200ms interval can
+                // still fire once afterwards. Without this, appendNext
+                // would advance contLast while the gen-guarded chunk JS
+                // gets rejected — desyncing the ViewModel window from the
+                // DOM (the "can't advance after drawer select" bug).
+                if (gen != v.docGen) return@launch
+                val last = v.contLast
+                val first = v.contFirst
+                v.onScroll(t, h, c)
+                applyIncrementalJs(v, last, first)
+                rev++
+            }
+            },
+            onLinkClick = { href ->
+                val v = vm
+                if (v != null) scope.launch { handleInBookLink(v, href) }
+            }
+        )
     }
 
     /**

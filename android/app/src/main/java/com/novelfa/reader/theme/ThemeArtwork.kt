@@ -6,6 +6,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.platform.LocalLayoutDirection
 import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -37,6 +38,10 @@ fun EmblemWatermark(
     modifier: Modifier = Modifier,
     contentAlignment: Alignment = Alignment.Center
 ) {
+    // Alignment.align() needs the layout direction explicitly (in RTL it
+    // mirrors Start/End alignments); read it here, in composition scope —
+    // the Canvas draw block cannot.
+    val layoutDirection = LocalLayoutDirection.current
     Canvas(modifier = modifier) {
         // The emblem is drawn at the canvas's smaller dimension and placed
         // per contentAlignment, so a wide/short canvas (e.g. the hero card
@@ -45,7 +50,8 @@ fun EmblemWatermark(
         val scale = side / 100f
         val topLeft = contentAlignment.align(
             IntSize(side.roundToInt(), side.roundToInt()),
-            IntSize(size.width.roundToInt(), size.height.roundToInt())
+            IntSize(size.width.roundToInt(), size.height.roundToInt()),
+            layoutDirection
         )
         withTransform({
             translate(topLeft.x.toFloat(), topLeft.y.toFloat())
