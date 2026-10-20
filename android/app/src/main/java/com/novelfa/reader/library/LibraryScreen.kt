@@ -243,14 +243,22 @@ fun LibraryScreen(
         }
     }
     var gridView by rememberSaveable { mutableStateOf(true) }
-    // Scroll states for the library grid/list: the import FAB turns
-    // translucent while the list sits at the very top so the book cards
-    // underneath stay visible, and opaque once scrolled.
+    // Scroll states for the library grid/list (the import FAB keys its
+    // translucency off their isScrollInProgress).
     val gridState = rememberLazyGridState()
     val listState = rememberLazyListState()
-    val books by remember(tab, debouncedQuery) { viewModel.filtered(tab, debouncedQuery) }
-        .collectAsState(initial = emptyList())
-    val allBooks by viewModel.books.collectAsState(initial = emptyList())
+    // Cold-start gate: a null here means "the database has not answered
+    // yet" — NOT "the library is empty". Seeding these with emptyList()
+    // painted the empty-library state for the first frames of every
+    // launch and then popped the real books in. Content below renders
+    // only once BOTH flows have really emitted (libraryReady); until
+    // then the screen is just the (correctly themed) background.
+    val booksState by remember(tab, debouncedQuery) { viewModel.filtered(tab, debouncedQuery) }
+        .collectAsState(initial = null)
+    val allBooksState by viewModel.books.collectAsState(initial = null)
+    val libraryReady = booksState != null && allBooksState != null
+    val books = booksState.orEmpty()
+    val allBooks = allBooksState.orEmpty()
     val visible = remember(allBooks) { allBooks.filter { !it.isPrivate } }
     val shown = remember(books, allBooks, sort) { sortBooks(books, allBooks, sort) }
     val snackbar = remember { SnackbarHostState() }
@@ -590,7 +598,11 @@ fun LibraryScreen(
                     onCancel = { selection = emptySet() }
                 )
             }
-            if (gridView) {
+            if (!libraryReady) {
+                // Books still loading: themed background only — never a
+                // fake empty library, never a half-populated header.
+                Box(Modifier.fillMaxSize())
+            } else if (gridView) {
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(140.dp),
                     state = gridState,

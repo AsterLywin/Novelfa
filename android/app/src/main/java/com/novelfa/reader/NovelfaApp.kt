@@ -45,17 +45,23 @@ import com.novelfa.reader.theme.parseHex
  */
 @Composable
 fun NovelfaApp(
+    appearance: PrefsStore.Appearance? = null,
     openEpubUri: Uri? = null,
     onEpubUriConsumed: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
-    val themeKey by prefs.theme.collectAsState(initial = "dark")
-    val accentHex by prefs.accent.collectAsState(initial = Accent.DEFAULT)
-    val charThemeId by prefs.charTheme.collectAsState(initial = "")
+    // The initials come from the pre-first-frame snapshot MainActivity
+    // read synchronously (see PrefsStore.appearanceSnapshot): with the
+    // old hardcoded defaults every cold start flashed the default
+    // dark/purple/Persian theme for a few frames before snapping to the
+    // user's real appearance.
+    val themeKey by prefs.theme.collectAsState(initial = appearance?.theme ?: "dark")
+    val accentHex by prefs.accent.collectAsState(initial = appearance?.accent ?: Accent.DEFAULT)
+    val charThemeId by prefs.charTheme.collectAsState(initial = appearance?.charTheme ?: "")
     // App layout direction follows the IN-APP language choice (not the
     // system locale): Persian -> RTL, English -> LTR.
-    val appLang by prefs.lang.collectAsState(initial = "fa")
+    val appLang by prefs.lang.collectAsState(initial = appearance?.lang ?: "fa")
     val layoutDirection =
         if (appLang.startsWith("en")) LayoutDirection.Ltr else LayoutDirection.Rtl
     val isLight = themeKey == "light"

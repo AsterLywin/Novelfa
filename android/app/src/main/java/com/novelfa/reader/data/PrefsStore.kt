@@ -77,6 +77,33 @@ class PrefsStore(private val context: Context) {
     /** Reading layout mode key: "paged" (default) or "continuous". */
     val readingMode: Flow<String> = context.dataStore.data.map { it[READING_MODE] ?: "paged" }
 
+    /** The appearance values the first frame is painted with. */
+    data class Appearance(
+        val theme: String,
+        val accent: String,
+        val charTheme: String,
+        val lang: String
+    )
+
+    /**
+     * One-shot read of the appearance prefs, used by MainActivity BEFORE
+     * the first frame: the flows above only emit after composition has
+     * started, so seeding [collectAsState] with their built-in defaults
+     * painted every cold start in the default dark/purple/fa for a few
+     * frames and then snapped to the user's real theme. Reading the
+     * (tiny) preferences file once up front removes that flash.
+     * Defaults here MUST match the flows above.
+     */
+    suspend fun appearanceSnapshot(): Appearance {
+        val p = context.dataStore.data.first()
+        return Appearance(
+            theme = p[THEME] ?: "dark",
+            accent = p[ACCENT] ?: "#7C3AED",
+            charTheme = p[CHAR_THEME] ?: "",
+            lang = p[LANG] ?: "fa"
+        )
+    }
+
     suspend fun setTheme(value: String) {
         context.dataStore.edit { it[THEME] = value }
     }
