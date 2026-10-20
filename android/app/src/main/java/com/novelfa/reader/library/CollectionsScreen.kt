@@ -102,7 +102,13 @@ fun CollectionsScreen(
                 if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
                 if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
                 if (parts.isNotEmpty()) {
-                    Toast.makeText(context, parts.joinToString("، "), Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        context,
+                        parts.joinToString(
+                            if (java.util.Locale.getDefault().language.startsWith("en")) ", " else "، "
+                        ),
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }

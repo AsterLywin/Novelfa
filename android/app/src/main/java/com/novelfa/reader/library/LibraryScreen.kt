@@ -298,6 +298,8 @@ fun LibraryScreen(
     var pendingDuplicateNames by remember { mutableStateOf<List<String>>(emptyList()) }
 
     suspend fun importUris(uris: List<Uri>) {
+        // List separator follows the UI language — never a hardcoded «، ».
+        val sep = if (java.util.Locale.getDefault().language.startsWith("en")) ", " else "، "
         try {
             val summary = viewModel.importMultiple(uris)
             // If duplicates found, ask for confirmation instead of silently skipping
@@ -308,14 +310,14 @@ fun LibraryScreen(
                 val parts = mutableListOf<String>()
                 if (summary.added > 0) parts.add(addedFmt.format(summary.added))
                 if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
-                if (parts.isNotEmpty()) snackbar.showSnackbar(parts.joinToString("، "))
+                if (parts.isNotEmpty()) snackbar.showSnackbar(parts.joinToString(sep))
                 return
             }
             val parts = mutableListOf<String>()
             if (summary.added > 0) parts.add(addedFmt.format(summary.added))
             if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
             if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
-            if (parts.isNotEmpty()) snackbar.showSnackbar(parts.joinToString("، "))
+            if (parts.isNotEmpty()) snackbar.showSnackbar(parts.joinToString(sep))
         } catch (e: CancellationException) {
             throw e
         } catch (e: ImportException) {
@@ -1033,7 +1035,7 @@ fun LibraryScreen(
                         if (summary.added > 0) parts.add(addedFmt.format(summary.added))
                         if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
                         if (parts.isNotEmpty()) {
-                            snackbar.showSnackbar(parts.joinToString("، "))
+                            snackbar.showSnackbar(parts.joinToString(if (isEnglishUi) ", " else "، "))
                         }
                     }
                 }) { Text(stringResource(R.string.yes_overwrite)) }

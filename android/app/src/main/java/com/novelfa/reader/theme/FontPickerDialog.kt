@@ -27,6 +27,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -41,15 +42,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Display name for a font file: bundled fonts get their Persian names,
- * everything else shows the file name without its extension.
+ * Display name for a font file: bundled fonts get proper names in BOTH
+ * UI languages (fa/en data pair, like the accent/rank/theme name pairs —
+ * never a single-language hardcoded label); everything else shows the
+ * file name without its extension.
  */
-fun fontDisplayName(fileName: String): String {
+fun fontDisplayName(fileName: String, isEnglish: Boolean = false): String {
     val base = fileName.substringAfterLast('/').substringAfterLast('\\')
     return when (base.lowercase()) {
-        "vazirmatn-regular.ttf" -> "وزیر متن عادی"
-        "vazirmatn-bold.ttf" -> "وزیر متن بولد"
-        "b koodak bold_0.ttf" -> "کودک بولد"
+        "vazirmatn-regular.ttf" -> if (isEnglish) "Vazirmatn Regular" else "وزیر متن عادی"
+        "vazirmatn-bold.ttf" -> if (isEnglish) "Vazirmatn Bold" else "وزیر متن بولد"
+        "b koodak bold_0.ttf" -> if (isEnglish) "B Koodak Bold" else "کودک بولد"
         else -> base.substringBeforeLast('.')
     }
 }
@@ -74,11 +77,12 @@ fun FontPickerDialog(
     var error by remember { mutableStateOf<String?>(null) }
     // WPF parity: font search box filtering the installed list.
     var fontQuery by remember { mutableStateOf("") }
-    val visibleFonts = remember(fonts, fontQuery) {
+    val isEnglishFonts = LocalConfiguration.current.locales[0].language.startsWith("en")
+    val visibleFonts = remember(fonts, fontQuery, isEnglishFonts) {
         if (fontQuery.isBlank()) fonts
         else fonts.filter {
             it.contains(fontQuery, ignoreCase = true) ||
-                fontDisplayName(it).contains(fontQuery, ignoreCase = true)
+                fontDisplayName(it, isEnglishFonts).contains(fontQuery, ignoreCase = true)
         }
     }
 
@@ -147,7 +151,7 @@ fun FontPickerDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = fontDisplayName(fileName),
+                                text = fontDisplayName(fileName, isEnglishFonts),
                                 modifier = Modifier.weight(1f),
                                 // Font names are centered, never RTL/LTR aligned.
                                 textAlign = TextAlign.Center
