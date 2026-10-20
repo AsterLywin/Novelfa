@@ -43,7 +43,10 @@ import com.novelfa.reader.data.BackupPreview
 import com.novelfa.reader.data.BackupService
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.InspectResult
+import androidx.compose.material3.LocalContentColor
 import com.novelfa.reader.theme.AccentSheet
+import com.novelfa.reader.theme.AppIcon
+import com.novelfa.reader.theme.AppIconKind
 import com.novelfa.reader.theme.CharacterSheet
 import com.novelfa.reader.theme.FontPickerDialog
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
@@ -158,14 +161,22 @@ private fun ThemeSection(viewModel: SettingsViewModel) {
                 onClick = { scope.launch { viewModel.setTheme("dark") } },
                 modifier = Modifier.weight(1f)
             ) {
-                Text((if (theme == "dark") "✓ " else "") + stringResource(R.string.dark_mode))
+                if (theme == "dark") {
+                    AppIcon(AppIconKind.Check, tint = LocalContentColor.current, size = 14.dp)
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(stringResource(R.string.dark_mode))
             }
             Spacer(modifier = Modifier.width(8.dp))
             OutlinedButton(
                 onClick = { scope.launch { viewModel.setTheme("light") } },
                 modifier = Modifier.weight(1f)
             ) {
-                Text((if (theme == "light") "✓ " else "") + stringResource(R.string.light_mode))
+                if (theme == "light") {
+                    AppIcon(AppIconKind.Check, tint = LocalContentColor.current, size = 14.dp)
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(stringResource(R.string.light_mode))
             }
         }
     }
@@ -341,7 +352,11 @@ private fun LanguageSection(viewModel: SettingsViewModel) {
                 },
                 modifier = Modifier.weight(1f)
             ) {
-                Text((if (lang == "fa") "✓ " else "") + "فارسی")
+                if (lang == "fa") {
+                    AppIcon(AppIconKind.Check, tint = LocalContentColor.current, size = 14.dp)
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text("فارسی")
             }
             Spacer(modifier = Modifier.width(8.dp))
             OutlinedButton(
@@ -353,7 +368,11 @@ private fun LanguageSection(viewModel: SettingsViewModel) {
                 },
                 modifier = Modifier.weight(1f)
             ) {
-                Text((if (lang == "en") "✓ " else "") + "English")
+                if (lang == "en") {
+                    AppIcon(AppIconKind.Check, tint = LocalContentColor.current, size = 14.dp)
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text("English")
             }
         }
     }

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -34,7 +35,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import com.novelfa.reader.theme.AppIcon
+import com.novelfa.reader.theme.AppIconKind
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.widget.Toast
@@ -118,14 +124,26 @@ fun CollectionsScreen(
     Column(modifier = Modifier.statusBarsPadding()) {
         if (onBack != null) {
             Row(modifier = Modifier.padding(horizontal = 4.dp)) {
-                TextButton(onClick = onBack) { Text("→") }
+                TextButton(onClick = onBack) {
+                    AppIcon(
+                        if (LocalLayoutDirection.current == LayoutDirection.Rtl) {
+                            AppIconKind.ArrowForward
+                        } else {
+                            AppIconKind.ArrowBack
+                        },
+                        tint = LocalContentColor.current,
+                        size = 16.dp
+                    )
+                }
                 Text(
                     if (selected == null) stringResource(R.string.library_collections) else selected!!,
                     modifier = Modifier.align(Alignment.CenterVertically).weight(1f)
                 )
                 // Upstream parity: manually create a collection (may stay empty).
                 TextButton(onClick = { createOpen = true }) {
-                    Text("＋ " + stringResource(R.string.new_collection))
+                    AppIcon(AppIconKind.Plus, tint = LocalContentColor.current, size = 14.dp, strokeWidth = 2f)
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.new_collection))
                 }
             }
         }
@@ -256,7 +274,12 @@ fun CollectionsScreen(
                             TextButton(
                                 onClick = { scope.launch { viewModel.toggleFavorite(book) } }
                             ) {
-                                Text(if (book.isFavorite) "★" else "☆")
+                                AppIcon(
+                                    AppIconKind.Heart,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    size = 17.dp,
+                                    filled = book.isFavorite
+                                )
                             }
                             TextButton(onClick = { resetTarget = book }) {
                                 // Like the WPF restart prompt.

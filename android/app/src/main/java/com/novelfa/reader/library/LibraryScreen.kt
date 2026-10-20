@@ -117,6 +117,10 @@ import com.novelfa.reader.settings.PinMode
 import com.novelfa.reader.settings.PinSession
 import com.novelfa.reader.settings.RankHook
 import com.novelfa.reader.settings.RankUp
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
+import com.novelfa.reader.theme.AppIcon
+import com.novelfa.reader.theme.AppIconKind
 import com.novelfa.reader.theme.CharacterTheme
 import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
@@ -528,9 +532,11 @@ fun LibraryScreen(
                     TextButton(onClick = onOpenCollections) {
                         Text(stringResource(R.string.library_collections))
                     }
-                    TextButton(onClick = { aboutOpen = true }) { Text("ⓘ") }
-                    TextButton(onClick = onOpenSettings) {
-                        Text("\u2699")
+                    IconButton(onClick = { aboutOpen = true }) {
+                        AppIcon(AppIconKind.Info, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 19.dp)
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        AppIcon(AppIconKind.Gear, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 19.dp)
                     }
                 }
             )
@@ -570,10 +576,11 @@ fun LibraryScreen(
                         .clickable { launchImport() },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        "+",
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        style = MaterialTheme.typography.headlineMedium
+                    AppIcon(
+                        AppIconKind.Plus,
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        size = 26.dp,
+                        strokeWidth = 2f
                     )
                 }
             } else {
@@ -581,7 +588,12 @@ fun LibraryScreen(
                     onClick = { launchImport() },
                     modifier = Modifier.alpha(fabAlpha)
                 ) {
-                    Text("+")
+                    AppIcon(
+                        AppIconKind.Plus,
+                        tint = LocalContentColor.current,
+                        size = 24.dp,
+                        strokeWidth = 2f
+                    )
                 }
             }
         }
@@ -1334,12 +1346,8 @@ private fun SelectionBar(
                     )
                 }
                 // Standard "cancel/close" yellow.
-                TextButton(onClick = onCancel) {
-                    Text(
-                        "\u2715",
-                        color = Color(0xFFFFC107),
-                        style = MaterialTheme.typography.titleLarge
-                    )
+                IconButton(onClick = onCancel) {
+                    AppIcon(AppIconKind.Close, tint = Color(0xFFFFC107), size = 17.dp)
                 }
             }
         }
@@ -1960,20 +1968,27 @@ fun BookCard(
                     )
                 }
                 if (book.isFavorite) {
-                    Text(
-                        text = "★",
+                    // Windows grid card: accent-filled circle, white heart.
+                    Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(6.dp)
-                    )
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AppIcon(AppIconKind.Heart, tint = Color.White, size = 17.dp, filled = true)
+                    }
                 }
                 if (missingFile) {
-                    Text(
-                        text = "⚠",
+                    Box(
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .padding(6.dp)
-                    )
+                    ) {
+                        AppIcon(AppIconKind.Warning, tint = MaterialTheme.colorScheme.error, size = 16.dp)
+                    }
                 }
                 if (selected) {
                     Box(
@@ -1985,9 +2000,10 @@ fun BookCard(
                             .background(MaterialTheme.colorScheme.primary),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = "\u2713",
-                            color = MaterialTheme.colorScheme.onPrimary
+                        AppIcon(
+                            AppIconKind.Check,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            size = 15.dp
                         )
                     }
                 }
@@ -2003,10 +2019,19 @@ fun BookCard(
                     )
                 }
                 if (onMenuClick != null) {
-                    TextButton(
-                        onClick = onMenuClick,
-                        modifier = Modifier.align(Alignment.TopStart)
-                    ) { Text("⋯") }
+                    // Windows card button: near-white circle, IcoDots.
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(4.dp)
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xE6FFFFFF))
+                            .clickable { onMenuClick() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AppIcon(AppIconKind.Dots, tint = Color(0xFF4C4766), size = 16.dp, filled = true)
+                    }
                 }
             }
             if (showStitch) {
@@ -2096,10 +2121,18 @@ private fun BookRow(
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
                 )
             }
-            if (missingFile) Text("⚠")
-            if (book.isFavorite) Text("★")
-            if (selected) Text("✓")
-            TextButton(onClick = onMenuClick) { Text("⋯") }
+            if (missingFile) {
+                AppIcon(AppIconKind.Warning, tint = MaterialTheme.colorScheme.error, size = 15.dp, modifier = Modifier.padding(end = 4.dp))
+            }
+            if (book.isFavorite) {
+                AppIcon(AppIconKind.Heart, tint = MaterialTheme.colorScheme.primary, size = 15.dp, filled = true, modifier = Modifier.padding(end = 4.dp))
+            }
+            if (selected) {
+                AppIcon(AppIconKind.Check, tint = MaterialTheme.colorScheme.secondary, size = 14.dp)
+            }
+            IconButton(onClick = onMenuClick) {
+                AppIcon(AppIconKind.Dots, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 16.dp, filled = true)
+            }
         }
     }
 }

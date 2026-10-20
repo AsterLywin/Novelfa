@@ -17,6 +17,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -151,17 +152,39 @@ private fun CharacterRow(
                         )
                     }
                 }
+            } else if (letter == "✦") {
+                // The no-theme row's mark: the Windows sparkle, drawn.
+                AppIcon(AppIconKind.Sparkle, tint = hexToColor(nightBg), size = 20.dp)
             } else {
                 Text(text = letter, color = hexToColor(nightBg))
             }
         }
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = (if (locked) "🔒 " else "") + name +
-                    (if (active) " ✓" else ""),
-                style = MaterialTheme.typography.titleMedium
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (locked) {
+                    // Windows locked-card badge: IcoLock in a dark circle.
+                    Box(
+                        modifier = Modifier
+                            .size(19.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF262335)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AppIcon(AppIconKind.Lock, tint = Color.White, size = 11.dp)
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(text = name, style = MaterialTheme.typography.titleMedium)
+                if (active) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    AppIcon(
+                        AppIconKind.Check,
+                        tint = MaterialTheme.colorScheme.primary,
+                        size = 15.dp
+                    )
+                }
+            }
             Text(
                 text = tagline,
                 style = MaterialTheme.typography.bodySmall,

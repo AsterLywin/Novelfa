@@ -78,6 +78,12 @@ import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.parser.EpubParser
 import com.novelfa.reader.settings.SupportDialog
 import com.novelfa.reader.settings.SupportTracker
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
+import com.novelfa.reader.theme.AppIcon
+import com.novelfa.reader.theme.AppIconKind
+import com.novelfa.reader.theme.ContrastIcon
 import com.novelfa.reader.theme.Themes
 import com.novelfa.reader.theme.ThemePreviewCard
 import kotlinx.coroutines.CancellationException
@@ -415,7 +421,7 @@ fun ReaderScreen(
                     // RTL: the first child lands at the right — the menu icon
                     // sits to the right of the title; tapping it closes.
                     TextButton(onClick = { scope.launch { drawerState.close() } }) {
-                        Text("\u2630")
+                        AppIcon(AppIconKind.List, tint = LocalContentColor.current, size = 18.dp)
                     }
                     Text(
                         stringResource(R.string.chapters),
@@ -511,28 +517,32 @@ fun ReaderScreen(
                     },
                     navigationIcon = {
                         TextButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Text("☰")
+                            AppIcon(AppIconKind.List, tint = LocalContentColor.current, size = 19.dp)
                         }
                     },
                     actions = {
                         // Reading layout mode (replaces the old continuous
                         // toggle): ⇄ horizontal paging, ↕ vertical-continuous.
                         TextButton(onClick = { modeOpen = true }, enabled = vm != null) {
-                            Text(
-                                if (modeNow == ReadingMode.PAGED_HORIZONTAL) "⇄" else "↕",
-                                fontSize = 22.sp
+                            AppIcon(
+                                if (modeNow == ReadingMode.PAGED_HORIZONTAL) AppIconKind.Stack
+                                else AppIconKind.Scroll,
+                                tint = LocalContentColor.current,
+                                size = 19.dp
                             )
                         }
                         TextButton(onClick = { themeOpen = true }, enabled = vm != null) {
-                            Text("◑", fontSize = 22.sp)
+                            ContrastIcon(tint = LocalContentColor.current, size = 19.dp)
                         }
                         TextButton(onClick = { fontOpen = true }, enabled = vm != null) {
-                            Text("F")
+                            AppIcon(AppIconKind.Font, tint = LocalContentColor.current, size = 17.dp)
                         }
                         TextButton(onClick = { fullscreenUi = true }, enabled = vm != null) {
-                            Text("⛶")
+                            AppIcon(AppIconKind.Fullscreen, tint = LocalContentColor.current, size = 17.dp)
                         }
-                        TextButton(onClick = onClose) { Text("✕") }
+                        TextButton(onClick = onClose) {
+                            AppIcon(AppIconKind.Close, tint = LocalContentColor.current, size = 16.dp)
+                        }
                     }
                 )
                 }
@@ -599,7 +609,7 @@ fun ReaderScreen(
                         TextButton(
                             onClick = { spacingOpen = true },
                             enabled = v != null
-                        ) { Text("Aa") }
+                        ) { AppIcon(AppIconKind.Spacing, tint = LocalContentColor.current, size = 19.dp) }
                     }
                 }
                 }
@@ -615,7 +625,7 @@ fun ReaderScreen(
                     loadError && vm == null -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(openErr)
-                            TextButton(onClick = onClose) { Text("✕") }
+                            TextButton(onClick = onClose) { Text(stringResource(R.string.close)) }
                         }
                     }
                     pageHtml.isEmpty() -> CircularProgressIndicator()
@@ -665,10 +675,22 @@ fun ReaderScreen(
                     )
                 }
                 if (fullscreenUi) {
-                    TextButton(
+                    IconButton(
                         onClick = { fullscreenUi = false },
-                        modifier = Modifier.align(Alignment.TopEnd)
-                    ) { Text(stringResource(R.string.exit_fullscreen)) }
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .clip(CircleShape)
+                            .background(
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                            )
+                    ) {
+                        AppIcon(
+                            AppIconKind.ExitFullscreen,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            size = 18.dp
+                        )
+                    }
                 }
             }
         }
@@ -739,13 +761,13 @@ fun ReaderScreen(
                         horizontalArrangement = Arrangement.SpaceEvenly
                     ) {
                         ReadingModeChoice(
-                            glyph = "⇄",
+                            icon = AppIconKind.Stack,
                             label = stringResource(R.string.mode_horizontal),
                             selected = modeNow == ReadingMode.PAGED_HORIZONTAL,
                             onClick = { setMode(ReadingMode.PAGED_HORIZONTAL) }
                         )
                         ReadingModeChoice(
-                            glyph = "↕",
+                            icon = AppIconKind.Scroll,
                             label = stringResource(R.string.mode_vertical_continuous),
                             selected = modeNow == ReadingMode.CONTINUOUS_VERTICAL,
                             onClick = { setMode(ReadingMode.CONTINUOUS_VERTICAL) }
@@ -997,13 +1019,13 @@ private const val MAX_ZIP_ENTRIES = 10_000
 private const val MAX_ZIP_BYTES = 500L * 1024 * 1024
 
 /**
- * One reading-mode option in the mode picker popup: a big arrow glyph
- * (bidirectional ⇄ for horizontal, up-down ↕ for vertical-continuous)
+ * One reading-mode option in the mode picker popup: the mode's drawn
+ * icon (IcoStack pages for horizontal, IcoScroll for vertical-continuous)
  * with its label underneath, highlighted when selected.
  */
 @Composable
 private fun ReadingModeChoice(
-    glyph: String,
+    icon: AppIconKind,
     label: String,
     selected: Boolean,
     onClick: () -> Unit
@@ -1026,11 +1048,11 @@ private fun ReadingModeChoice(
             )
             .padding(horizontal = 20.dp, vertical = 12.dp)
     ) {
-        Text(
-            text = glyph,
-            fontSize = 40.sp,
-            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-            else MaterialTheme.colorScheme.onSurface
+        AppIcon(
+            icon,
+            tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurface,
+            size = 38.dp
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
