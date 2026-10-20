@@ -1,11 +1,15 @@
 package com.novelfa.reader.settings
 
+import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import java.io.File
 import kotlinx.coroutines.flow.first
 
-/** Thrown for collection validation failures; message is user-facing fa text. */
-class CollectionException(messageFa: String) : IllegalArgumentException(messageFa)
+/**
+ * Thrown for collection validation failures; [resId] is the localized
+ * user-facing message (same pattern as PinException).
+ */
+class CollectionException(val resId: Int) : IllegalArgumentException()
 
 /**
  * Upstream CollectionRegistry parity: persistence for manually-created
@@ -35,10 +39,10 @@ class CollectionManager(
     /** Create a manually-named collection (upstream NameInputWindow flow). */
     suspend fun createCollection(name: String) {
         val clean = name.trim()
-        if (clean.isEmpty()) throw CollectionException("اسم مجموعه نمی‌تونه خالی باشه.")
-        if (clean.length > 60) throw CollectionException("اسم مجموعه حداکثر ۶۰ کاراکتره.")
+        if (clean.isEmpty()) throw CollectionException(R.string.collection_name_blank)
+        if (clean.length > 60) throw CollectionException(R.string.collection_name_too_long)
         if (allCollectionNames().any { it.equals(clean, ignoreCase = true) }) {
-            throw CollectionException("مجموعه‌ای با این اسم از قبل وجود داره.")
+            throw CollectionException(R.string.collection_name_exists)
         }
         manualRegistry?.add(clean)
     }
@@ -46,12 +50,12 @@ class CollectionManager(
     /** Rename a collection: updates every book carrying [old] (blank -> throw). */
     suspend fun renameCollection(old: String, new: String) {
         val clean = new.trim()
-        if (clean.isEmpty()) throw CollectionException("اسم مجموعه نمی‌تونه خالی باشه.")
+        if (clean.isEmpty()) throw CollectionException(R.string.collection_name_blank)
         val existing = allCollectionNames()
         // Renaming onto an existing collection would silently merge the two
         // with no way back — refuse instead.
         if (existing.any { it.equals(clean, ignoreCase = true) && !it.equals(old, ignoreCase = true) }) {
-            throw CollectionException("مجموعه‌ای با این اسم از قبل وجود داره.")
+            throw CollectionException(R.string.collection_name_exists)
         }
         dao.allBooks().first()
             .filter { it.collectionName == old }

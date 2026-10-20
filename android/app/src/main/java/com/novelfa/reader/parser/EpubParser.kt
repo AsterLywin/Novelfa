@@ -12,7 +12,16 @@ object EpubParser {
     /** Package documents (container.xml/OPF) are kilobytes; anything larger is hostile. */
     private const val MAX_PACKAGE_XML_BYTES = 10L * 1024 * 1024
 
-    fun parse(extractDir: File, epubFileName: String): ParsedBook {
+    /**
+     * @param chapterFallback localized title for a chapter that has none
+     * (called with the 1-based chapter number) — supplied by the caller,
+     * which owns a Context.
+     */
+    fun parse(
+        extractDir: File,
+        epubFileName: String,
+        chapterFallback: (Int) -> String
+    ): ParsedBook {
         val dbf = secureDocumentBuilderFactory()
         val opfFile = findOpfFile(dbf, extractDir)
             ?: throw IllegalArgumentException("No OPF package document found in EPUB")
@@ -106,7 +115,7 @@ object EpubParser {
             if (!seenFiles.add(canonical)) continue
             val title = tocTitles[canonical]
                 ?: readXhtmlTitle(dbf, file)
-                ?: "بخش $idx"
+                ?: chapterFallback(idx)
             chapters += Chapter(title = title, file = file)
             idx++
         }

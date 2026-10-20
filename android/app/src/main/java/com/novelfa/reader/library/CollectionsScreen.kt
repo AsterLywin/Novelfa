@@ -40,6 +40,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.widget.Toast
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookEntity
+import com.novelfa.reader.settings.CollectionException
 import com.novelfa.reader.data.isCompleted
 import com.novelfa.reader.data.isInProgress
 import com.novelfa.reader.data.progressPercent
@@ -286,9 +287,11 @@ fun CollectionsScreen(
                     val result = runCatching { viewModel.createCollection(name) }
                     createOpen = false
                     if (!result.isSuccess) {
+                        val msgRes = (result.exceptionOrNull() as? CollectionException)?.resId
+                            ?: R.string.collection_create_failed
                         Toast.makeText(
                             context,
-                            result.exceptionOrNull()?.message ?: "Create failed",
+                            context.getString(msgRes),
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -309,9 +312,11 @@ fun CollectionsScreen(
                         if (selected == old) selected = newName.trim().ifBlank { old }
                     } else {
                         // Don't pretend the rename worked: tell the user.
+                        val msgRes = (result.exceptionOrNull() as? CollectionException)?.resId
+                            ?: R.string.collection_rename_failed
                         Toast.makeText(
                             context,
-                            result.exceptionOrNull()?.message ?: "Rename failed",
+                            context.getString(msgRes),
                             Toast.LENGTH_LONG
                         ).show()
                     }

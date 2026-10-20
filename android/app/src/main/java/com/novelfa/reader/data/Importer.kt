@@ -18,7 +18,8 @@ import kotlinx.coroutines.withContext
 
 class ImportException(
     message: String,
-    val messageFa: String = "خطا در باز کردن کتاب",
+    /** Localized user-facing message, resolved by the thrower via resources. */
+    val messageFa: String,
     cause: Throwable? = null
 ) : Exception(message, cause)
 
@@ -45,7 +46,7 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         if (pickedSize != null && pickedSize > MAX_EPUB_BYTES) {
             throw ImportException(
                 "EPUB too large: $pickedSize bytes",
-                messageFa = "حجم فایل بیش از حد مجاز است."
+                messageFa = context.getString(R.string.import_error_too_large)
             )
         }
         try {
@@ -62,7 +63,7 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                         if (remaining < 0) {
                             throw ImportException(
                                 "EPUB too large: exceeds $MAX_EPUB_BYTES bytes",
-                                messageFa = "حجم فایل بیش از حد مجاز است."
+                                messageFa = context.getString(R.string.import_error_too_large)
                             )
                         }
                         output.write(buf, 0, n)
@@ -75,11 +76,13 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             // the parser falls back to the file name — the UUID name would
             // show up as the book title otherwise.
             val displayName = queryDisplayName(sourceUri) ?: "$id.epub"
-            val parsed = EpubParser.parse(tmpDir, displayName)
+            val parsed = EpubParser.parse(tmpDir, displayName) { n ->
+                context.getString(R.string.chapter_fallback, n)
+            }
             if (parsed.chapters.isEmpty()) {
                 throw ImportException(
                     "EPUB has no readable chapters",
-                    messageFa = "این فایل هیچ بخش قابل خواندنی ندارد."
+                    messageFa = context.getString(R.string.import_error_no_readable_sections)
                 )
             }
             val coverPath = parsed.coverFile

@@ -17,7 +17,7 @@ class EpubParserTest {
     @Test
     fun spineOrder_isPreserved() {
         val dir = File("src/test/resources/book1")
-        val book = EpubParser.parse(dir, "mybook.epub")
+        val book = EpubParser.parse(dir, "mybook.epub") { n -> "Section $n" }
         assertEquals(listOf("فصل 1", "فصل 2"), book.chapters.map { it.title })
         assertEquals(listOf("ch1.xhtml", "ch2.xhtml"), book.chapters.map { it.file.name })
         assertEquals("cover.jpg", book.coverFile?.name)
@@ -36,7 +36,7 @@ class EpubParserTest {
         File(oebps, "ch1.xhtml").writeText(File(src, "ch1.xhtml").readText())
         File(oebps, "ch2.xhtml").writeText(File(src, "ch2.xhtml").readText())
         File(oebps, "cover.jpg").writeBytes(File(src, "cover.jpg").readBytes())
-        val book = EpubParser.parse(dir, "nocontainer.epub")
+        val book = EpubParser.parse(dir, "nocontainer.epub") { n -> "Section $n" }
         assertEquals(listOf("فصل 1", "فصل 2"), book.chapters.map { it.title })
         assertEquals("My Title", book.title)
         assertEquals("cover.jpg", book.coverFile?.name)
@@ -58,7 +58,7 @@ class EpubParserTest {
         File(oebps, "ch1.xhtml").writeText(File(src, "ch1.xhtml").readText())
         File(oebps, "ch2.xhtml").writeText(File(src, "ch2.xhtml").readText())
         try {
-            EpubParser.parse(dir, "doctype.epub")
+            EpubParser.parse(dir, "doctype.epub") { n -> "Section $n" }
             fail("expected DOCTYPE rejection")
         } catch (e: IllegalArgumentException) {
             assertTrue(e.message!!.contains("DOCTYPE"))
@@ -77,7 +77,7 @@ class EpubParserTest {
                 "<spine><itemref idref=\"c1\"/></spine></package>"
         )
         File(oebps, "ch1.xhtml").writeText(File(src, "ch1.xhtml").readText())
-        val book = EpubParser.parse(dir, "nons.epub")
+        val book = EpubParser.parse(dir, "nons.epub") { n -> "Section $n" }
         assertEquals(listOf("فصل 1"), book.chapters.map { it.title })
         assertEquals("NS Title", book.title)
     }

@@ -177,16 +177,23 @@ class ReaderViewModel(
         }
 
         /**
-         * Persian display name for a reader theme: static themes use
-         * Themes.NAMES_FA; character pages get "شبِ X" / "روزِ X".
+         * Display name for a reader theme in the UI language: static themes
+         * use Themes.NAMES_FA / NAMES_EN; character pages get "شبِ X" /
+         * "روزِ X" (fa) or "X Night" / "X Day" (en).
          */
-        fun themeDisplayName(key: String): String {
-            Themes.NAMES_FA[key]?.let { return it }
+        fun themeDisplayName(key: String, isEnglish: Boolean): String {
+            (if (isEnglish) Themes.NAMES_EN[key] else Themes.NAMES_FA[key])
+                ?.let { return it }
             if (key.startsWith("rz.")) {
                 val id = key.removePrefix("rz.").substringBefore('.')
-                val name = CharacterThemes.find(id)?.nameFa ?: id
-                val suffix = if (key.endsWith(".night")) "شب" else "روز"
-                return "$suffixِ $name"
+                val theme = CharacterThemes.find(id)
+                val name = theme?.displayName(isEnglish) ?: id
+                return if (isEnglish) {
+                    if (key.endsWith(".night")) "$name Night" else "$name Day"
+                } else {
+                    val suffix = if (key.endsWith(".night")) "شب" else "روز"
+                    "$suffixِ $name"
+                }
             }
             return key
         }

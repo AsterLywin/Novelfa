@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.novelfa.reader.reader.ReaderViewModel
@@ -83,7 +84,10 @@ fun ThemePreviewCard(
                 }
             }
             Text(
-                text = ReaderViewModel.themeDisplayName(theme.key),
+                text = ReaderViewModel.themeDisplayName(
+                    theme.key,
+                    LocalConfiguration.current.locales[0].language.startsWith("en")
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 8.dp, horizontal = 4.dp),

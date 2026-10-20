@@ -709,13 +709,20 @@ fun LibraryScreen(
     // تم ... برات باز شد. همین الان فعالش کنم؟»
     rankUp?.let { up ->
         val rankName = RankService.Ranks.getOrNull(up.toRank)?.displayName(isEnglishUi) ?: ""
-        val names = up.newThemes.joinToString("، ") { it.nameFa }
+        val names = up.newThemes.joinToString(if (isEnglishUi) ", " else "، ") {
+            it.displayName(isEnglishUi)
+        }
         AlertDialog(
             onDismissRequest = { rankUp = null },
             title = { Text(stringResource(R.string.new_theme_unlocked)) },
             text = {
                 Text(
-                    stringResource(R.string.rank_up_message, rankName, names, up.best.nameFa)
+                    stringResource(
+                        R.string.rank_up_message,
+                        rankName,
+                        names,
+                        up.best.displayName(isEnglishUi)
+                    )
                 )
             },
             confirmButton = {
@@ -737,7 +744,7 @@ fun LibraryScreen(
         AlertDialog(
             onDismissRequest = { secretUnlocked = null },
             title = { Text(stringResource(R.string.new_theme_unlocked)) },
-            text = { Text(stringResource(R.string.secret_theme_message, theme.nameFa)) },
+            text = { Text(stringResource(R.string.secret_theme_message, theme.displayName(isEnglishUi))) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -1391,7 +1398,11 @@ private fun HeroCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    "${book.lastChapterIndex + 1} از ${book.totalChapters}",
+                    stringResource(
+                        R.string.chapter_progress,
+                        book.lastChapterIndex + 1,
+                        book.totalChapters
+                    ),
                     style = MaterialTheme.typography.labelSmall
                 )
                 LinearProgressIndicator(
@@ -1642,7 +1653,7 @@ fun BookCard(
                     text = if (isCompleted(book)) {
                         stringResource(R.string.completed)
                     } else {
-                        "${percentDisplay(book)}٪"
+                        stringResource(R.string.percent_value, percentDisplay(book))
                     },
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(top = 4.dp)
@@ -1694,7 +1705,7 @@ private fun BookRow(
                     text = if (isCompleted(book)) {
                         stringResource(R.string.completed)
                     } else {
-                        "${percentDisplay(book)}٪"
+                        stringResource(R.string.percent_value, percentDisplay(book))
                     },
                     style = MaterialTheme.typography.labelSmall
                 )

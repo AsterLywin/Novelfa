@@ -913,7 +913,9 @@ private fun openParsed(
         }
         stamp.writeText(epub.lastModified().toString())
     }
-    return EpubParser.parse(outDir, epub.name)
+    return EpubParser.parse(outDir, epub.name) { n ->
+        context.getString(R.string.chapter_fallback, n)
+    }
 }
 
 /** Zip-bomb guardrails for EPUB extraction (generous: real books are far smaller). */

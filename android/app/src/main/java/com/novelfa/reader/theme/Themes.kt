@@ -98,5 +98,15 @@ object Themes {
         "green" to "سبز ملایم"
     )
 
+    /** en display names, same keys as [NAMES_FA]. */
+    val NAMES_EN: Map<String, String> = mapOf(
+        "dark" to "Dark",
+        "white" to "White",
+        "cream" to "Cream",
+        "black" to "Black",
+        "gray" to "Gray",
+        "green" to "Soft Green"
+    )
+
     fun findStatic(key: String): ReaderTheme? = ALL.firstOrNull { it.key == key }
 }

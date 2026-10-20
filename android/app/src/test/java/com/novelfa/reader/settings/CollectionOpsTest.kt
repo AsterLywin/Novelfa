@@ -47,7 +47,7 @@ class CollectionOpsTest {
             CollectionManager(dao).renameCollection("old", "  ")
             fail("expected CollectionException")
         } catch (e: CollectionException) {
-            assertTrue(e.message!!.isNotBlank())
+            assertTrue(e.resId != 0)
         }
         assertEquals("old", dao.current().single().collectionName)
     }

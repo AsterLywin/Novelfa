@@ -26,8 +26,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.novelfa.reader.R
 
 /**
  * Character-theme picker. Each row shows an initial-letter avatar in
@@ -47,13 +50,14 @@ fun CharacterSheet(
     particlesEnabled: Boolean = false,
     onToggleParticles: (Boolean) -> Unit = {}
 ) {
+    val isEnglishUi = LocalConfiguration.current.locales[0].language.startsWith("en")
     Dialog(onDismissRequest = onDismiss) {
         Card {
             Column(modifier = Modifier.padding(16.dp)) {
                 CharacterRow(
                     letter = "✦",
-                    name = "بدون تم شخصیت",
-                    tagline = "برگشت به رنگ ساده‌ی برنامه",
+                    name = stringResource(R.string.no_character_theme),
+                    tagline = stringResource(R.string.no_character_theme_tagline),
                     nightBg = "#1C1A29",
                     dayBg = "#FFFFFF",
                     accent = "#7C3AED",
@@ -68,10 +72,10 @@ fun CharacterSheet(
                     items(CharacterThemes.All) { theme ->
                         val locked = !isUnlocked(theme)
                         CharacterRow(
-                            letter = theme.nameFa.firstOrNull()?.toString() ?: "؟",
+                            letter = theme.displayName(isEnglishUi).firstOrNull()?.toString() ?: "?",
                             theme = theme,
-                            name = theme.nameFa,
-                            tagline = theme.taglineFa,
+                            name = theme.displayName(isEnglishUi),
+                            tagline = theme.displayTagline(isEnglishUi),
                             nightBg = theme.dark.card,
                             dayBg = theme.light.hero1,
                             accent = theme.dark.accent,
@@ -88,7 +92,7 @@ fun CharacterSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "ذرات متحرک",
+                        text = stringResource(R.string.animated_particles),
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.weight(1f)
                     )

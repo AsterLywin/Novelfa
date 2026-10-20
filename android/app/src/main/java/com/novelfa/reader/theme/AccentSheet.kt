@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -58,6 +59,7 @@ fun AccentSheet(
     onPick: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val isEnglishUi = LocalConfiguration.current.locales[0].language.startsWith("en")
     Dialog(onDismissRequest = onDismiss) {
         Card {
             Column(
@@ -66,7 +68,7 @@ fun AccentSheet(
                     .verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    text = "رنگ برنامه",
+                    text = stringResource(R.string.app_color),
                     style = MaterialTheme.typography.titleLarge
                 )
                 Spacer(modifier = Modifier.height(12.dp))
@@ -93,7 +95,7 @@ fun AccentSheet(
                                     .clickable { onPick(preset.hex) }
                             )
                             Text(
-                                text = preset.nameFa,
+                                text = preset.displayName(isEnglishUi),
                                 style = MaterialTheme.typography.labelSmall
                             )
                         }

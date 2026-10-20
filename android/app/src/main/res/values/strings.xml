@@ -210,4 +210,14 @@
     <string name="backup_err_unreadable">Couldn\'t read the backup file.</string>
     <string name="platform_android">Android</string>
     <string name="platform_windows">Windows</string>
+    <string name="import_error_too_large">The file is larger than the allowed size.</string>
+    <string name="import_error_no_readable_sections">This file has no readable sections.</string>
+    <string name="collection_name_exists">A collection with this name already exists.</string>
+    <string name="collection_create_failed">Couldn\'t create the collection.</string>
+    <string name="collection_rename_failed">Couldn\'t rename the collection.</string>
+    <string name="chapter_progress">%1$d of %2$d</string>
+    <string name="percent_value">%1$d%%</string>
+    <string name="chapter_fallback">Section %1$d</string>
+    <string name="no_character_theme_tagline">Back to the app\'s plain colors</string>
+    <string name="animated_particles">Animated particles</string>
 </resources>
