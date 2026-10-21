@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>کتاب‌خوان EPUB فارسی با پشتیبانی کامل از راست‌به‌چپ — برای ویندوز و اندروید</b><br/>
-  <i>A Persian (RTL) EPUB reader for Windows &amp; Android — two native apps, one repository.</i>
+  <i>A Persian EPUB reader — Ali's original Windows app, and the Android version developed in this repository.</i>
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/Android-Kotlin%202.0.20%20%7C%20Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white" alt="Android stack"/>
   <img src="https://img.shields.io/badge/Windows-WPF%20%7C%20.NET%20Framework%204.7.2-512BD4?logo=dotnet&logoColor=white" alt="Windows stack"/>
   <img src="https://img.shields.io/badge/Android-Min%20SDK%2029%20%7C%20Target%2035-3DDC84?logo=android&logoColor=white" alt="Android SDK"/>
-  <img src="https://img.shields.io/badge/Version-1.0.1-F48C06" alt="Version"/>
+  <img src="https://img.shields.io/badge/Status-In%20Development-F48C06" alt="Status"/>
   <img src="https://img.shields.io/badge/UI-FA%20%7C%20EN-2EA043" alt="UI languages"/>
 </p>
 
@@ -32,14 +32,16 @@
 
 ## 📖 درباره‌ی پروژه
 
-**ناول‌فا** یک کتاب‌خوان EPUB است که از ابتدا برای متن فارسی و چیدمان راست‌به‌چپ طراحی شده. این ریپو سورس کامل پروژه است و هر دو نسخه از همین‌جا توسعه داده می‌شوند:
+**ناول‌فا** یک کتاب‌خوان EPUB فارسی است؛ کتابخانه‌ای شخصی برای رمان‌ها و کتاب‌های الکترونیک که مطالعه را از باز کردن یک فایل ساده فراتر می‌برد: تم‌های کاراکتری روز و شب، کالکشن‌بندی کتاب‌ها، سیستم رتبه بر اساس کتاب‌های تمام‌شده، قفل خصوصی برای کتاب‌های شخصی و پشتیبان‌گیری قابل‌حمل — همه دور یک هدف جمع شده‌اند: مطالعه‌ی راحت و لذت‌بخش کتاب فارسی، با پشتیبانی کامل از متن و چیدمان راست‌به‌چپ.
 
-| نسخه | مسیر | فناوری |
-|---|---|---|
-| 🖥️ **دسکتاپ ویندوز** | [`EpubReader/`](EpubReader/) | C# · WPF · ‎.NET Framework 4.7.2 |
-| 📱 **اندروید** | [`android/`](android/) | Kotlin 2.0.20 · Jetpack Compose · Material 3 |
+### این ریپو شامل چیست؟
 
-نسخه‌ی ویندوز **پیاده‌سازی مرجع** پروژه است: رفتار، ظاهر و جزئیات تجربه‌ی مطالعه اول آن‌جا شکل می‌گیرد و نسخه‌ی اندروید با همان مشخصات، به‌صورت بومی برای موبایل بازسازی می‌شود — از تم‌ها و سیستم رتبه‌ها تا ریزه‌کاری‌های حالت مطالعه‌ی صفحه‌ای.
+این ریپو دو بخش دارد که هر کدام صاحب مشخص خودش را دارند:
+
+| بخش | مسیر | توسعه‌دهنده | توضیح |
+|---|---|---|---|
+| 🖥️ **نسخه‌ی ویندوز** | [`EpubReader/`](EpubReader/) | **علی (ali1234536)** | اپ دسکتاپ WPF و **پروژه‌ی اصلی**؛ ناول‌فا از همین‌جا شروع شده. در این ریپو به‌عنوان پیاده‌سازی مرجع نگه‌داری می‌شود و توسعه‌اش بر عهده‌ی صاحب اصلی پروژه است. |
+| 📱 **نسخه‌ی اندروید** | [`android/`](android/) | **Aster (AsterLywin)** | بازسازی بومی نسخه‌ی مرجع برای موبایل، با همان رفتار، ظاهر و جزئیات. **توسعه‌ی این نسخه در همین ریپو و بر عهده‌ی Aster است.** |
 
 ### 🔎 در یک نگاه
 
@@ -49,7 +51,7 @@
 | 🖥️📱 **پلتفرم‌ها** | ویندوز (WPF) · اندروید (Compose) |
 | 🌐 **زبان رابط کاربری** | فارسی (راست‌به‌چپ) · انگلیسی (چپ‌به‌راست) |
 | 💾 **فایل پشتیبان** | ‎`.novelfabak` — قابل انتقال بین دستگاه‌ها |
-| 🏷️ **نسخه‌ی فعلی** | 1.0.1 |
+| 🚧 **وضعیت** | در حال توسعه — هنوز انتشار رسمی ندارد |
 
 ### فهرست
 
@@ -202,7 +204,7 @@ cd android
 gradlew.bat assembleDebug
 ```
 
-> 📦 پکیج: `com.novelfa.reader` · نسخه: 1.0.1 · ‎`minSdk 29` · ‎`targetSdk 35`
+> 📦 پکیج: `com.novelfa.reader` · ‎`minSdk 29` · ‎`targetSdk 35`
 
 ---
 
@@ -210,16 +212,23 @@ gradlew.bat assembleDebug
 
 ## 🌍 English Summary
 
-**Novelfa** is a Persian EPUB reader with first-class RTL support, developed as two native apps in a single repository:
+**Novelfa** is a Persian EPUB reader with first-class RTL support. This repository holds two related apps with two different owners:
 
-- **Windows** — a WPF desktop app (`.NET Framework 4.7.2`) in [`EpubReader/`](EpubReader/); the reference implementation.
-- **Android** — a native Kotlin / Jetpack Compose app (`minSdk 29`, `targetSdk 35`) in [`android/`](android/), built in parity with the desktop app.
+- **Windows** — the original WPF desktop app (`.NET Framework 4.7.2`) in [`EpubReader/`](EpubReader/), created by **ali1234536** and kept here as the reference implementation.
+- **Android** — a native Kotlin / Jetpack Compose app (`minSdk 29`, `targetSdk 35`) in [`android/`](android/), developed in this repository by **AsterLywin** in parity with the desktop reference.
+
+The project is in active development; no official release has been published yet.
 
 Highlights: per-book reading settings, vertical & paged reading modes, collections, 7 day/night character themes with animated particles and emblem artwork, secret unlockable themes, a rank system based on finished books, PIN lock, custom fonts, full FA/EN bilingual UI, and a validated backup format (`.novelfabak`) that carries fonts, avatar, rank, secret themes and per-book reading records between devices — re-import a book and it resumes exactly where you left off.
 
 ---
 
-<p align="center">
-  بر پایه‌ی <a href="https://github.com/ali1234536/NovelFaReader">NovelFaReader</a> اثر <b>ali1234536</b> — با تشکر از پروژه‌ی اصلی 🌹<br/>
-  توسعه و نگهداری: <a href="https://github.com/AsterLywin"><b>AsterLywin</b></a>
-</p>
+---
+
+<a id="credits"></a>
+
+## 🙏 اعتبار و تشکر
+
+این پروژه بر پایه‌ی پروژه‌ی **[NovelFaReader](https://github.com/ali1234536/NovelFaReader)** اثر **[ali1234536](https://github.com/ali1234536)** ساخته شده است — کتاب‌خوان ویندوزی‌ای که ناول‌فا از دل آن متولد شد. از علی برای ساخت و انتشار پروژه‌ی اصلی صمیمانه تشکر می‌کنم؛ نسخه‌ی ویندوز داخل این ریپو همان اثر او و پیاده‌سازی مرجع پروژه است و بدون آن، این کار وجود نداشت. 🌹
+
+**نسخه‌ی اندروید** — بازسازی بومی و کامل نسخه‌ی مرجع برای موبایل — و نگهداری این ریپو بر عهده‌ی **[AsterLywin](https://github.com/AsterLywin)** است.
