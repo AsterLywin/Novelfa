@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.toArgb
 import com.novelfa.reader.data.PrefsStore
+import com.novelfa.reader.settings.SettingsViewModel
 import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.buildPlainPalette
 import com.novelfa.reader.theme.parseHex
@@ -43,6 +44,17 @@ class MainActivity : ComponentActivity() {
         val appearance = runBlocking(Dispatchers.IO) {
             runCatching { PrefsStore(applicationContext).appearanceSnapshot() }
                 .getOrNull()
+        }
+        // Apply the saved in-app language to this Activity's resources
+        // BEFORE the first frame. String resources (and LocalConfiguration)
+        // resolve from the Activity configuration, which nothing else
+        // seeds at startup: setLocale's applyLocale only runs when the
+        // user taps the language switch in Settings. Without this, a cold
+        // start came up with the Compose layout direction following the
+        // saved language (LTR for English) while every text still
+        // resolved in the SYSTEM locale (Persian).
+        appearance?.let { snap ->
+            SettingsViewModel.applyLocale(this, snap.lang)
         }
         // Paint the window itself with the theme's background color so
         // even the pre-first-frame window matches the app.
