@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="EpubReader/Assets/AppLogo.png" width="128" alt="Novelfa Logo"/>
+  <img src="EpubReader/Assets/AppLogo.png" width="140" alt="Novelfa Logo"/>
 </p>
 
 <h1 align="center">ناول‌فا | Novelfa</h1>
@@ -18,7 +18,17 @@
   <img src="https://img.shields.io/badge/UI-FA%20%7C%20EN-2EA043" alt="UI languages"/>
 </p>
 
+<p align="center">
+  <a href="#features">✨ امکانات</a> ·
+  <a href="#backup">💾 پشتیبان‌گیری</a> ·
+  <a href="#structure">🗂️ ساختار پروژه</a> ·
+  <a href="#build">🚀 بیلد و اجرا</a> ·
+  <a href="#english">🌍 English</a>
+</p>
+
 ---
+
+<a id="about"></a>
 
 ## 📖 درباره‌ی پروژه
 
@@ -31,7 +41,28 @@
 
 نسخه‌ی ویندوز **پیاده‌سازی مرجع** پروژه است: رفتار، ظاهر و جزئیات تجربه‌ی مطالعه اول آن‌جا شکل می‌گیرد و نسخه‌ی اندروید با همان مشخصات، به‌صورت بومی برای موبایل بازسازی می‌شود — از تم‌ها و سیستم رتبه‌ها تا ریزه‌کاری‌های حالت مطالعه‌ی صفحه‌ای.
 
+### 🔎 در یک نگاه
+
+| | |
+|---|---|
+| 📚 **فرمت کتاب** | EPUB |
+| 🖥️📱 **پلتفرم‌ها** | ویندوز (WPF) · اندروید (Compose) |
+| 🌐 **زبان رابط کاربری** | فارسی (راست‌به‌چپ) · انگلیسی (چپ‌به‌راست) |
+| 💾 **فایل پشتیبان** | ‎`.novelfabak` — قابل انتقال بین دستگاه‌ها |
+| 🏷️ **نسخه‌ی فعلی** | 1.0.1 |
+
+### فهرست
+
+- [✨ امکانات](#features)
+- [💾 پشتیبان‌گیری و بازیابی](#backup)
+- [🗂️ ساختار پروژه](#structure)
+- [🛠️ پشته‌ی فناوری](#tech)
+- [🚀 بیلد و اجرا](#build)
+- [🌍 English Summary](#english)
+
 ---
+
+<a id="features"></a>
 
 ## ✨ امکانات
 
@@ -40,7 +71,7 @@
 - رندر کامل EPUB با جهت و چیدمان خودکار بر اساس زبان کتاب (راست‌به‌چپ / چپ‌به‌راست)
 - دو حالت مطالعه: **عمودی** (اسکرول پیوسته یا تک‌بخشی) و **افقیِ ورق‌زدنی** (صفحه‌به‌صفحه، هم‌رفتار با حالت تک‌صفحه‌ای نسخه‌ی ویندوز)
 - تناسب خودکار تصاویر با صفحه در حالت ورق‌زدنی — بدون صفحه‌ی خالی یا تصویر بریده
-- تنظیم جدا برای هر کتاب: فونت، اندازه‌ی متن (دکمه‌های A+/A− و کادر عددی)، فاصله‌ی خطوط و حاشیه‌ها
+- تنظیم جدا برای هر کتاب: فونت، اندازه‌ی متن (دکمه‌های ‎A+/A−‎ و کادر عددی)، فاصله‌ی خطوط و حاشیه‌ها
 - ۶ تم مطالعه‌ی روشن و تیره + تم مطالعه‌ی هماهنگ با تم کاراکتری فعال
 - ادامه‌ی مطالعه دقیقاً از آخرین موقعیت، با نوار پیشرفت فصل‌به‌فصل
 
@@ -79,14 +110,40 @@
 | ۵ | دانای پلایادس | Sage of Pleiades | ۶۰ |
 | ۶ | هیولای پلایادس | Monster of Pleiades | ۸۰ |
 
-### 💾 پشتیبان‌گیری و بازیابی — `.novelfabak`
+---
 
-- خروجی و بازیابی کامل پروفایل در یک فایل: فونت‌های کاربر، آواتار، نام پروفایل، بالاترین رتبه، تم‌های مخفی و تعداد کتاب‌های تمام‌شده
-- اعتبارسنجی کامل **قبل** از هر تغییری: هش SHA-256 برای تک‌تک فایل‌ها + چک‌سام یکپارچگی کل بسته — فایل ناقص یا دست‌کاری‌شده هیچ اثری روی برنامه نمی‌گذارد
-- قوانین ادغام مشخص: کتاب‌های تمام‌شده با موجودی فعلی **جمع** می‌شوند، رتبه فقط صعود می‌کند، تم‌های مخفی اجتماع می‌گیرند و فونت‌های تکراری (بر اساس هش) دوباره اضافه نمی‌شوند
-- بعد از بازیابی، یک گزارش شفاف نمایش داده می‌شود: تغییر رتبه، مجموع جدید کتاب‌ها و فونت‌های اضافه‌شده
+<a id="backup"></a>
+
+## 💾 پشتیبان‌گیری و بازیابی — ‎`.novelfabak`
+
+پروفایل شما در یک فایل قابل‌حمل خلاصه می‌شود تا روی دستگاه تازه — یا بعد از نصب دوباره‌ی برنامه — همه‌چیز سر جایش برگردد.
+
+**داخل فایل پشتیبان چه چیزهایی هست؟**
+
+فونت‌های کاربر، آواتار، نام پروفایل، بالاترین رتبه، تم‌های مخفی، تعداد کتاب‌های تمام‌شده و **رکورد پیشرفت مطالعه‌ی هر کتاب**.
+
+**📍 ادامه‌ی مطالعه، حتی بعد از نصب دوباره** — برای هر کتاب، موقعیت فعلی مطالعه (با هویت دقیق خود فایل EPUB و شناسه‌ی داخلی کتاب) داخل بکاپ ذخیره می‌شود. کافی است بعد از بازیابی، کتاب‌ها را دوباره ایمپورت کنید: هر کتاب دقیقاً از همان‌جایی باز می‌شود که رهایش کرده بودید — وضعیت تمام‌شده، علاقه‌مندی و کالکشنش هم برمی‌گردد. حتی اگر کتابی را فقط از کتابخانه حذف و دوباره ایمپورت کنید، جایش حفظ می‌شود. کتاب‌های قفسه‌ی خصوصی در رکوردها نمی‌آیند، چون فایل پشتیبان رمزنگاری‌شده نیست.
+
+**امنیت و اعتبارسنجی**
+
+- اعتبارسنجی کامل **قبل** از هر تغییری انجام می‌شود: هش SHA-256 برای تک‌تک فایل‌ها + چک‌سام یکپارچگی کل بسته
+- فایل ناقص یا دست‌کاری‌شده رد می‌شود و هیچ اثری روی برنامه نمی‌گذارد
+
+**قوانین ادغام هنگام بازیابی**
+
+| داده | قانون ادغام |
+|---|---|
+| 📕 کتاب‌های تمام‌شده | با موجودی فعلی **جمع** می‌شوند |
+| 🏅 رتبه | فقط **صعود** می‌کند (بیشینه‌ی دو طرف) |
+| 🔓 تم‌های مخفی | **اجتماع** می‌گیرند |
+| 🔤 فونت‌ها | تکراری‌ها بر اساس هش دوباره اضافه نمی‌شوند |
+| 📍 رکورد مطالعه‌ی هر کتاب | پیشرفت **بیشتر** برنده است؛ پیشرفت هیچ‌وقت عقب نمی‌رود |
+
+بعد از بازیابی، یک گزارش شفاف نمایش داده می‌شود: تغییر رتبه، مجموع جدید کتاب‌ها و فونت‌های اضافه‌شده.
 
 ---
+
+<a id="structure"></a>
 
 ## 🗂️ ساختار پروژه
 
@@ -107,37 +164,49 @@ Novelfa/
 │   │   ├── settings/            # تنظیمات و پروفایل
 │   │   └── theme/               # تم‌ها، رتبه‌ها، ذرات و آثار تزئینی
 │   └── task.cmd                 # ابزار بیلد ویندوزی (Debug / Release + بررسی خروجی)
+├── docs/                        # راهنمای انتشار و اسناد طرح‌های توسعه
 └── README.md
 ```
 
 ---
 
+<a id="tech"></a>
+
 ## 🛠️ پشته‌ی فناوری
 
 |  | 🖥️ ویندوز | 📱 اندروید |
 |---|---|---|
-| زبان | C# | Kotlin 2.0.20 |
-| رابط کاربری | WPF (XAML) | Jetpack Compose · Material 3 |
-| فریم‌ورک | ‎.NET Framework 4.7.2 | Android SDK 35 (حداقل 29) |
-| رندر کتاب | WebView2 | Android WebView |
-| ذخیره‌سازی | فایل‌های محلی کاربر | Room + DataStore |
-| بیلد | Visual Studio | Gradle (AGP 8.5.2) |
+| **زبان** | C# | Kotlin 2.0.20 |
+| **رابط کاربری** | WPF (XAML) | Jetpack Compose · Material 3 |
+| **فریم‌ورک** | ‎.NET Framework 4.7.2 | Android SDK 35 (حداقل 29) |
+| **رندر کتاب** | WebView2 | Android WebView |
+| **ذخیره‌سازی** | فایل‌های محلی کاربر | Room + DataStore |
+| **بیلد** | Visual Studio | Gradle (AGP 8.5.2) |
 
 ---
+
+<a id="build"></a>
 
 ## 🚀 بیلد و اجرا
 
-**ویندوز**
+### 🖥️ ویندوز
 
 فایل [`EpubReader.sln`](EpubReader.sln) را در Visual Studio باز کنید و پروژه‌ی `EpubReader` را Build/Run کنید.
 
-**اندروید**
+### 📱 اندروید
 
-داخل پوشه‌ی [`android/`](android/) فایل `task.cmd` را اجرا کنید — بیلد Debug یا Release را انجام می‌دهد، خروجی (APK/AAB) را بررسی می‌کند و نتیجه را رنگی گزارش می‌دهد. باز کردن پوشه در Android Studio و اجرای `assembleDebug` هم ممکن است.
+داخل پوشه‌ی [`android/`](android/) فایل `task.cmd` را اجرا کنید — بیلد Debug یا Release را انجام می‌دهد، خروجی (APK/AAB) را بررسی می‌کند و نتیجه را رنگی گزارش می‌دهد. باز کردن پوشه در Android Studio و اجرای `assembleDebug` هم ممکن است:
 
-- پکیج: `com.novelfa.reader` · نسخه:‌ 1.0.1 · `minSdk 29` · `targetSdk 35`
+```bash
+cd android
+gradlew.bat assembleDebug
+```
+
+> 📦 پکیج: `com.novelfa.reader` · نسخه: 1.0.1 · ‎`minSdk 29` · ‎`targetSdk 35`
 
 ---
+
+<a id="english"></a>
 
 ## 🌍 English Summary
 
@@ -146,7 +215,7 @@ Novelfa/
 - **Windows** — a WPF desktop app (`.NET Framework 4.7.2`) in [`EpubReader/`](EpubReader/); the reference implementation.
 - **Android** — a native Kotlin / Jetpack Compose app (`minSdk 29`, `targetSdk 35`) in [`android/`](android/), built in parity with the desktop app.
 
-Highlights: per-book reading settings, vertical & paged reading modes, collections, 7 day/night character themes with animated particles and emblem artwork, secret unlockable themes, a rank system based on finished books, PIN lock, custom fonts, full FA/EN bilingual UI, and a validated backup format (`.novelfabak`) that carries fonts, avatar, rank and secret themes between devices.
+Highlights: per-book reading settings, vertical & paged reading modes, collections, 7 day/night character themes with animated particles and emblem artwork, secret unlockable themes, a rank system based on finished books, PIN lock, custom fonts, full FA/EN bilingual UI, and a validated backup format (`.novelfabak`) that carries fonts, avatar, rank, secret themes and per-book reading records between devices — re-import a book and it resumes exactly where you left off.
 
 ---
 
