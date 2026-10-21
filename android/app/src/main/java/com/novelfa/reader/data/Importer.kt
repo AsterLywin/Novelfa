@@ -25,6 +25,45 @@ class ImportException(
 
 class Importer(private val context: Context, private val db: ReaderDb) {
 
+    private val recordStore by lazy { ReadingRecordStore(context) }
+
+    /**
+     * Applies a stored reading record to a freshly imported book, if one
+     * matches by file hash or EPUB identifier. Returns true when the
+     * book's reading state was restored. Cheap no-op when the store is
+     * empty (no restore has ever brought records in).
+     */
+    suspend fun applyReadingRecord(bookId: String): Boolean = withContext(Dispatchers.IO) {
+        if (recordStore.isEmpty()) return@withContext false
+        val dao = db.bookDao()
+        val book = dao.getById(bookId) ?: return@withContext false
+        if (book.isPrivate) return@withContext false
+        val file = File(book.filePath)
+        if (!file.isFile) return@withContext false
+        val record = recordStore.find(
+            sha256OfFile(file), readEpubIdentifier(file)
+        ) ?: return@withContext false
+        val updated = applyRecordTo(book, record) ?: return@withContext false
+        dao.update(updated)
+        true
+    }
+
+    /**
+     * Saves a book's reading record into the store before the book is
+     * removed, so re-importing the same file later restores its place.
+     * Private books are never recorded (their titles must not leak into
+     * restorable data).
+     */
+    suspend fun captureReadingRecord(bookId: String) = withContext(Dispatchers.IO) {
+        val book = db.bookDao().getById(bookId) ?: return@withContext
+        if (book.isPrivate) return@withContext
+        val file = File(book.filePath)
+        if (!file.isFile) return@withContext
+        recordStore.upsert(
+            readingRecordFor(book, sha256OfFile(file), readEpubIdentifier(file))
+        )
+    }
+
     suspend fun importEpub(sourceUri: Uri, overwrite: Boolean = false): String = withContext(Dispatchers.IO) {
         // When overwriting, find and delete the existing book with the same
         // original file name first.

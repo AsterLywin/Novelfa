@@ -57,6 +57,8 @@ data class BackupPreview(
     val secretThemes: List<String>,
     val avatar: File?,
     val fonts: List<BackupFont>,
+    /** Reading records carried by a format-v2 backup (empty for v1). */
+    val records: List<ReadingRecord> = emptyList(),
     val payloadDir: File
 )
 
@@ -74,7 +76,11 @@ data class BackupApplyResult(
     /** Finished-books count carried by the backup itself. */
     val finishedAdded: Int,
     /** Merged total: [finishedBefore] + [finishedAdded]. */
-    val finishedTotal: Int
+    val finishedTotal: Int,
+    /** Library books whose reading state was updated from a record. */
+    val recordsApplied: Int = 0,
+    /** Records kept in the store for books not (yet) in the library. */
+    val recordsKept: Int = 0
 )
 
 /**
@@ -85,8 +91,11 @@ data class BackupApplyResult(
  *
  * Contents: user-added fonts only (never the bundled ones), the profile
  * avatar, profile name, MaxRank, secret-unlocked themes and the lifetime
- * finished-books count (as the FinishedBooksRestored floor). Books, covers,
- * the library DB and the PIN hash are NEVER included.
+ * finished-books count (as the FinishedBooksRestored floor). Since format
+ * v2 the backup also carries per-book READING RECORDS (records.json) for
+ * non-private books — identity + reading position only, so a re-imported
+ * book resumes where it stopped. The books themselves, covers, the
+ * library DB and the PIN hash are NEVER included.
  *
  * Validation proves "an intact, untampered Novelfa backup" (schema + magic
  * + per-file SHA-256 + a whole-payload integrity checksum). There is no
@@ -103,7 +112,7 @@ class BackupService(
 
     companion object {
         const val FORMAT_ID = "novelfa-backup"
-        const val FORMAT_VERSION = 1
+        const val FORMAT_VERSION = 2
 
         // Validation caps (plan §5).
         const val MAX_TOTAL_BYTES = 120L * 1024 * 1024
@@ -112,6 +121,8 @@ class BackupService(
         const val MAX_MANIFEST_BYTES = 64L * 1024
         const val MAX_FONTS = 200
         const val MAX_FINISHED_BOOKS = 100000
+        const val MAX_RECORDS_BYTES = 16L * 1024 * 1024
+        const val MAX_RECORDS = 10_000
 
         private val AVATAR_NAME = Regex("avatar\\.(jpg|jpeg|png|gif|bmp|webp)", RegexOption.IGNORE_CASE)
         private val FONT_NAME = Regex("fonts/[A-Za-z0-9_\\-]+\\.(ttf|otf)", RegexOption.IGNORE_CASE)
@@ -262,6 +273,38 @@ class BackupService(
                 .put("bytes", f.length())
         }
 
+        // --- reading records (format v2) ---
+        // The live library's non-private books (identity + position),
+        // merged with orphan records kept on-device for books that are
+        // not currently in the library. Private books are excluded on
+        // purpose: the backup file is not encrypted.
+        val recordStore = ReadingRecordStore(context)
+        val libraryRecords = try {
+            dao.allBooks().first()
+                .filter { !it.isPrivate }
+                .mapNotNull { book ->
+                    val f = File(book.filePath)
+                    if (!f.isFile) null
+                    else readingRecordFor(book, sha256Of(f), readEpubIdentifier(f))
+                }
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val allRecords = ReadingRecord.mergeAll(recordStore.all(), libraryRecords)
+            .sortedWith(compareBy({ it.title.lowercase() }, { it.sha256 }))
+        var recordsPayload: Payload? = null
+        var recordsBytes = 0L
+        if (allRecords.isNotEmpty()) {
+            val bytes = ReadingRecord.listToJson(allRecords)
+            val tmp = File(context.cacheDir, "novelfa_records_out.json")
+            tmp.writeBytes(bytes)
+            val sha = sha256Hex(bytes)
+            recordsPayload = Payload("records.json", tmp, sha)
+            payloads += recordsPayload
+            pathHashes["records.json"] = sha
+            recordsBytes = bytes.size.toLong()
+        }
+
         // --- profile ---
         rankPrefs.awaitLoaded()
         val rankService = RankService(rankPrefs)
@@ -305,6 +348,17 @@ class BackupService(
             )
             .put("fonts", JSONArray().apply { fontMeta.forEach { put(it) } })
             .put(
+                "records",
+                if (recordsPayload != null) {
+                    JSONObject()
+                        .put("file", "records.json")
+                        .put("sha256", recordsPayload.sha)
+                        .put("bytes", recordsBytes)
+                } else {
+                    JSONObject.NULL
+                }
+            )
+            .put(
                 "integrity",
                 computeIntegrity(pathHashes, profileName, maxRank, finishedBooks, secrets)
             )
@@ -320,6 +374,7 @@ class BackupService(
                 zip.closeEntry()
             }
         }
+        recordsPayload?.src?.delete()
     }
 
     // ------------------------------------------------------------------
@@ -396,7 +451,7 @@ class BackupService(
             if (version > FORMAT_VERSION) {
                 return@withContext fail(BackupError.TOO_NEW)
             }
-            if (version != FORMAT_VERSION) {
+            if (version !in 1..FORMAT_VERSION) {
                 return@withContext fail(BackupError.CORRUPT)
             }
 
@@ -424,7 +479,7 @@ class BackupService(
             }
 
             // --- declared payload set ---
-            data class Declared(val zipPath: String, val sha: String, val bytes: Long, val isFont: Boolean)
+            data class Declared(val zipPath: String, val sha: String, val bytes: Long, val isFont: Boolean, val cap: Long)
             val declared = mutableListOf<Declared>()
             var avatarDeclared: Declared? = null
             if (!manifest.isNull("avatar")) {
@@ -436,7 +491,7 @@ class BackupService(
                 if (!AVATAR_NAME.matches(p) || !SHA256_HEX.matches(sha) || bytes < 0) {
                     return@withContext fail(BackupError.CORRUPT)
                 }
-                avatarDeclared = Declared(p, sha.lowercase(), bytes, isFont = false)
+                avatarDeclared = Declared(p, sha.lowercase(), bytes, isFont = false, cap = MAX_AVATAR_BYTES)
                 declared += avatarDeclared
             }
             val fontsArr = manifest.optJSONArray("fonts")
@@ -454,8 +509,23 @@ class BackupService(
                 if (!FONT_NAME.matches(p) || !SHA256_HEX.matches(sha) || bytes < 0) {
                     return@withContext fail(BackupError.CORRUPT)
                 }
-                declared += Declared(p, sha.lowercase(), bytes, isFont = true)
+                declared += Declared(p, sha.lowercase(), bytes, isFont = true, cap = MAX_FONT_BYTES)
                 fontMetas += f
+            }
+            var recordsDeclared: Declared? = null
+            if (version == FORMAT_VERSION && !manifest.isNull("records")) {
+                val r = manifest.optJSONObject("records")
+                    ?: return@withContext fail(BackupError.CORRUPT)
+                val p = r.optString("file", "")
+                val sha = r.optString("sha256", "")
+                val bytes = r.optLong("bytes", -1)
+                if (p != "records.json" || !SHA256_HEX.matches(sha) || bytes < 0) {
+                    return@withContext fail(BackupError.CORRUPT)
+                }
+                recordsDeclared = Declared(
+                    p, sha.lowercase(), bytes, isFont = false, cap = MAX_RECORDS_BYTES
+                )
+                declared += recordsDeclared
             }
             if (declared.distinctBy { it.zipPath }.size != declared.size) {
                 return@withContext fail(BackupError.CORRUPT)
@@ -477,7 +547,7 @@ class BackupService(
             val extracted = mutableMapOf<String, File>()
             var totalBytes = 0L
             for (d in declared) {
-                val cap = if (d.isFont) MAX_FONT_BYTES else MAX_AVATAR_BYTES
+                val cap = d.cap
                 if (d.bytes > cap) {
                     return@withContext fail(BackupError.TOO_LARGE)
                 }
@@ -553,6 +623,23 @@ class BackupService(
                     file = extracted.getValue(d.zipPath)
                 )
             }
+            // Records are auxiliary: integrity above already proves the
+            // bytes are the writer's; a parse hiccup drops the records,
+            // never the whole backup.
+            val records = if (recordsDeclared != null) {
+                val f = extracted[recordsDeclared.zipPath]
+                if (f != null) {
+                    try {
+                        ReadingRecord.listFromJson(f.readBytes(), MAX_RECORDS)
+                    } catch (e: Exception) {
+                        emptyList()
+                    }
+                } else {
+                    emptyList()
+                }
+            } else {
+                emptyList()
+            }
             InspectResult.Ok(
                 BackupPreview(
                     createdAt = manifest.optString("createdAt", ""),
@@ -564,6 +651,7 @@ class BackupService(
                     secretThemes = secrets,
                     avatar = avatarFile,
                     fonts = fonts,
+                    records = records,
                     payloadDir = dir
                 )
             )
@@ -700,6 +788,35 @@ class BackupService(
             preview.secretThemes.forEach { service.secretUnlock(it) }
             prefs.raiseFinishedBooksRestored(finishedTotal)
 
+            // --- reading records (format v2) ---
+            // Merge into the on-device store first (orphans included),
+            // then apply whatever matches a book already in the library.
+            // Private books are never touched.
+            val recordStore = ReadingRecordStore(context)
+            recordStore.mergeAll(preview.records)
+            var recordsApplied = 0
+            val matchedKeys = mutableSetOf<String>()
+            if (preview.records.isNotEmpty()) {
+                for (book in dao.allBooks().first()) {
+                    if (book.isPrivate) continue
+                    val f = File(book.filePath)
+                    if (!f.isFile) continue
+                    val rec = recordStore.find(sha256Of(f), readEpubIdentifier(f))
+                        ?: continue
+                    if (rec.sha256.isNotBlank()) matchedKeys += rec.sha256
+                    if (rec.epubId.isNotBlank()) matchedKeys += rec.epubId
+                    val updated = applyRecordTo(book, rec)
+                    if (updated != null) {
+                        dao.update(updated)
+                        recordsApplied++
+                    }
+                }
+            }
+            val recordsKept = preview.records.count { rec ->
+                (rec.sha256.isBlank() || rec.sha256 !in matchedKeys) &&
+                    (rec.epubId.isBlank() || rec.epubId !in matchedKeys)
+            }
+
             discard(preview)
             BackupApplyResult(
                 added, skipped, failed, avatarApplied,
@@ -707,7 +824,9 @@ class BackupService(
                 rankAfter = targetRank,
                 finishedBefore = finishedBefore,
                 finishedAdded = preview.finishedBooks,
-                finishedTotal = finishedTotal
+                finishedTotal = finishedTotal,
+                recordsApplied = recordsApplied,
+                recordsKept = recordsKept
             )
         }
 }

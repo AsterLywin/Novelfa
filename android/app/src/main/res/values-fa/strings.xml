@@ -144,6 +144,7 @@
     <string name="import_summary_added">%1$d کتاب اضافه شد</string>
     <string name="import_summary_duplicates">%1$d تکراری رد شد</string>
     <string name="import_summary_failed">%1$d ناموفق بود</string>
+    <string name="import_summary_restored">پیشرفت %1$d کتاب بازیابی شد</string>
     <string name="apply_custom_color">اعمال</string>
     <string name="invalid_hex">کد رنگ معتبر نیست</string>
     <string name="pick_this_color">انتخاب این رنگ</string>
@@ -196,6 +197,7 @@
     <string name="backup_summary_rank">رنک: %1$s</string>
     <string name="backup_summary_books">کتاب‌های تمام‌شده: %1$d</string>
     <string name="backup_summary_fonts">فونت‌ها: %1$d</string>
+    <string name="backup_summary_records">رکوردهای مطالعه: %1$d کتاب</string>
     <string name="backup_summary_avatar_yes">آواتار: دارد</string>
     <string name="backup_summary_avatar_no">آواتار: ندارد</string>
     <string name="backup_restore_button">بازیابی</string>
@@ -206,6 +208,8 @@
     <string name="backup_result_fonts_added">%1$d فونت اضافه شد</string>
     <string name="backup_result_fonts_skipped">%1$d فونت از قبل بود (رد شد)</string>
     <string name="backup_result_fonts_failed">%1$d فونت اضافه نشد</string>
+    <string name="backup_result_records_applied">پیشرفت مطالعه‌ی %1$d کتاب بازیابی شد</string>
+    <string name="backup_result_records_kept">%1$d رکورد مطالعه برای ایمپورت‌های بعدی ذخیره شد</string>
     <string name="backup_err_not_backup">این فایل بکاپ ناول‌فا نیست.</string>
     <string name="backup_err_too_new">این بکاپ با نسخه‌ی جدیدتری از برنامه ساخته شده است.</string>
     <string name="backup_err_corrupt">بکاپ خراب یا دست‌کاری شده است.</string>

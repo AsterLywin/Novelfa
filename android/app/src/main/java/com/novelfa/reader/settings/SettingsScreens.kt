@@ -899,6 +899,9 @@ private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit
                     Text(stringResource(R.string.backup_summary_rank, rankName))
                     Text(stringResource(R.string.backup_summary_books, p.finishedBooks))
                     Text(stringResource(R.string.backup_summary_fonts, p.fonts.size))
+                    if (p.records.isNotEmpty()) {
+                        Text(stringResource(R.string.backup_summary_records, p.records.size))
+                    }
                     Text(
                         stringResource(
                             if (p.avatar != null) R.string.backup_summary_avatar_yes
@@ -971,6 +974,12 @@ private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit
                     }
                     if (r.fontsFailed > 0) {
                         Text(stringResource(R.string.backup_result_fonts_failed, r.fontsFailed))
+                    }
+                    if (r.recordsApplied > 0) {
+                        Text(stringResource(R.string.backup_result_records_applied, r.recordsApplied))
+                    }
+                    if (r.recordsKept > 0) {
+                        Text(stringResource(R.string.backup_result_records_kept, r.recordsKept))
                     }
                 }
             },

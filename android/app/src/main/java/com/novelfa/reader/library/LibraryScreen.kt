@@ -271,6 +271,7 @@ fun LibraryScreen(
     val addedFmt = stringResource(R.string.import_summary_added)
     val dupFmt = stringResource(R.string.import_summary_duplicates)
     val failedFmt = stringResource(R.string.import_summary_failed)
+    val restoredFmt = stringResource(R.string.import_summary_restored)
     val avatarCopyErr = stringResource(R.string.couldn_t_copy_the_avatar)
     // Books whose EPUB file is gone (e.g. Auto Backup restored the DB but not
     // files/books/): show a warning badge and explain instead of opening the
@@ -318,6 +319,7 @@ fun LibraryScreen(
                 // Still show the summary for added/failed
                 val parts = mutableListOf<String>()
                 if (summary.added > 0) parts.add(addedFmt.format(summary.added))
+                if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
                 if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
                 if (parts.isNotEmpty()) snackbar.showSnackbar(parts.joinToString(sep))
                 return
@@ -325,6 +327,7 @@ fun LibraryScreen(
             val parts = mutableListOf<String>()
             if (summary.added > 0) parts.add(addedFmt.format(summary.added))
             if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
+            if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
             if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
             if (parts.isNotEmpty()) snackbar.showSnackbar(parts.joinToString(sep))
         } catch (e: CancellationException) {
@@ -1067,6 +1070,7 @@ fun LibraryScreen(
                         val summary = viewModel.overwriteDuplicates(uris)
                         val parts = mutableListOf<String>()
                         if (summary.added > 0) parts.add(addedFmt.format(summary.added))
+                        if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
                         if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
                         if (parts.isNotEmpty()) {
                             snackbar.showSnackbar(parts.joinToString(if (isEnglishUi) ", " else "، "))

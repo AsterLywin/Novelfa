@@ -169,7 +169,9 @@ class LibraryViewModel(
         /** Display names of the duplicates (for the confirmation dialog). */
         val duplicateNames: List<String> = emptyList(),
         /** Lowercased original file names of the newly added books. */
-        val addedNames: List<String> = emptyList()
+        val addedNames: List<String> = emptyList(),
+        /** Added books whose reading progress was restored from a record. */
+        val progressRestored: Int = 0
     )
 
     /**
@@ -189,6 +191,7 @@ class LibraryViewModel(
         var added = 0
         var duplicates = 0
         var failed = 0
+        var restored = 0
         val duplicateUris = mutableListOf<Uri>()
         val duplicateNames = mutableListOf<String>()
         val addedNames = mutableListOf<String>()
@@ -202,8 +205,9 @@ class LibraryViewModel(
                 continue
             }
             try {
-                imp.importEpub(uri, overwrite = overwriteDuplicates)
+                val newId = imp.importEpub(uri, overwrite = overwriteDuplicates)
                 added++
+                if (imp.applyReadingRecord(newId)) restored++
                 if (key != null) {
                     known.add(key)
                     addedNames.add(key)
@@ -217,7 +221,7 @@ class LibraryViewModel(
                 failed++
             }
         }
-        return ImportSummary(added, duplicates, failed, duplicateUris, duplicateNames, addedNames)
+        return ImportSummary(added, duplicates, failed, duplicateUris, duplicateNames, addedNames, restored)
     }
 
     /**
@@ -228,6 +232,7 @@ class LibraryViewModel(
         val imp = requireNotNull(importer) { "Importer not provided" }
         var added = 0
         var failed = 0
+        var restored = 0
         for (uri in uris) {
             val displayName = imp.displayNameOf(uri)?.lowercase()
             try {
@@ -239,15 +244,16 @@ class LibraryViewModel(
                         removeBook(existing)
                     }
                 }
-                imp.importEpub(uri)
+                val newId = imp.importEpub(uri)
                 added++
+                if (imp.applyReadingRecord(newId)) restored++
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 failed++
             }
         }
-        return ImportSummary(added, 0, failed)
+        return ImportSummary(added, 0, failed, progressRestored = restored)
     }
 
     suspend fun toggleFavorite(book: BookEntity) {
@@ -269,7 +275,12 @@ class LibraryViewModel(
 
     suspend fun resetProgress(book: BookEntity) = collections.resetProgress(book.id)
 
-    suspend fun removeBook(book: BookEntity) = collections.removeBook(book.id)
+    suspend fun removeBook(book: BookEntity) {
+        // Keep the reading record so re-importing this file later
+        // restores its place; capture must run before the file goes.
+        importer?.captureReadingRecord(book.id)
+        collections.removeBook(book.id)
+    }
 
     suspend fun togglePrivate(book: BookEntity) = collections.togglePrivate(book.id)
 

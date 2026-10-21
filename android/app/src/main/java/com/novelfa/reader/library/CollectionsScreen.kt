@@ -84,6 +84,7 @@ fun CollectionsScreen(
     val addedFmt = stringResource(R.string.import_summary_added)
     val dupFmt = stringResource(R.string.import_summary_duplicates)
     val failedFmt = stringResource(R.string.import_summary_failed)
+    val restoredFmt = stringResource(R.string.import_summary_restored)
     val countFmt = stringResource(R.string.collection_count)
 
     // WPF parity: import EPUBs straight into a collection (CollectionAdd).
@@ -106,6 +107,7 @@ fun CollectionsScreen(
                 val parts = mutableListOf<String>()
                 if (summary.added > 0) parts.add(addedFmt.format(summary.added))
                 if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
+                if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
                 if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
                 if (parts.isNotEmpty()) {
                     Toast.makeText(
