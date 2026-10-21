@@ -3,19 +3,29 @@ package com.novelfa.reader.settings
 import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -33,7 +43,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.novelfa.reader.R
@@ -43,8 +61,9 @@ import com.novelfa.reader.data.BackupPreview
 import com.novelfa.reader.data.BackupService
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.InspectResult
-import androidx.compose.material3.LocalContentColor
 import com.novelfa.reader.theme.AccentSheet
+import com.novelfa.reader.theme.CharacterThemes
+import com.novelfa.reader.theme.hexToColor
 import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
 import com.novelfa.reader.theme.CharacterSheet
@@ -82,7 +101,8 @@ fun SettingsRoute(
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
         LazyColumn(
             modifier = Modifier.padding(padding),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item { ThemeSection(viewModel) }
             item { AccentSection(viewModel) }
@@ -104,7 +124,7 @@ fun SettingsRoute(
                 )
             }
             item {
-                TextButton(onClick = onClose, modifier = Modifier.padding(horizontal = 12.dp)) {
+                TextButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.close))
                 }
             }
@@ -141,12 +161,232 @@ private fun fnPlural(id: Int, count: Int, vararg args: Any): String {
 }
 
 @Composable
-private fun SectionCard(title: String, content: @Composable () -> Unit) {
-    Card(modifier = Modifier.padding(horizontal = 12.dp)) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(text = title, style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
+private fun SectionCard(title: String, icon: AppIconKind, content: @Composable () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AppIcon(
+                        icon,
+                        tint = MaterialTheme.colorScheme.primary,
+                        size = 18.dp
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Spacer(modifier = Modifier.height(14.dp))
             content()
+        }
+    }
+}
+
+/** Hairline divider between rows inside a section card. */
+@Composable
+private fun RowDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp)
+            .height(1.dp)
+            .background(
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+            )
+    )
+}
+
+private data class SegmentOption(val label: String, val icon: AppIconKind? = null)
+
+/**
+ * Two-option segmented control (theme mode, language): a soft track
+ * with one filled pill for the current choice, replacing the pair of
+ * bare outlined buttons the sections used before.
+ */
+@Composable
+private fun SegmentedChoice(
+    options: List<SegmentOption>,
+    selected: Int,
+    onSelect: (Int) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(13.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        options.forEachIndexed { index, option ->
+            val isSel = index == selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(
+                        if (isSel) MaterialTheme.colorScheme.primary
+                        else Color.Transparent
+                    )
+                    .clickable { onSelect(index) }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isSel) {
+                        AppIcon(
+                            AppIconKind.Check,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            size = 13.dp
+                        )
+                        Spacer(Modifier.width(5.dp))
+                    } else if (option.icon != null) {
+                        AppIcon(
+                            option.icon,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            size = 15.dp
+                        )
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    Text(
+                        option.label,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (isSel) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A tappable settings row: label on the start side, an optional color
+ * swatch / palette dots / value, and a direction-aware chevron — the
+ * "opens a picker" affordance the old full-width outlined buttons
+ * lacked.
+ */
+@Composable
+private fun NavRow(
+    label: String,
+    value: String? = null,
+    swatch: Color? = null,
+    dots: List<Color> = emptyList(),
+    danger: Boolean = false,
+    onClick: () -> Unit
+) {
+    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (danger) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f)
+        )
+        if (swatch != null) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(swatch)
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.outlineVariant,
+                        CircleShape
+                    )
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+        if (dots.isNotEmpty()) {
+            Row {
+                dots.forEach { c ->
+                    Box(
+                        modifier = Modifier
+                            .size(14.dp)
+                            .clip(CircleShape)
+                            .background(c)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                }
+            }
+            Spacer(Modifier.width(4.dp))
+        }
+        if (value != null) {
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.width(6.dp))
+        }
+        AppIcon(
+            if (isRtl) AppIconKind.ArrowForward else AppIconKind.ArrowBack,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            size = 15.dp
+        )
+    }
+}
+
+/** Filled tonal action (create/restore, font actions). */
+@Composable
+private fun ActionButton(
+    label: String,
+    icon: AppIconKind?,
+    primary: Boolean,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val bg = if (primary) MaterialTheme.colorScheme.primaryContainer
+    else MaterialTheme.colorScheme.surfaceVariant
+    val fg = if (primary) MaterialTheme.colorScheme.onPrimaryContainer
+    else MaterialTheme.colorScheme.onSurface
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (enabled) bg else bg.copy(alpha = 0.45f))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 11.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (icon != null) {
+                AppIcon(icon, tint = fg, size = 15.dp)
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(
+                label,
+                style = MaterialTheme.typography.labelLarge,
+                color = fg
+            )
         }
     }
 }
@@ -155,30 +395,19 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
 private fun ThemeSection(viewModel: SettingsViewModel) {
     val theme by viewModel.theme.collectAsState(initial = "dark")
     val scope = rememberCoroutineScope()
-    SectionCard(title = stringResource(R.string.personalization)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(
-                onClick = { scope.launch { viewModel.setTheme("dark") } },
-                modifier = Modifier.weight(1f)
-            ) {
-                if (theme == "dark") {
-                    AppIcon(AppIconKind.Check, tint = LocalContentColor.current, size = 14.dp)
-                    Spacer(Modifier.width(6.dp))
+    SectionCard(title = stringResource(R.string.personalization), icon = AppIconKind.Moon) {
+        SegmentedChoice(
+            options = listOf(
+                SegmentOption(stringResource(R.string.dark_mode), AppIconKind.Moon),
+                SegmentOption(stringResource(R.string.light_mode), AppIconKind.Sun)
+            ),
+            selected = if (theme == "light") 1 else 0,
+            onSelect = { index ->
+                scope.launch {
+                    viewModel.setTheme(if (index == 1) "light" else "dark")
                 }
-                Text(stringResource(R.string.dark_mode))
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(
-                onClick = { scope.launch { viewModel.setTheme("light") } },
-                modifier = Modifier.weight(1f)
-            ) {
-                if (theme == "light") {
-                    AppIcon(AppIconKind.Check, tint = LocalContentColor.current, size = 14.dp)
-                    Spacer(Modifier.width(6.dp))
-                }
-                Text(stringResource(R.string.light_mode))
-            }
-        }
+        )
     }
 }
 
@@ -187,10 +416,13 @@ private fun AccentSection(viewModel: SettingsViewModel) {
     val accent by viewModel.accent.collectAsState(initial = "#7C3AED")
     val scope = rememberCoroutineScope()
     var open by remember { mutableStateOf(false) }
-    SectionCard(title = stringResource(R.string.app_color)) {
-        OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.app_color) + ": " + accent)
-        }
+    SectionCard(title = stringResource(R.string.app_color), icon = AppIconKind.Drop) {
+        NavRow(
+            label = accent,
+            swatch = runCatching { hexToColor(accent) }
+                .getOrElse { MaterialTheme.colorScheme.primary },
+            onClick = { open = true }
+        )
     }
     if (open) {
         AccentSheet(
@@ -211,10 +443,24 @@ private fun CharacterSection(viewModel: SettingsViewModel) {
     val scope = rememberCoroutineScope()
     var open by remember { mutableStateOf(false) }
     val rank = remember { viewModel.rankService() }
-    SectionCard(title = stringResource(R.string.special_themes)) {
-        OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (charTheme.isBlank()) stringResource(R.string.no_character_theme) else charTheme)
-        }
+    val isEnglishUi =
+        LocalConfiguration.current.locales[0].language.startsWith("en")
+    val themeObj = remember(charTheme) { CharacterThemes.find(charTheme) }
+    val appTheme by viewModel.theme.collectAsState(initial = "dark")
+    SectionCard(title = stringResource(R.string.special_themes), icon = AppIconKind.Sparkle) {
+        NavRow(
+            label = themeObj?.displayName(isEnglishUi)
+                ?: stringResource(R.string.no_character_theme),
+            dots = themeObj?.let {
+                val pal = it.palette(light = appTheme == "light")
+                listOf(
+                    runCatching { hexToColor(pal.accent) }.getOrElse { Color.Unspecified },
+                    runCatching { hexToColor(pal.grad1) }.getOrElse { Color.Unspecified },
+                    runCatching { hexToColor(pal.grad2) }.getOrElse { Color.Unspecified }
+                )
+            } ?: emptyList(),
+            onClick = { open = true }
+        )
     }
     if (open) {
         CharacterSheet(
@@ -246,7 +492,7 @@ private fun ReaderDefaultsSection(viewModel: SettingsViewModel, fontStore: FontS
     var familyText by remember { mutableStateOf(fontFamily) }
     val invalidFontMsg = stringResource(R.string.invalid_font_name)
 
-    SectionCard(title = stringResource(R.string.reading_page)) {
+    SectionCard(title = stringResource(R.string.reading_page), icon = AppIconKind.Reading) {
         IntStepper(
             label = stringResource(R.string.font_size),
             value = fontSize,
@@ -254,22 +500,31 @@ private fun ReaderDefaultsSection(viewModel: SettingsViewModel, fontStore: FontS
             range = 10..72,
             onSet = { scope.launch { viewModel.setFontSize(it) } }
         )
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = fontFamily.ifBlank { stringResource(R.string.str_default) },
+        RowDivider()
+        Text(
+            text = fontFamily.ifBlank { stringResource(R.string.str_default) },
+            style = MaterialTheme.typography.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Row {
+            ActionButton(
+                label = stringResource(R.string.custom_fonts),
+                icon = null,
+                primary = false,
                 modifier = Modifier.weight(1f)
-            )
+            ) { familyText = fontFamily; familyEdit = true }
             Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(onClick = { familyText = fontFamily; familyEdit = true }) {
-                Text(stringResource(R.string.custom_fonts))
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(onClick = { fontDialog = true }) {
-                Text(stringResource(R.string.add_custom_font))
-            }
+            ActionButton(
+                label = stringResource(R.string.add_custom_font),
+                icon = AppIconKind.Plus,
+                primary = true,
+                modifier = Modifier.weight(1f)
+            ) { fontDialog = true }
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        RowDivider()
         DoubleStepper(
             label = stringResource(R.string.line_spacing),
             value = lineHeight.toDoubleOrNull() ?: 1.8,
@@ -277,6 +532,7 @@ private fun ReaderDefaultsSection(viewModel: SettingsViewModel, fontStore: FontS
             range = 1.0..3.0,
             onSet = { scope.launch { viewModel.setReaderLineHeight(it.toString()) } }
         )
+        RowDivider()
         IntStepper(
             label = stringResource(R.string.side_margins),
             value = margin.toIntOrNull() ?: 16,
@@ -284,6 +540,7 @@ private fun ReaderDefaultsSection(viewModel: SettingsViewModel, fontStore: FontS
             range = 0..64,
             onSet = { scope.launch { viewModel.setReaderMargin(it.toString()) } }
         )
+        RowDivider()
         DoubleStepper(
             label = stringResource(R.string.paragraph_spacing),
             value = spacing.toDoubleOrNull() ?: 0.6,
@@ -341,40 +598,20 @@ private fun LanguageSection(viewModel: SettingsViewModel) {
     val lang by viewModel.lang.collectAsState(initial = "fa")
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    SectionCard(title = stringResource(R.string.language)) {
-        Row {
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        viewModel.setLocale(context, "fa")
-                        (context as? Activity)?.recreate()
-                    }
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                if (lang == "fa") {
-                    AppIcon(AppIconKind.Check, tint = LocalContentColor.current, size = 14.dp)
-                    Spacer(Modifier.width(6.dp))
+    SectionCard(title = stringResource(R.string.language), icon = AppIconKind.Globe) {
+        SegmentedChoice(
+            options = listOf(
+                SegmentOption("فارسی"),
+                SegmentOption("English")
+            ),
+            selected = if (lang == "en") 1 else 0,
+            onSelect = { index ->
+                scope.launch {
+                    viewModel.setLocale(context, if (index == 1) "en" else "fa")
+                    (context as? Activity)?.recreate()
                 }
-                Text("فارسی")
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        viewModel.setLocale(context, "en")
-                        (context as? Activity)?.recreate()
-                    }
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                if (lang == "en") {
-                    AppIcon(AppIconKind.Check, tint = LocalContentColor.current, size = 14.dp)
-                    Spacer(Modifier.width(6.dp))
-                }
-                Text("English")
-            }
-        }
+        )
     }
 }
 
@@ -382,7 +619,7 @@ private fun LanguageSection(viewModel: SettingsViewModel) {
 private fun SupportSection(viewModel: SettingsViewModel) {
     val enabled by viewModel.supportEnabled.collectAsState(initial = true)
     val scope = rememberCoroutineScope()
-    SectionCard(title = stringResource(R.string.support)) {
+    SectionCard(title = stringResource(R.string.support), icon = AppIconKind.Heart) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = stringResource(R.string.support_novelfa),
@@ -409,21 +646,23 @@ private fun PinSection(viewModel: SettingsViewModel, notify: (String) -> Unit) {
     val createdMsg = stringResource(R.string.your_private_pin_was_created)
     val changedMsg = stringResource(R.string.your_private_pin_was_changed_successfully)
 
-    SectionCard(title = stringResource(R.string.privacy)) {
+    SectionCard(title = stringResource(R.string.privacy), icon = AppIconKind.Lock) {
         if (!hasPin) {
-            OutlinedButton(onClick = { setupOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.create_a_pin))
-            }
+            NavRow(
+                label = stringResource(R.string.create_a_pin),
+                onClick = { setupOpen = true }
+            )
         } else {
-            Row {
-                OutlinedButton(onClick = { changeOpen = true }, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.change_pin))
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                OutlinedButton(onClick = { removeConfirm = true }, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.remove_pin))
-                }
-            }
+            NavRow(
+                label = stringResource(R.string.change_pin),
+                onClick = { changeOpen = true }
+            )
+            RowDivider()
+            NavRow(
+                label = stringResource(R.string.remove_pin),
+                danger = true,
+                onClick = { removeConfirm = true }
+            )
         }
     }
 
@@ -482,23 +721,45 @@ private fun RankSection(viewModel: SettingsViewModel) {
     LaunchedEffect(Unit) {
         summary = viewModel.currentRank()
     }
-    SectionCard(title = stringResource(R.string.progress)) {
+    SectionCard(title = stringResource(R.string.progress), icon = AppIconKind.CheckCircle) {
         val s = summary
         if (s == null) {
             Text(stringResource(R.string.str_0))
         } else {
-            Text(stringResource(R.string.current_rank, s.currentName))
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(fnPlural(R.string.book_completed_books_completed, s.completed, s.completed.toString()))
+            Text(
+                text = s.currentName,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                fnPlural(R.string.book_completed_books_completed, s.completed, s.completed.toString()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             if (s.nextName != null) {
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+                LinearProgressIndicator(
+                    progress = {
+                        s.completed.toFloat() /
+                            (s.completed + s.remaining).coerceAtLeast(1).toFloat()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                )
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     fnPlural(
                         R.string.more_book_to_reach_more_books_to_reach,
                         s.remaining,
                         s.remaining.toString(),
                         s.nextName
-                    )
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -579,30 +840,36 @@ private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit
         }
     }
 
-    SectionCard(title = stringResource(R.string.backup_section_title)) {
+    SectionCard(title = stringResource(R.string.backup_section_title), icon = AppIconKind.File) {
         Row {
-            OutlinedButton(
+            ActionButton(
+                label = stringResource(R.string.backup_create),
+                icon = AppIconKind.Plus,
+                primary = true,
                 enabled = !busy,
-                onClick = {
-                    val stamp = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
-                    createLauncher.launch("novelfa-backup-$stamp.novelfabak")
-                },
                 modifier = Modifier.weight(1f)
             ) {
-                Text(stringResource(R.string.backup_create))
+                val stamp = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+                createLauncher.launch("novelfa-backup-$stamp.novelfabak")
             }
             Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(
+            ActionButton(
+                label = stringResource(R.string.backup_restore),
+                icon = AppIconKind.File,
+                primary = false,
                 enabled = !busy,
-                onClick = { openLauncher.launch(arrayOf("*/*")) },
                 modifier = Modifier.weight(1f)
-            ) {
-                Text(stringResource(R.string.backup_restore))
-            }
+            ) { openLauncher.launch(arrayOf("*/*")) }
         }
         if (busy) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(stringResource(R.string.backup_working))
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                stringResource(R.string.backup_working),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 
@@ -724,16 +991,12 @@ private fun IntStepper(
     range: IntRange,
     onSet: (Int) -> Unit
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(text = "$label: $value", modifier = Modifier.weight(1f))
-        OutlinedButton(onClick = { onSet((value - step).coerceIn(range)) }) {
-            Text("−")
-        }
-        Spacer(modifier = Modifier.width(8.dp))
-        OutlinedButton(onClick = { onSet((value + step).coerceIn(range)) }) {
-            Text("+")
-        }
-    }
+    StepperShell(
+        label = label,
+        valueText = value.toString(),
+        onMinus = { onSet((value - step).coerceIn(range)) },
+        onPlus = { onSet((value + step).coerceIn(range)) }
+    )
 }
 
 @Composable
@@ -745,15 +1008,67 @@ private fun DoubleStepper(
     onSet: (Double) -> Unit
 ) {
     fun Double.round1(): Double = kotlin.math.round(this * 10) / 10.0
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(text = "$label: $value", modifier = Modifier.weight(1f))
-        OutlinedButton(onClick = { onSet((value - step).round1().coerceIn(range)) }) {
-            Text("−")
+    StepperShell(
+        label = label,
+        valueText = if (value % 1.0 == 0.0) value.toInt().toString()
+        else value.toString(),
+        onMinus = { onSet((value - step).round1().coerceIn(range)) },
+        onPlus = { onSet((value + step).round1().coerceIn(range)) }
+    )
+}
+
+/**
+ * One stepper row: the label, and a soft pill holding [−] value [+]
+ * as a single grouped control (the old rows floated two big outlined
+ * buttons next to a "label: value" text).
+ */
+@Composable
+private fun StepperShell(
+    label: String,
+    valueText: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f)
+        )
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(11.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(3.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StepperKey("−", onMinus)
+            Text(
+                valueText,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.width(46.dp)
+            )
+            StepperKey("+", onPlus)
         }
-        Spacer(modifier = Modifier.width(8.dp))
-        OutlinedButton(onClick = { onSet((value + step).round1().coerceIn(range)) }) {
-            Text("+")
-        }
+    }
+}
+
+@Composable
+private fun StepperKey(glyph: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(32.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(glyph, style = MaterialTheme.typography.titleMedium)
     }
 }
 
