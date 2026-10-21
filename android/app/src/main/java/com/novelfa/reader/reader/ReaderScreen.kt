@@ -499,22 +499,11 @@ fun ReaderScreen(
                 @Suppress("UNUSED_EXPRESSION")
                 rev
                 TopAppBar(
-                    title = {
-                        val titleText = if (v != null && v.chapters.isNotEmpty()) {
-                            stringResource(
-                                R.string.section_x_of_y, v.index + 1, v.chapters.size
-                            )
-                        } else ""
-                        Text(
-                            text = titleText,
-                            textAlign = if (HtmlText.detectDirection(titleText) == 1) {
-                                TextAlign.Left
-                            } else {
-                                TextAlign.Right
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    },
+                    // No title text: with six action icons in the bar
+                    // the "section X of Y" label was squeezed into an
+                    // unreadable vertical wrap next to the drawer button
+                    // (removed at Aster's request, both languages).
+                    title = {},
                     navigationIcon = {
                         TextButton(onClick = { scope.launch { drawerState.open() } }) {
                             AppIcon(AppIconKind.List, tint = LocalContentColor.current, size = 19.dp)
@@ -525,7 +514,7 @@ fun ReaderScreen(
                         // toggle): ⇄ horizontal paging, ↕ vertical-continuous.
                         TextButton(onClick = { modeOpen = true }, enabled = vm != null) {
                             AppIcon(
-                                if (modeNow == ReadingMode.PAGED_HORIZONTAL) AppIconKind.Stack
+                                if (modeNow == ReadingMode.PAGED_HORIZONTAL) AppIconKind.Pages
                                 else AppIconKind.Scroll,
                                 tint = LocalContentColor.current,
                                 size = 19.dp
@@ -761,7 +750,7 @@ fun ReaderScreen(
                         horizontalArrangement = Arrangement.SpaceEvenly
                     ) {
                         ReadingModeChoice(
-                            icon = AppIconKind.Stack,
+                            icon = AppIconKind.Pages,
                             label = stringResource(R.string.mode_horizontal),
                             selected = modeNow == ReadingMode.PAGED_HORIZONTAL,
                             onClick = { setMode(ReadingMode.PAGED_HORIZONTAL) }
