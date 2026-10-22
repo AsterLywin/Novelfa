@@ -1,6 +1,7 @@
 package com.novelfa.reader
 
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -89,7 +90,14 @@ fun NovelfaApp(
     MaterialTheme(colorScheme = colorScheme, typography = rememberAppTypography()) {
         CompositionLocalProvider(
             LocalLayoutDirection provides layoutDirection,
-            LocalAppPaletteExtras provides paletteExtras
+            LocalAppPaletteExtras provides paletteExtras,
+            // Bare texts drawn straight on the app background (empty states,
+            // hints) used to fall back to LocalContentColor's BLACK default
+            // because the root is a plain Box, not a Surface — on a dark
+            // palette they were unreadable (Aster's report). Pin the root
+            // content color to the scheme; Surfaces/cards still override
+            // it locally as before.
+            LocalContentColor provides colorScheme.onBackground
         ) {
             // The app background MUST come from the color scheme: screens like
             // the library use a transparent Scaffold, so without this the
@@ -116,6 +124,39 @@ fun NovelfaApp(
     }
 }
 
+/** Straight RGB blend of two colors ([f] = share of [b]). */
+private fun blend(a: Color, b: Color, f: Float): Color = Color(
+    red = a.red + (b.red - a.red) * f,
+    green = a.green + (b.green - a.green) * f,
+    blue = a.blue + (b.blue - a.blue) * f,
+    alpha = 1f
+)
+
+/**
+ * The container/inverse roles Material 3 actually paints dialogs, menus,
+ * sheets and snackbars with. buildAppColorScheme used to leave them at
+ * the baseline scheme's values, so every stock dialog rendered in the
+ * DEFAULT dark gray instead of the active palette (Aster's report).
+ * Derived from the palette's own bg/card/text so they always follow it.
+ */
+private fun ColorScheme.withSurfaceRoles(
+    bg: Color,
+    card: Color,
+    text: Color,
+    accent: Color
+): ColorScheme = copy(
+    surfaceContainerLowest = blend(bg, card, 0.35f),
+    surfaceContainerLow = blend(bg, card, 0.65f),
+    surfaceContainer = card,
+    surfaceContainerHigh = blend(card, text, 0.05f),
+    surfaceContainerHighest = blend(card, text, 0.10f),
+    surfaceBright = blend(card, text, 0.10f),
+    surfaceDim = blend(card, bg, 0.45f),
+    inverseSurface = text,
+    inverseOnSurface = bg,
+    inversePrimary = accent
+)
+
 /** Builds the app [ColorScheme] from the stored theme/accent/character-theme. */
 private fun buildAppColorScheme(
     isLight: Boolean,
@@ -130,6 +171,9 @@ private fun buildAppColorScheme(
         CharacterThemes.All.firstOrNull { it.id == id }?.let { theme ->
             val p = theme.palette(isLight)
             val accent = parseHex(p.accent, Accent.DEFAULT)
+            val pBg = parseHex(p.bg, base.background)
+            val pCard = parseHex(p.card, base.surface)
+            val pText = parseHex(p.text, base.onSurface)
             return base.copy(
                 primary = accent,
                 onPrimary = accent.contrastOn(),
@@ -137,14 +181,14 @@ private fun buildAppColorScheme(
                 onPrimaryContainer = accent.contrastOn(),
                 secondary = parseHex(p.hero1, base.secondary),
                 tertiary = parseHex(p.hero2, base.tertiary),
-                background = parseHex(p.bg, base.background),
-                onBackground = parseHex(p.text, base.onBackground),
-                surface = parseHex(p.card, base.surface),
-                onSurface = parseHex(p.text, base.onSurface),
+                background = pBg,
+                onBackground = pText,
+                surface = pCard,
+                onSurface = pText,
                 surfaceVariant = parseHex(p.soft, base.surfaceVariant),
                 onSurfaceVariant = parseHex(p.muted, base.onSurfaceVariant),
                 outline = parseHex(p.border, base.outline)
-            )
+            ).withSurfaceRoles(pBg, pCard, pText, accent)
         }
     }
 
@@ -166,7 +210,7 @@ private fun buildAppColorScheme(
         surfaceVariant = palette.soft,
         onSurfaceVariant = palette.muted,
         outline = palette.border
-    )
+    ).withSurfaceRoles(palette.bg, palette.card, palette.text, palette.accent)
 }
 
 /** Parses "#RRGGBB" safely; falls back instead of returning magenta. */
