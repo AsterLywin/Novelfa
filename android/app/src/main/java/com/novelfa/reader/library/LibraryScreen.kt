@@ -1490,9 +1490,13 @@ private fun SelectionBar(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onDelete) {
                     TrashCanIcon(
-                        // Standard destructive-action red (fixed vivid red so
-                        // it reads as "delete" in both light and dark themes).
-                        color = Color(0xFFE53935),
+                        // Bar content color, not destructive red: fixed
+                        // vivid red on the orange primaryContainer had
+                        // almost no contrast and read as a muddy smudge.
+                        // The trash shape + the delete-confirm dialog
+                        // carry the destructive meaning; the color just
+                        // needs to match the bar (and adapt to themes).
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -1517,7 +1521,9 @@ private fun TrashCanIcon(
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val stroke = w * 0.09f
+        // Slightly bolder than the old 0.09: at 22dp the thin outline
+        // washed out against the orange bar.
+        val stroke = w * 0.11f
         // Handle on the lid.
         drawLine(
             color = color,
