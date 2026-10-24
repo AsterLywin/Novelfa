@@ -148,6 +148,13 @@
     <string name="apply_custom_color">اعمال</string>
     <string name="invalid_hex">کد رنگ معتبر نیست</string>
     <string name="pick_this_color">انتخاب این رنگ</string>
+    <string name="xp_celebration_star_title">یک ستاره گرفتی! ★</string>
+    <string name="xp_celebration_title_title">عنوان تازه! ✨</string>
+    <string name="xp_celebration_mark_title">نشان ابدیت! ✦</string>
+    <string name="xp_celebration_final_title">خورشید ابدیتِ جهان‌ها! ☀️✦</string>
+    <string name="xp_celebration_plain">رتبه‌ات شد %1$s!\n%2$d XP دیگه تا پله‌ی بعدی.</string>
+    <string name="xp_celebration_with_theme">رتبه‌ات شد %1$s!\nتم %2$s برات باز شد.\n\nهمین الان تم %3$s رو فعال کنم؟</string>
+    <string name="xp_celebration_ok">باشه!</string>
     <string name="rank_up_message">رتبه‌ات شد %1$s!\nتم %2$s برات باز شد.\n\nهمین الان تم %3$s رو فعال کنم؟</string>
     <string name="secret_theme_message">تم %1$s برات باز شد ✦\n\nهمین الان فعالش کنم؟</string>
     <string name="open_link">باز کردن</string>

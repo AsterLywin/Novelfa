@@ -87,7 +87,9 @@ import com.novelfa.reader.theme.ContrastIcon
 import com.novelfa.reader.theme.Themes
 import com.novelfa.reader.theme.ThemePreviewCard
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -98,6 +100,8 @@ import java.util.zip.ZipFile
 import androidx.compose.material3.rememberDrawerState
 import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.ParticleLayer
+import com.novelfa.reader.theme.PrefsStoreRankPrefs
+import com.novelfa.reader.theme.XpStore
 import com.novelfa.reader.theme.characterPages
 
 /**
@@ -126,6 +130,25 @@ fun ReaderScreen(
     val prefs = remember(context) { PrefsStore(context.applicationContext) }
 
     var vm by remember { mutableStateOf<ReaderViewModel?>(null) }
+    // XP flush on reader exit: the close button flushes first and only
+    // then navigates home (so the home celebration sees the final unit);
+    // system-back/gesture exits hit the DisposableEffect safety net below
+    // (independent scope, because the composition scope is cancelled on
+    // dispose — a missed flush there only delays the celebration, it never
+    // loses XP, because celebratedXp stays behind totalXp).
+    val xpFlushScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+    fun closeReader() {
+        scope.launch {
+            runCatching { vm?.xpFlush() }
+            onClose()
+        }
+    }
+    DisposableEffect(vm) {
+        onDispose {
+            val v = vm
+            if (v != null) xpFlushScope.launch { runCatching { v.xpFlush() } }
+        }
+    }
     var loadError by remember { mutableStateOf(false) }
     var pageHtml by remember { mutableStateOf("") }
     var pendingLastPage by remember { mutableStateOf(false) }
@@ -200,11 +223,27 @@ fun ReaderScreen(
             val savedMode = withContext(Dispatchers.IO) { prefs.getReadingMode() }
             val charThemeId = withContext(Dispatchers.IO) { prefs.charTheme.first() }
             val isLight = withContext(Dispatchers.IO) { prefs.theme.first() == "light" }
+            // XP credit: private books never earn XP (old-rank parity).
+            // The bridge preload is awaited so a credit can never clobber
+            // the stored total with a not-yet-loaded default.
+            val xpPrefs = PrefsStoreRankPrefs(prefs)
+            val xpCallback: (suspend (Int, Int) -> Unit)? =
+                if (entity.isPrivate) null else { unit, words ->
+                    runCatching {
+                        xpPrefs.awaitLoaded()
+                        withContext(Dispatchers.IO) {
+                            XpStore(xpPrefs).creditUnit(
+                                bookId, unit, words, parsed.chapters.size, false
+                            )
+                        }
+                    }
+                }
             val v = ReaderViewModel(
                 dao, bookId, entity.copy(totalChapters = parsed.chapters.size),
                 parsed.chapters,
                 theme = ReaderViewModel.themeForBook(savedTheme, charThemeId, isLight),
-                fontFiles = files
+                fontFiles = files,
+                onXpUnitFinished = xpCallback
             )
             v.readingMode = ReadingMode.fromKey(savedMode)
             val target = entity.lastChapterIndex.coerceIn(0, parsed.chapters.size - 1)
@@ -529,7 +568,7 @@ fun ReaderScreen(
                         TextButton(onClick = { fullscreenUi = true }, enabled = vm != null) {
                             AppIcon(AppIconKind.Fullscreen, tint = LocalContentColor.current, size = 17.dp)
                         }
-                        TextButton(onClick = onClose) {
+                        TextButton(onClick = { closeReader() }) {
                             AppIcon(AppIconKind.Close, tint = LocalContentColor.current, size = 16.dp)
                         }
                     }
@@ -614,7 +653,7 @@ fun ReaderScreen(
                     loadError && vm == null -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(openErr)
-                            TextButton(onClick = onClose) { Text(stringResource(R.string.close)) }
+                            TextButton(onClick = { closeReader() }) { Text(stringResource(R.string.close)) }
                         }
                     }
                     pageHtml.isEmpty() -> CircularProgressIndicator()

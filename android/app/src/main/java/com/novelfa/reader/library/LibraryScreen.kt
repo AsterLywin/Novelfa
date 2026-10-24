@@ -116,14 +116,16 @@ import com.novelfa.reader.settings.PinManager
 import com.novelfa.reader.settings.PinMode
 import com.novelfa.reader.settings.PinSession
 import com.novelfa.reader.settings.RankHook
-import com.novelfa.reader.settings.RankUp
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
 import com.novelfa.reader.theme.CharacterTheme
 import com.novelfa.reader.theme.CharacterThemes
+import com.novelfa.reader.theme.CelebrationTier
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
+import com.novelfa.reader.theme.XpLevel
+import com.novelfa.reader.theme.XpRank
 import com.novelfa.reader.theme.RankService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -388,11 +390,29 @@ fun LibraryScreen(
     var welcomeOpen by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var aboutOpen by remember { mutableStateOf(false) }
-    var rankUp by remember { mutableStateOf<RankUp?>(null) }
+    // XP celebration state: refreshXpRank runs on the HOME screen only
+    // (never in the reader), and re-runs on resume (gateTick) so a
+    // celebration earned mid-reading shows on return home, even if the
+    // app was closed in between. It stays pending until dismissed.
+    var xpRankUp by remember { mutableStateOf<RankHook.XpRankUp?>(null) }
+    var xpLevel by remember { mutableStateOf<XpLevel?>(null) }
     LaunchedEffect(tab) {
         gateTick++
         runCatching {
-            RankHook.refreshRank(viewModel.dao, rankPrefs, prefs.getFinishedBooksRestored())?.let { rankUp = it }
+            RankHook.refreshXpRank(viewModel.dao, rankPrefs, prefs.getFinishedBooksRestored())
+                ?.let { xpRankUp = it }
+            xpLevel = RankHook.xpLevelNow(viewModel.dao, rankPrefs, prefs.getFinishedBooksRestored())
+        }
+    }
+    // Re-check XP on resume (gateTick): returning from the reader does not
+    // change `tab`, so the effect above would not re-run — and the
+    // celebration earned mid-reading would wait for a tab switch. This
+    // effect must NOT increment gateTick itself (that would loop).
+    LaunchedEffect(gateTick) {
+        runCatching {
+            RankHook.refreshXpRank(viewModel.dao, rankPrefs, prefs.getFinishedBooksRestored())
+                ?.let { xpRankUp = it }
+            xpLevel = RankHook.xpLevelNow(viewModel.dao, rankPrefs, prefs.getFinishedBooksRestored())
         }
     }
     // Also re-check on resume: the PIN can be set/removed in Settings, and
@@ -446,8 +466,8 @@ fun LibraryScreen(
     var removeFor by remember { mutableStateOf<BookEntity?>(null) }
 
     val finishedCount = remember(allBooks) { allBooks.count { isCompleted(it) } }
-    val rankName = remember(finishedCount, isEnglishUi) {
-        RankService.Ranks[RankService.rankIndexForStatic(finishedCount)].displayName(isEnglishUi)
+    val rankName = remember(xpLevel, isEnglishUi) {
+        (xpLevel ?: XpRank.levelFor(0)).displayName(isEnglishUi)
     }
     // Precompute display titles once per book-list emission (O(n), not O(n²)).
     val titleMap = remember(allBooks) { displayTitleMap(allBooks) }
@@ -842,36 +862,66 @@ fun LibraryScreen(
         AboutDialog(onDismiss = { aboutOpen = false })
     }
 
-    // Rank-up celebration (WPF AnnounceUnlocks parity): «رتبه‌ات شد X!
-    // تم ... برات باز شد. همین الان فعالش کنم؟»
-    rankUp?.let { up ->
-        val rankName = RankService.Ranks.getOrNull(up.toRank)?.displayName(isEnglishUi) ?: ""
-        val names = up.newThemes.joinToString(if (isEnglishUi) ", " else "، ") {
-            it.displayName(isEnglishUi)
+    // XP celebration (home screen only): tiered by the highest new step —
+    // star (small), title (medium), eternity mark (large), 10th mark
+    // (largest, special). Dismissing/confirming always acknowledges the
+    // celebration, so it never loops; activating a theme is optional.
+    xpRankUp?.let { up ->
+        val tierTitleRes = when (up.tier) {
+            CelebrationTier.STAR -> R.string.xp_celebration_star_title
+            CelebrationTier.TITLE -> R.string.xp_celebration_title_title
+            CelebrationTier.ETERNITY -> R.string.xp_celebration_mark_title
+            CelebrationTier.ETERNITY_FINAL -> R.string.xp_celebration_final_title
+        }
+        val best = up.bestTheme
+        fun dismissXpUp() {
+            scope.launch {
+                RankHook.acknowledgeXpCelebration(rankPrefs, up.toXp)
+                xpRankUp = null
+            }
         }
         AlertDialog(
-            onDismissRequest = { rankUp = null },
-            title = { Text(stringResource(R.string.new_theme_unlocked)) },
+            onDismissRequest = { dismissXpUp() },
+            title = { Text(stringResource(tierTitleRes)) },
             text = {
                 Text(
-                    stringResource(
-                        R.string.rank_up_message,
-                        rankName,
-                        names,
-                        up.best.displayName(isEnglishUi)
-                    )
+                    if (best != null) {
+                        val names = up.newThemes.joinToString(if (isEnglishUi) ", " else "، ") {
+                            it.displayName(isEnglishUi)
+                        }
+                        stringResource(
+                            R.string.xp_celebration_with_theme,
+                            up.toLevel.displayName(isEnglishUi),
+                            names,
+                            best.displayName(isEnglishUi)
+                        )
+                    } else {
+                        stringResource(
+                            R.string.xp_celebration_plain,
+                            up.toLevel.displayName(isEnglishUi),
+                            up.toLevel.xpToNext
+                        )
+                    }
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        prefs.setCharTheme(up.best.id)
-                        rankUp = null
+                        if (best != null) prefs.setCharTheme(best.id)
+                        RankHook.acknowledgeXpCelebration(rankPrefs, up.toXp)
+                        xpRankUp = null
                     }
-                }) { Text(stringResource(R.string.yes)) }
+                }) {
+                    Text(
+                        if (best != null) stringResource(R.string.yes)
+                        else stringResource(R.string.xp_celebration_ok)
+                    )
+                }
             },
             dismissButton = {
-                TextButton(onClick = { rankUp = null }) { Text(stringResource(R.string.no)) }
+                if (best != null) {
+                    TextButton(onClick = { dismissXpUp() }) { Text(stringResource(R.string.no)) }
+                }
             }
         )
     }

@@ -65,9 +65,27 @@ class RankService(private val prefs: RankPrefs) {
     fun isRankUnlocked(requiredRank: Int): Boolean =
         requiredRank <= maxOf(0, maxRank)
 
-    /** Theme unlocked by rank or by its own secret. */
+    /**
+     * XP-title unlock: a theme is unlocked when the XP title reaches its
+     * [CharacterTheme.xpTitle], even if the legacy finished-books maxRank
+     * never did (e.g. a reader of one 3000-chapter novel: few finished
+     * books, high XP title). Before migration totalXp is 0, so this
+     * changes nothing for legacy users until their first XP migration runs.
+     */
+    fun isXpUnlocked(requiredTitle: Int): Boolean {
+        val xp = runCatching { XpStore(prefs).totalXp }.getOrDefault(0)
+        return XpRank.levelFor(xp).titleIndex >= requiredTitle
+    }
+
+    /**
+     * Theme unlocked by legacy rank, XP title, or by its own secret.
+     * The two rank gates are independent (legacy 0..6 vs XP title 0..11),
+     * so re-spreading themes across XP titles can never relock a theme
+     * a legacy user already earned.
+     */
     fun isUnlocked(theme: CharacterTheme?): Boolean =
-        theme != null && (isRankUnlocked(theme.requiredRank) || isSecretUnlocked(theme.id))
+        theme != null && (isRankUnlocked(theme.requiredRank) ||
+            isXpUnlocked(theme.xpTitle) || isSecretUnlocked(theme.id))
 
     fun isSecretUnlocked(themeId: String?): Boolean {
         if (themeId.isNullOrEmpty()) return false
@@ -83,6 +101,9 @@ class RankService(private val prefs: RankPrefs) {
     }
 
     fun visibleCount(): Int = CharacterThemes.visibleCount { isUnlocked(it) }
+
+    /** Count of themes unlocked by rank or secret (legacy helper, restored). */
+    fun unlockedCount(): Int = CharacterThemes.All.count { isUnlocked(it) }
 
     /**
      * Record finished-book progress. maxRank only moves up, never down.

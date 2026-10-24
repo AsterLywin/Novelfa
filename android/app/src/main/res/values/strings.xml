@@ -148,6 +148,13 @@
     <string name="apply_custom_color">Apply</string>
     <string name="invalid_hex">Invalid color code</string>
     <string name="pick_this_color">Use this color</string>
+    <string name="xp_celebration_star_title">A new star! ★</string>
+    <string name="xp_celebration_title_title">New title! ✨</string>
+    <string name="xp_celebration_mark_title">Eternity mark! ✦</string>
+    <string name="xp_celebration_final_title">Eternal Sun of Worlds! ☀️✦</string>
+    <string name="xp_celebration_plain">Your rank is now %1$s!\n%2$d more XP to the next step.</string>
+    <string name="xp_celebration_with_theme">Your rank is now %1$s!\nTheme %2$s unlocked for you.\n\nActivate %3$s right now?</string>
+    <string name="xp_celebration_ok">Nice!</string>
     <string name="rank_up_message">Your rank is now %1$s! Theme %2$s unlocked for you.\n\nActivate %3$s right now?</string>
     <string name="secret_theme_message">Theme %1$s unlocked for you ✦\n\nActivate it right now?</string>
     <string name="open_link">Open</string>

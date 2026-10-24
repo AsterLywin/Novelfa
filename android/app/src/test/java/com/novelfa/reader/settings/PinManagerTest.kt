@@ -108,7 +108,7 @@ class PinManagerTest {
 
     @Test
     fun secureHash_malformed_rejected() {
-        assertFalse(PinManager.verifyHash("1234", "v2$broken"))
+        assertFalse(PinManager.verifyHash("1234", "v2\$broken"))
         assertFalse(PinManager.verifyHash("1234", "v2$120000$!!!$???"))
     }
 

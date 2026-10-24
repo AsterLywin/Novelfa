@@ -6,6 +6,8 @@ import com.novelfa.reader.model.Chapter
 import com.novelfa.reader.parser.HrefResolver
 import com.novelfa.reader.theme.ReaderTheme
 import com.novelfa.reader.theme.Themes
+import com.novelfa.reader.theme.XpRank
+import com.novelfa.reader.theme.XpSessionTracker
 import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.characterPages
 import androidx.compose.runtime.getValue
@@ -55,8 +57,41 @@ class ReaderViewModel(
     val chapters: List<Chapter>,
     var theme: ReaderTheme = Themes.DARK,
     var isEnglish: Boolean = false,
-    var fontFiles: List<File> = emptyList()
+    var fontFiles: List<File> = emptyList(),
+    /** XP clock (injectable for tests); default is wall-clock time. */
+    private val xpClock: () -> Long = { System.currentTimeMillis() },
+    /**
+     * Called when a unit becomes XP-creditable (reader left it after
+     * >= 5 s dwell, see XpSessionTracker): (unitIndex, wordCount).
+     * Null = XP disabled (tests, or private books — the caller in
+     * ReaderScreen passes null for private books). The callback owns
+     * persistence via XpStore; failures there must never break reading.
+     */
+    private val onXpUnitFinished: (suspend (Int, Int) -> Unit)? = null
 ) {
+    /** XP anti-cheat tracker: visited-only, >= 5 s dwell, once per unit. */
+    private val xpTracker = XpSessionTracker(xpClock)
+
+    /** Note entry into [unit]; credits the previous unit if it qualified. */
+    private suspend fun xpNoteEnter(unit: Int) {
+        val toCredit = xpTracker.enter(unit) ?: return
+        xpCreditUnit(toCredit)
+    }
+
+    private suspend fun xpCreditUnit(unit: Int) {
+        val cb = onXpUnitFinished ?: return
+        if (unit !in chapters.indices) return
+        val words = withContext(Dispatchers.IO) {
+            runCatching { XpRank.wordsFromHtml(readPrepared(unit)) }.getOrDefault(0)
+        }
+        runCatching { cb(unit, words) }
+    }
+
+    /** Credit the current unit on reader close, if its dwell qualified. */
+    suspend fun xpFlush() {
+        val toCredit = xpTracker.flush() ?: return
+        xpCreditUnit(toCredit)
+    }
     private var book: BookEntity = initialBook
 
     /** In-memory cache of prepared chapter bodies (trimWindow rebuilds). */
@@ -233,6 +268,8 @@ class ReaderViewModel(
             contFirst = i
             contLast = i
             index = i
+            // XP: entering a new unit may credit the previous one (dwell-gated).
+            xpNoteEnter(i)
             baseUrl = baseUrl(i)
             html = HtmlBuilder.build(
                 baseUrl, wrapped, theme, fontFamily, fontSize,
@@ -437,6 +474,8 @@ class ReaderViewModel(
         }
         index = ci
         saveProgress(ci)
+        // XP: same dwell-gated credit as loadChapter (continuous mode).
+        xpNoteEnter(ci)
     }
 
     suspend fun saveProgress(i: Int, force: Boolean = false) {

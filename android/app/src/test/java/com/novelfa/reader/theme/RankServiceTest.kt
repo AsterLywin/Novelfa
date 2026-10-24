@@ -37,13 +37,20 @@ class RankServiceTest {
     }
 
     @Test
-    fun echidna_secretOnly_excludedWhenLocked() {
+    fun echidna_rankGated_notSecretOnly() {
+        // Stale expectation fixed: in the current CharacterThemes, echidna
+        // is rank-gated (legacy rank 5, XP title 9), not secret-only, and
+        // no theme is secret-only, so all 7 themes are visible even when
+        // locked.
         val echidna = CharacterThemes.find("echidna")!!
-        assertTrue(echidna.secretOnly)
+        assertFalse(echidna.secretOnly)
+        assertEquals(5, echidna.requiredRank)
+        assertEquals(9, echidna.xpTitle)
         val s = service()
-        assertEquals(5, s.visibleCount())
+        assertEquals(7, s.visibleCount())
+        assertFalse(s.isUnlocked(echidna))
         s.secretUnlock("echidna")
-        assertEquals(6, s.visibleCount())
+        assertTrue(s.isUnlocked(echidna))
     }
 
     @Test

@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankService
+import com.novelfa.reader.theme.XpStore
 import com.novelfa.reader.theme.fontDisplayName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -54,6 +55,8 @@ data class BackupPreview(
     val profileName: String,
     val maxRank: Int,
     val finishedBooks: Int,
+    /** XP total carried by the backup (-1 = old backup without XP). */
+    val totalXp: Int = -1,
     val secretThemes: List<String>,
     val avatar: File?,
     val fonts: List<BackupFont>,
@@ -313,6 +316,13 @@ class BackupService(
             .split(',').map { it.trim() }.filter { it.isNotEmpty() }
         val libraryFinished = dao.allBooks().first().count { !it.isPrivate && isCompleted(it) }
         val finishedBooks = maxOf(libraryFinished, prefs.getFinishedBooksRestored())
+        // XP travels with the backup (max-merge on restore, never summed:
+        // summing would double-count the same books across devices). The
+        // field is additive: old readers ignore it, and the integrity hash
+        // deliberately does NOT cover it (it covers profile/rank/books/
+        // secrets + payload hashes, unchanged, so Windows imports still
+        // verify byte-for-byte).
+        val totalXp = XpStore(rankPrefs).totalXp
         val profileName = prefs.profileName.first()
 
         val avatarPayload = payloads.firstOrNull()
@@ -333,6 +343,7 @@ class BackupService(
                     .put("name", profileName)
                     .put("maxRank", maxRank)
                     .put("finishedBooks", finishedBooks)
+                    .put("totalXp", totalXp)
                     .put("secretThemes", JSONArray(secrets))
             )
             .put(
@@ -461,10 +472,14 @@ class BackupService(
             val profileName = profile.optString("name", "")
             val maxRank = profile.optInt("maxRank", Int.MIN_VALUE)
             val finishedBooks = profile.optInt("finishedBooks", -1)
+            val totalXp = profile.optInt("totalXp", -1)
             if (maxRank !in -1..RankService.Ranks.lastIndex) {
                 return@withContext fail(BackupError.CORRUPT)
             }
             if (finishedBooks !in 0..MAX_FINISHED_BOOKS) {
+                return@withContext fail(BackupError.CORRUPT)
+            }
+            if (totalXp !in -1..10_000_000) {
                 return@withContext fail(BackupError.CORRUPT)
             }
             val secrets = mutableListOf<String>()
@@ -648,6 +663,7 @@ class BackupService(
                     profileName = profileName,
                     maxRank = maxRank,
                     finishedBooks = finishedBooks,
+                    totalXp = totalXp,
                     secretThemes = secrets,
                     avatar = avatarFile,
                     fonts = fonts,
@@ -786,6 +802,12 @@ class BackupService(
                 service.maxRank = targetRank
             }
             preview.secretThemes.forEach { service.secretUnlock(it) }
+            // XP: max-merge only (see export). Celebrated XP is left alone
+            // so a restored gain celebrates on the next home visit.
+            if (preview.totalXp >= 0) {
+                val xpStore = XpStore(rankPrefs)
+                if (preview.totalXp > xpStore.totalXp) xpStore.totalXp = preview.totalXp
+            }
             prefs.raiseFinishedBooksRestored(finishedTotal)
 
             // --- reading records (format v2) ---

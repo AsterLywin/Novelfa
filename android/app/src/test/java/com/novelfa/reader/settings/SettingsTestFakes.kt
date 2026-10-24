@@ -30,8 +30,6 @@ internal class FakeBookDao(initial: List<BookEntity>) : BookDao {
     override fun byCollection(name: String): Flow<List<BookEntity>> =
         data.map { list -> list.filter { it.collectionName == name } }
 
-    override fun search(query: String): Flow<List<BookEntity>> =
-        data.map { list -> list.filter { it.title.contains(query, ignoreCase = true) } }
 
     fun current(): List<BookEntity> = data.value
 }

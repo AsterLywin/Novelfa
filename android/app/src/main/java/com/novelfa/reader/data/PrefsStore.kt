@@ -27,6 +27,11 @@ class PrefsStore(private val context: Context) {
         // Task 7 additive keys (RankService prefs "MaxRank"/"SecretThemes").
         val MAX_RANK = stringPreferencesKey("MaxRank")
         val SECRET_THEMES = stringPreferencesKey("SecretThemes")
+        // XP rank system additive keys (XpStore, same cache pattern).
+        val TOTAL_XP = stringPreferencesKey("TotalXp")
+        val XP_LEDGER = stringPreferencesKey("XpLedger")
+        val XP_MIGRATED = stringPreferencesKey("XpMigrated")
+        val XP_CELEBRATED = stringPreferencesKey("XpCelebratedXp")
 
         // Task 8 additive keys (PIN hash, support counter, locale, reader defaults).
         val PIN_HASH = stringPreferencesKey("pinHash")

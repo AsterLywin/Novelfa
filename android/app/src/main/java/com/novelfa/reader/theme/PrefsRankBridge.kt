@@ -31,6 +31,10 @@ class PrefsStoreRankPrefs(
             try {
                 cache[RankService.MAX_RANK_KEY] = store.getString(PrefsStore.MAX_RANK, "-1")
                 cache[RankService.SECRET_KEY] = store.getString(PrefsStore.SECRET_THEMES, "")
+                cache[XpStore.TOTAL_XP_KEY] = store.getString(PrefsStore.TOTAL_XP, "0")
+                cache[XpStore.LEDGER_KEY] = store.getString(PrefsStore.XP_LEDGER, "")
+                cache[XpStore.MIGRATED_KEY] = store.getString(PrefsStore.XP_MIGRATED, "0")
+                cache[XpStore.CELEBRATED_XP_KEY] = store.getString(PrefsStore.XP_CELEBRATED, "0")
             } finally {
                 // Always release waiters: a failed preload (e.g. corrupted
                 // DataStore) must not hang awaitLoaded() forever.
@@ -55,6 +59,10 @@ class PrefsStoreRankPrefs(
             when (key) {
                 RankService.MAX_RANK_KEY -> store.setString(PrefsStore.MAX_RANK, value)
                 RankService.SECRET_KEY -> store.setString(PrefsStore.SECRET_THEMES, value)
+                XpStore.TOTAL_XP_KEY -> store.setString(PrefsStore.TOTAL_XP, value)
+                XpStore.LEDGER_KEY -> store.setString(PrefsStore.XP_LEDGER, value)
+                XpStore.MIGRATED_KEY -> store.setString(PrefsStore.XP_MIGRATED, value)
+                XpStore.CELEBRATED_XP_KEY -> store.setString(PrefsStore.XP_CELEBRATED, value)
             }
         }
     }
