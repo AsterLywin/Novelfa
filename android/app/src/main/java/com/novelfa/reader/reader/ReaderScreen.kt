@@ -754,17 +754,24 @@ fun ReaderScreen(
                         onSwipeLeft = {
                             val v = vm
                             if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
-                                // Paged mode: a leftward swipe turns the page
-                                // forward for RTL books, backward for LTR.
-                                turnPage(v, forward = !v.isEnglish)
+                                // Paged mode, strip math (show() uses
+                                // tx = -physLeft): LTR next pages sit to
+                                // the right, so a leftward swipe (content
+                                // dragged left) advances; RTL next pages
+                                // sit to the left, so a leftward swipe
+                                // goes back. The old mapping had this
+                                // backwards for both directions (never
+                                // noticed because onDown killed swipes).
+                                turnPage(v, forward = v.isEnglish)
                             }
                         },
                         onSwipeRight = {
                             val v = vm
                             if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
-                                // Paged mode: a rightward swipe turns the page
-                                // forward for LTR books, backward for RTL.
-                                turnPage(v, forward = v.isEnglish)
+                                // Mirror of the above: RTL next pages sit
+                                // to the left, so a rightward swipe
+                                // (content dragged right) advances.
+                                turnPage(v, forward = !v.isEnglish)
                             }
                         }
                     )

@@ -65,6 +65,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -96,7 +97,9 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -2285,7 +2288,16 @@ private fun ProfileNameDialog(
     onDismiss: () -> Unit,
     onSave: (String) -> Unit
 ) {
-    var text by remember(initial) { mutableStateOf(initial) }
+    // Cursor starts AFTER the text (standard edit-field behavior) and
+    // the field's layout direction follows the text's own script: a
+    // Latin name inside an RTL layout used to show its cursor on the
+    // side that looks like the end to an RTL reader while logically
+    // sitting at the start, so backspace appeared to do nothing; with
+    // a script-matched direction the visual and logical positions
+    // agree, for Latin and Persian names alike.
+    var field by remember(initial) {
+        mutableStateOf(TextFieldValue(initial, TextRange(initial.length)))
+    }
     var error by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2293,23 +2305,29 @@ private fun ProfileNameDialog(
         text = {
             Column {
                 Text(hint, style = MaterialTheme.typography.labelMedium)
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it; error = false },
-                    singleLine = true,
-                    isError = error,
-                    // Align with the text's own direction: Persian names sit
-                    // on the right, Latin names on the left.
-                    textStyle = LocalTextStyle.current.copy(
-                        textAlign = if (isRtlText(text)) TextAlign.Right else TextAlign.Left
-                    ),
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                )
+                CompositionLocalProvider(
+                    LocalLayoutDirection provides
+                        if (isRtlText(field.text)) LayoutDirection.Rtl
+                        else LayoutDirection.Ltr
+                ) {
+                    OutlinedTextField(
+                        value = field,
+                        onValueChange = { field = it; error = false },
+                        singleLine = true,
+                        isError = error,
+                        // Align with the text's own direction: Persian names sit
+                        // on the right, Latin names on the left.
+                        textStyle = LocalTextStyle.current.copy(
+                            textAlign = if (isRtlText(field.text)) TextAlign.Right else TextAlign.Left
+                        ),
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                val clean = text.trim()
+                val clean = field.text.trim()
                 if (clean.length < 2) {
                     error = true
                 } else {

@@ -136,6 +136,14 @@ fun ReaderWebView(
                 var turnedThisGesture = false
                 val swipeDetector = GestureDetector(ctx,
                     object : GestureDetector.SimpleOnGestureListener() {
+                        // REQUIRED: SimpleOnGestureListener.onDown returns
+                        // false by default, and a false onDown makes the
+                        // detector drop the whole gesture — onScroll and
+                        // onFling never fire. That is why swipe/drag page
+                        // turns silently did nothing at all (the buttons
+                        // used to hide the fact that swipes never worked).
+                        override fun onDown(e: MotionEvent): Boolean = true
+
                         override fun onFling(
                             e1: MotionEvent?, e2: MotionEvent,
                             velocityX: Float, velocityY: Float
