@@ -672,7 +672,7 @@ fun ReaderScreen(
                                 // the app's orange. Use the accent.
                                 colors = NavigationDrawerItemDefaults.colors(
                                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
                             )
                         }
