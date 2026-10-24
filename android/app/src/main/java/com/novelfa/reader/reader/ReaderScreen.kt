@@ -30,6 +30,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalDrawerSheet
@@ -362,13 +363,27 @@ fun ReaderScreen(
      * Horizontal page turn (paged mode). Asks the page to turn via
      * `rdrTurn`; at the chapter edges it moves to the adjacent chapter
      * instead (like a manga reader).
+     *
+     * A 'busy' answer (pagination still building, or mid-animation) is
+     * RETRIED, not dropped: a dropped turn was exactly the "swipe does
+     * nothing / the next page never arrives" symptom. Retries stop
+     * after 10 attempts (~3s) and only run while this same ViewModel
+     * is still live, so a chapter jump in between can't turn a page
+     * in the new chapter by accident.
      */
-    fun turnPage(v: ReaderViewModel, forward: Boolean) {
+    fun turnPage(v: ReaderViewModel, forward: Boolean, attempt: Int = 0) {
         val wv = webView ?: return
         wv.evaluateJavascript("rdrTurn(${if (forward) 1 else -1})") { result ->
             val r = result?.trim()?.trim { it == '"' }
-            // 'busy' = swipe landed mid-animation; the lock drops it.
-            if (r == "busy") return@evaluateJavascript
+            if (r == "busy") {
+                if (attempt < 10) {
+                    scope.launch {
+                        delay(300)
+                        if (vm === v) turnPage(v, forward, attempt + 1)
+                    }
+                }
+                return@evaluateJavascript
+            }
             scope.launch {
                 val vv = vm ?: return@launch
                 if (r == "end" && forward && vv.index + 1 < vv.chapters.size) {
@@ -721,6 +736,17 @@ fun ReaderScreen(
                                 turnPage(v, forward = v.isEnglish)
                             }
                         }
+                    )
+                }
+                // Vertical mode: the next chapter is stitched in on
+                // scroll, so show a thin bar while an append/prepend is
+                // in flight — the user sees "loading" instead of a dead
+                // end at the bottom of the page.
+                if (modeNow == ReadingMode.CONTINUOUS_VERTICAL && vm?.isAppending == true) {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
                     )
                 }
                 if (fullscreenUi) {

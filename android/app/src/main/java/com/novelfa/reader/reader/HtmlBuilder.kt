@@ -340,7 +340,14 @@ object HtmlBuilder {
     var EPS = 1.5;              // packing tolerance (px)
     var ANIM_MS = 280;          // must match the .rdr-strip CSS transition
     var SETTLE_TIMEOUT = 2500;  // max wait for fonts/images before paginating
-    var MAX_AUTO_REPAGINATE = 3;
+    // Was 3: images in one chapter often arrive staggered, and each
+    // arrival schedules one debounced repagination — 3 was exhausted
+    // before the last images landed, leaving pages measured with
+    // zero-height images and their overflow CLIPPED (.rdr-page
+    // overflow:hidden), i.e. "the next page never renders fully".
+    // 10 stays bounded (loads are finite) while covering staggered
+    // image arrivals in image-heavy chapters.
+    var MAX_AUTO_REPAGINATE = 10;
 
     var rtl = de.getAttribute('dir') === 'rtl';
     var chap = null;            // .rdr-chap — becomes the stage

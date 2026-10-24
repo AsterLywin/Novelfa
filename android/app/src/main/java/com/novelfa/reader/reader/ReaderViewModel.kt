@@ -12,6 +12,7 @@ import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.characterPages
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.io.File
 import java.time.Instant
@@ -144,7 +145,9 @@ class ReaderViewModel(
         private set
     var contLast: Int = 0
         private set
-    var isAppending: Boolean = false
+    // Observable (not a plain var) so the UI can show a loading bar
+    // while a chapter is being stitched in.
+    var isAppending by mutableStateOf(false)
         private set
     private val appendMutex = Mutex()
     var lastError: String? = null
@@ -443,17 +446,25 @@ class ReaderViewModel(
     }
 
     /**
-     * Scroll-bridge entry: near-bottom (top+client >= height-300) appends,
-     * else top == 0 prepends. Only in [ReadingMode.CONTINUOUS_VERTICAL];
+     * Scroll-bridge entry. Only in [ReadingMode.CONTINUOUS_VERTICAL];
      * horizontal paging never stitches.
+     *
+     * Deliberately NOT the WPF thresholds (300px / top == 0) anymore:
+     * on Android the next chapter is read from disk and inserted via
+     * JS after the trigger, so a 300px trigger meant the user reached
+     * the end before the chapter existed — the "next page never
+     * arrives" wall. Appending from 1200px out and prepending from
+     * 300px in gives the stitch time to land before it is on screen.
+     * The window cap ([MAX_WINDOW_SPAN]) still bounds how far this
+     * prefetching can grow the document.
      */
     suspend fun onScroll(top: Int, height: Int, client: Int) {
         if (readingMode != ReadingMode.CONTINUOUS_VERTICAL || isAppending) {
             return
         }
-        if (top + client >= height - 300) {
+        if (top + client >= height - 1200) {
             appendNext()
-        } else if (top == 0) {
+        } else if (top <= 300) {
             prependPrev()
         }
     }
