@@ -85,6 +85,7 @@ fun CharacterSheet(
 ) {
     val isEnglishUi = LocalConfiguration.current.locales[0].language.startsWith("en")
     var pendingTheme by remember { mutableStateOf<CharacterTheme?>(null) }
+    var showParticlesNotice by remember { mutableStateOf(false) }
     var infoTheme by remember { mutableStateOf<Pair<CharacterTheme, ThemeUnlockInfo>?>(null) }
     LaunchedEffect(pendingTheme) {
         val theme = pendingTheme ?: return@LaunchedEffect
@@ -153,11 +154,33 @@ fun CharacterSheet(
                     )
                     Switch(
                         checked = particlesEnabled,
-                        onCheckedChange = onToggleParticles
+                        onCheckedChange = { checked ->
+                            // Particles render only when a character
+                            // theme supplies their type (ParticleLayer
+                            // returns early on a blank type), so turning
+                            // them on with plain colors shows nothing.
+                            // The choice is still saved — it takes
+                            // effect as soon as a theme is picked — but
+                            // the user must be told why nothing appears.
+                            if (checked && activeId == null) showParticlesNotice = true
+                            onToggleParticles(checked)
+                        }
                     )
                 }
             }
         }
+    }
+    if (showParticlesNotice) {
+        AlertDialog(
+            onDismissRequest = { showParticlesNotice = false },
+            title = { Text(stringResource(R.string.particles_no_theme_title)) },
+            text = { Text(stringResource(R.string.particles_no_theme_message)) },
+            confirmButton = {
+                TextButton(onClick = { showParticlesNotice = false }) {
+                    Text(stringResource(R.string.ok))
+                }
+            }
+        )
     }
     infoTheme?.let { (theme, info) ->
         ThemeUnlockDialog(

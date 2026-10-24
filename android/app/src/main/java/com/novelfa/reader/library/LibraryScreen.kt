@@ -396,6 +396,8 @@ fun LibraryScreen(
     val appLang by prefs.lang.collectAsState(initial = "fa")
     val isEnglishUi = appLang.startsWith("en")
     var welcomeOpen by remember { mutableStateOf(false) }
+    var guideOpen by remember { mutableStateOf(false) }
+    val guideShown by prefs.guideShown.collectAsState(initial = false)
     var renameOpen by remember { mutableStateOf(false) }
     var aboutOpen by remember { mutableStateOf(false) }
     // XP celebration state: refreshXpRank runs on the HOME screen only
@@ -444,9 +446,21 @@ fun LibraryScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    LaunchedEffect(profileName) {
+    LaunchedEffect(profileName, guideShown) {
         val name = profileName ?: return@LaunchedEffect // value not loaded yet
-        if (name.isBlank()) welcomeOpen = true
+        if (name.isBlank()) {
+            // First run: the guide goes before the name prompt and is
+            // shown once (guideShown), while the name prompt reappears
+            // every restart until a name is set (existing behavior).
+            // Existing users have a name, so this never fires for them
+            // even though their guideShown starts false.
+            if (!guideShown) {
+                guideOpen = true
+                welcomeOpen = false
+            } else {
+                welcomeOpen = true
+            }
+        }
     }
 
     // Selection mode (long-press a book): empty = off. Tapping toggles;
@@ -853,6 +867,28 @@ fun LibraryScreen(
         )
     }
 
+    if (guideOpen) {
+        // First run (blank name): finishing marks the guide shown and
+        // opens the name prompt; dismissing (back/outside) opens the
+        // name prompt without marking it, so it returns next restart.
+        // Re-opened from About (name set): both paths just close.
+        FirstRunGuide(
+            onFinish = {
+                guideOpen = false
+                if ((profileName ?: "").isBlank()) {
+                    scope.launch {
+                        prefs.setGuideShown(true)
+                        welcomeOpen = true
+                    }
+                }
+            },
+            onDismiss = {
+                guideOpen = false
+                if ((profileName ?: "").isBlank()) welcomeOpen = true
+            }
+        )
+    }
+
     if (welcomeOpen) {
         ProfileNameDialog(
             title = stringResource(R.string.what_s_your_name),
@@ -884,7 +920,13 @@ fun LibraryScreen(
     }
 
     if (aboutOpen) {
-        AboutDialog(onDismiss = { aboutOpen = false })
+        AboutDialog(
+            onDismiss = { aboutOpen = false },
+            onShowGuide = {
+                aboutOpen = false
+                guideOpen = true
+            }
+        )
     }
 
     if (showRanks) {
@@ -2387,7 +2429,7 @@ private fun ProfileNameDialog(
 }
 
 @Composable
-private fun AboutDialog(onDismiss: () -> Unit) {
+private fun AboutDialog(onDismiss: () -> Unit, onShowGuide: () -> Unit) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val version = remember {
@@ -2461,7 +2503,12 @@ private fun AboutDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) }
+            Row {
+                TextButton(onClick = onShowGuide) {
+                    Text(stringResource(R.string.view_guide))
+                }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) }
+            }
         }
     )
 }
