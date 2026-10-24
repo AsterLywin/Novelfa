@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -392,12 +393,19 @@ private fun ActionButton(
     else MaterialTheme.colorScheme.surfaceVariant
     val fg = if (primary) MaterialTheme.colorScheme.onPrimaryContainer
     else MaterialTheme.colorScheme.onSurface
+    // The label is centered in the button, not just the icon+label
+    // group: with a plain centered group the text sits half an icon
+    // off-center (that is what the backup buttons showed). A balance
+    // spacer mirroring the icon+gap on the other side puts the text's
+    // own center on the button's center. fillMaxHeight keeps sibling
+    // buttons in a row the same height if a label ever wraps.
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(if (enabled) bg else bg.copy(alpha = 0.45f))
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(vertical = 11.dp),
+            .padding(vertical = 11.dp)
+            .fillMaxHeight(),
         contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -408,8 +416,13 @@ private fun ActionButton(
             Text(
                 label,
                 style = MaterialTheme.typography.labelLarge,
-                color = fg
+                color = fg,
+                textAlign = TextAlign.Center
             )
+            if (icon != null) {
+                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(15.dp))
+            }
         }
     }
 }

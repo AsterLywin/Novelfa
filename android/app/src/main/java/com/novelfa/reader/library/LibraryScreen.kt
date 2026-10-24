@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1334,25 +1336,32 @@ private fun StatsStrip(
         Triple(done, Tab.COMPLETED, R.string.completed),
         Triple(fav, Tab.FAVORITES, R.string.favorites)
     )
+    // Equal-height cards: in English "Currently reading" wraps to two
+    // lines and used to make its card taller than its siblings (in
+    // Persian the label fits one line, so it never showed). The row
+    // takes the tallest card's height and every card stretches to it,
+    // with its content vertically centered.
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         cards.forEach { (count, t, labelRes) ->
             Card(
                 onClick = { onPick(t) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).fillMaxHeight()
             ) {
-                Box {
+                Box(Modifier.fillMaxSize()) {
                     Column(
-                        modifier = Modifier.padding(vertical = 10.dp).fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        modifier = Modifier.fillMaxSize().padding(vertical = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
                         Text("$count", style = MaterialTheme.typography.titleLarge)
                         Text(
                             stringResource(labelRes),
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
                         )
                     }
                     // Tsugi stitch in the top-end corner of each stat card
