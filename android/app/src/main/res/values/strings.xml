@@ -98,6 +98,7 @@
     <string name="name_a_to_z">Name (A to Z)</string>
     <string name="most_progress">Most progress</string>
     <string name="chapters">Sections</string>
+    <string name="chapters_count">%1$d sections</string>
     <string name="no_chapter_selected">No section selected</string>
     <string name="line_spacing">Line spacing</string>
     <string name="side_margins">Side margins</string>

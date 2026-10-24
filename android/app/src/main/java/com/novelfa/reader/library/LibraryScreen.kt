@@ -1500,9 +1500,14 @@ private fun SelectionBar(
                         modifier = Modifier.size(22.dp)
                     )
                 }
-                // Standard "cancel/close" yellow.
+                // Cancel/close: bar content color, like the trash —
+                // the old fixed yellow washed out on the orange bar.
                 IconButton(onClick = onCancel) {
-                    AppIcon(AppIconKind.Close, tint = Color(0xFFFFC107), size = 17.dp)
+                    AppIcon(
+                        AppIconKind.Close,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        size = 17.dp
+                    )
                 }
             }
         }

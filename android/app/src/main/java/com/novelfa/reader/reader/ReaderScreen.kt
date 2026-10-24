@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +38,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
@@ -585,15 +587,24 @@ fun ReaderScreen(
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // RTL: the first child lands at the right — the menu icon
-                    // sits to the right of the title; tapping it closes.
-                    TextButton(onClick = { scope.launch { drawerState.close() } }) {
-                        AppIcon(AppIconKind.List, tint = LocalContentColor.current, size = 18.dp)
+                    // RTL: the first child lands at the right. An X closes
+                    // (the old list icon here read as "menu", not "close").
+                    IconButton(onClick = { scope.launch { drawerState.close() } }) {
+                        AppIcon(AppIconKind.Close, tint = LocalContentColor.current, size = 18.dp)
                     }
                     Text(
                         stringResource(R.string.chapters),
                         modifier = Modifier.padding(start = 4.dp)
                     )
+                    Spacer(modifier = Modifier.weight(1f))
+                    vm?.chapters?.size?.let { count ->
+                        Text(
+                            text = stringResource(R.string.chapters_count, count),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                    }
                 }
                 val v = vm
                 if (v == null) {
@@ -623,15 +634,46 @@ fun ReaderScreen(
                     }
                     LazyColumn(state = chapterListState) {
                         itemsIndexed(v.chapters, key = { _, c -> c.file.absolutePath }) { i, c ->
+                            val selected = i == v.index
                             NavigationDrawerItem(
                                 label = { Text(c.title) },
-                                selected = i == v.index,
+                                selected = selected,
                                 onClick = {
                                     scope.launch {
                                         gotoChapter(v, i)
                                         drawerState.close()
                                     }
-                                }
+                                },
+                                // Number chip (same avatar-chip language as
+                                // the character rows): bare numeric titles
+                                // no longer leave the row looking empty,
+                                // and titled chapters gain their number.
+                                icon = {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                                else MaterialTheme.colorScheme.surfaceVariant
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = String.format("%d", i + 1),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = if (selected) MaterialTheme.colorScheme.primaryContainer
+                                            else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                // The default selected pill is purple
+                                // secondaryContainer — off-theme next to
+                                // the app's orange. Use the accent.
+                                colors = NavigationDrawerItemDefaults.colors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
                             )
                         }
                     }

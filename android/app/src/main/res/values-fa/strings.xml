@@ -98,6 +98,7 @@
     <string name="name_a_to_z">نام (الف تا ی)</string>
     <string name="most_progress">بیشترین پیشرفت</string>
     <string name="chapters">فهرست بخش‌ها</string>
+    <string name="chapters_count">%1$d بخش</string>
     <string name="no_chapter_selected">بخشی انتخاب نشده</string>
     <string name="line_spacing">فاصله‌ی خطوط</string>
     <string name="side_margins">حاشیه‌ی کناری متن</string>
