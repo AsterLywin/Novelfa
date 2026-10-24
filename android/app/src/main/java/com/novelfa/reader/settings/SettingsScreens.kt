@@ -71,6 +71,7 @@ import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
 import com.novelfa.reader.theme.CharacterSheet
 import com.novelfa.reader.theme.FontPickerDialog
+import com.novelfa.reader.theme.FontSelectDialog
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankService
 import com.novelfa.reader.theme.RanksDialog
@@ -528,8 +529,8 @@ private fun ReaderDefaultsSection(
     val spacing by viewModel.readerSpacing.collectAsState(initial = "0.6")
     val scope = rememberCoroutineScope()
     var fontDialog by remember { mutableStateOf(false) }
-    var familyEdit by remember { mutableStateOf(false) }
-    var familyText by remember { mutableStateOf(fontFamily) }
+    var fontSelectOpen by remember { mutableStateOf(false) }
+    var selectError by remember { mutableStateOf<String?>(null) }
     val invalidFontMsg = stringResource(R.string.invalid_font_name)
     val fontMinMsg = stringResource(R.string.font_size_min, 10)
     val fontMaxMsg = stringResource(R.string.font_size_max, 72)
@@ -559,7 +560,7 @@ private fun ReaderDefaultsSection(
                 icon = null,
                 primary = false,
                 modifier = Modifier.weight(1f)
-            ) { familyText = fontFamily; familyEdit = true }
+            ) { fontSelectOpen = true }
             Spacer(modifier = Modifier.width(8.dp))
             ActionButton(
                 label = stringResource(R.string.add_custom_font),
@@ -594,41 +595,30 @@ private fun ReaderDefaultsSection(
         )
     }
 
-    if (familyEdit) {
-        var familyError by remember { mutableStateOf<String?>(null) }
-        AlertDialog(
-            onDismissRequest = { familyEdit = false },
-            title = { Text(stringResource(R.string.custom_fonts)) },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = familyText,
-                        onValueChange = { familyText = it },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    familyError?.let {
-                        Text(text = it, color = MaterialTheme.colorScheme.error)
+    if (fontSelectOpen) {
+        FontSelectDialog(
+            fontStore = fontStore,
+            currentFamily = fontFamily,
+            error = selectError,
+            onSelect = { value ->
+                scope.launch {
+                    val ok = if (value.isEmpty()) {
+                        viewModel.clearFontFamily()
+                        true
+                    } else {
+                        viewModel.setFontFamily(value)
+                    }
+                    if (ok) {
+                        selectError = null
+                        fontSelectOpen = false
+                    } else {
+                        selectError = invalidFontMsg
                     }
                 }
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        if (viewModel.setFontFamily(familyText)) {
-                            familyEdit = false
-                        } else {
-                            familyError = invalidFontMsg
-                        }
-                    }
-                }) {
-                    Text(stringResource(R.string.save))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { familyEdit = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
+            onDismiss = {
+                selectError = null
+                fontSelectOpen = false
             }
         )
     }

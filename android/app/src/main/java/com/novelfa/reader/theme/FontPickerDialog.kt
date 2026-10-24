@@ -2,6 +2,7 @@ package com.novelfa.reader.theme
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -229,5 +230,91 @@ private fun importFont(
         null
     } catch (e: Exception) {
         context.getString(R.string.font_copy_failed)
+    }
+}
+
+/**
+ * Font-selection list: replaces the old manual family-name typing
+ * (which accepted any string, typos included, with no feedback).
+ * Rows: Default (no font selected) first, then every FontStore file
+ * (bundled + user-added). Tapping a row selects it; the stored value
+ * is the file's name without extension — the same value the reader
+ * resolves by substring match — or "" for Default.
+ */
+@Composable
+fun FontSelectDialog(
+    fontStore: FontStore,
+    currentFamily: String,
+    error: String? = null,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    // Disk I/O off the composition: load the font list once on IO.
+    var fonts by remember { mutableStateOf(emptyList<String>()) }
+    LaunchedEffect(fontStore) {
+        fonts = withContext(Dispatchers.IO) { fontStore.list().map { it.name } }
+    }
+    val isEnglishFonts = LocalConfiguration.current.locales[0].language.startsWith("en")
+    Dialog(onDismissRequest = onDismiss) {
+        Card {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = stringResource(R.string.custom_fonts),
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                LazyColumn {
+                    item {
+                        FontSelectRow(
+                            label = stringResource(R.string.str_default),
+                            selected = currentFamily.isBlank(),
+                            onClick = { onSelect("") }
+                        )
+                    }
+                    items(fonts) { fileName ->
+                        val value = fileName.substringBeforeLast('.')
+                        FontSelectRow(
+                            label = fontDisplayName(fileName, isEnglishFonts),
+                            // Mirrors the reader's resolution (substring
+                            // match): a stem family selects its files.
+                            selected = currentFamily.isNotBlank() &&
+                                value.contains(currentFamily, ignoreCase = true),
+                            onClick = { onSelect(value) }
+                        )
+                    }
+                }
+                error?.let {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(text = it, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FontSelectRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            // Font names are centered, never RTL/LTR aligned.
+            textAlign = TextAlign.Center
+        )
+        if (selected) {
+            AppIcon(
+                AppIconKind.Check,
+                tint = MaterialTheme.colorScheme.primary,
+                size = 18.dp
+            )
+        } else {
+            Spacer(modifier = Modifier.width(18.dp))
+        }
     }
 }

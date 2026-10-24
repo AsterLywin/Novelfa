@@ -75,6 +75,11 @@ class SettingsViewModel(
         prefs.setFontFamily(clean)
         return true
     }
+
+    /** Default (no font selected): clears the family back to blank. */
+    suspend fun clearFontFamily() {
+        prefs.setFontFamily("")
+    }
     suspend fun setReaderLineHeight(value: String) = prefs.setReaderLineHeight(value)
     suspend fun setReaderMargin(value: String) = prefs.setReaderMargin(value)
     suspend fun setReaderSpacing(value: String) = prefs.setReaderSpacing(value)
