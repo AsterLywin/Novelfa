@@ -1,6 +1,7 @@
 package com.novelfa.reader.reader
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -153,6 +154,10 @@ fun ReaderScreen(
     var loadError by remember { mutableStateOf(false) }
     var pageHtml by remember { mutableStateOf("") }
     var pendingLastPage by remember { mutableStateOf(false) }
+    // Pager-recovery guard (see recoverPagerTurn): the chapter index
+    // whose pager already got its one reload; reset in gotoChapter
+    // whenever the chapter actually changes.
+    var pagerReloadTriedIndex by remember { mutableStateOf(-1) }
     // Fragment to land on after a cross-chapter in-book link opens its
     // chapter; applied (and cleared) by the onPageFinished hook.
     var pendingAnchor by remember { mutableStateOf<String?>(null) }
@@ -178,6 +183,7 @@ fun ReaderScreen(
     // press that changes nothing is explained instead of looking broken.
     val fontMinMsg = stringResource(R.string.font_size_min, 10)
     val fontMaxMsg = stringResource(R.string.font_size_max, 72)
+    val pagerReloadMsg = stringResource(R.string.pager_reload)
 
     suspend fun showVmError(v: ReaderViewModel) {
         snackbar.showSnackbar(chapterErr + (v.lastError ?: ""))
@@ -297,12 +303,40 @@ fun ReaderScreen(
     }
 
     suspend fun gotoChapter(v: ReaderViewModel, i: Int) {
+        // A real chapter change re-arms pager recovery; a same-chapter
+        // reload (the recovery itself, a mode switch) must not, or a
+        // permanently torn-down chapter would reload-loop on every tap.
+        if (i != v.index) pagerReloadTriedIndex = -1
         if (v.loadChapter(i)) {
             pageHtml = v.html
             pageBase = v.baseUrl
             rev++
         } else {
             showVmError(v)
+        }
+    }
+
+    /**
+     * Pager recovery, shared by native turns (turnPage) and JS tap
+     * turns (onPagerStuck): when a turn fails because the pager never
+     * became ready (torn down) or the live page was built without it,
+     * the reader otherwise sits dead with no signal at all. Reloading
+     * the current chapter once gives the pager a fresh document: a
+     * transient failure heals, and the guard above stops a
+     * content-permanent failure from looping. The user is told a
+     * reload happened, so a still-dead reader after it is a reportable
+     * fact instead of a mystery.
+     */
+    fun recoverPagerTurn() {
+        val vv = vm ?: return
+        if (pagerReloadTriedIndex == vv.index) {
+            Log.w("NovelfaPager", "page turn still failing after pager reload (chapter ${vv.index})")
+            return
+        }
+        pagerReloadTriedIndex = vv.index
+        scope.launch {
+            snackbar.showSnackbar(pagerReloadMsg)
+            gotoChapter(vv, vv.index)
         }
     }
 
@@ -379,6 +413,12 @@ fun ReaderScreen(
                         gotoChapter(v, v.index - 1)
                     }
                 }
+            },
+            // Pager stuck (JS tap turns): a torn-down or missing pager
+            // needs the same native recovery as swipe turns get in
+            // turnPage (one reload per chapter, guarded there).
+            onPagerStuck = {
+                scope.launch { recoverPagerTurn() }
             }
         )
     }
@@ -399,12 +439,24 @@ fun ReaderScreen(
         val wv = webView ?: return
         wv.evaluateJavascript("rdrTurn(${if (forward) 1 else -1})") { result ->
             val r = result?.trim()?.trim { it == '"' }
+            if (r == null) {
+                // rdrTurn itself is missing: the live page was built
+                // without the pager (a mode/desync), so no retry can
+                // ever turn it — recover instead of dying silently.
+                recoverPagerTurn()
+                return@evaluateJavascript
+            }
             if (r == "busy") {
                 if (attempt < 10) {
                     scope.launch {
                         delay(300)
                         if (vm === v) turnPage(v, forward, attempt + 1)
                     }
+                } else {
+                    // Pagination never became ready (torn down) — the
+                    // old code just stopped here and the reader sat
+                    // dead with no signal at all.
+                    recoverPagerTurn()
                 }
                 return@evaluateJavascript
             }

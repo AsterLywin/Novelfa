@@ -1085,9 +1085,18 @@ object HtmlBuilder {
         var d = fw ? 1 : -1;
         (function tryTurn(n) {
             var r = null;
-            try { r = window.rdrTurn(d); } catch (err) { return; }
+            try { r = window.rdrTurn(d); } catch (err) {
+                // rdrTurn missing: the live page was built without the
+                // pager. Same native recovery as a stuck pager below.
+                try { if (window.Android && Android.onPagerStuck) Android.onPagerStuck(); } catch (e2) { }
+                return;
+            }
             if (r === 'busy' && n < 10) {
                 setTimeout(function () { tryTurn(n + 1); }, 300);
+            } else if (r === 'busy') {
+                // Pagination never became ready (torn down): retries
+                // alone can never turn it — hand it to native recovery.
+                try { if (window.Android && Android.onPagerStuck) Android.onPagerStuck(); } catch (err) { }
             } else if (r === 'end') {
                 try { if (window.Android && Android.onPageEdge) Android.onPageEdge(1); } catch (err) { }
             } else if (r === 'start') {

@@ -27,7 +27,9 @@ class ScrollBridge(
     private val onLinkClick: (String, Int) -> Unit = { _, _ -> },
     private val onChapterVisible: (Int, Int) -> Unit = { _, _ -> },
     /** Paged-mode tap turn at a chapter edge: +1 = last page, -1 = first page. */
-    private val onPageEdge: (Int) -> Unit = {}
+    private val onPageEdge: (Int) -> Unit = {},
+    /** Paged-mode turn failed: pager torn down or missing (see recoverPagerTurn). */
+    private val onPagerStuck: () -> Unit = {}
 ) {
 
     @JavascriptInterface
@@ -48,6 +50,11 @@ class ScrollBridge(
     @JavascriptInterface
     fun onPageEdge(dir: Long) {
         onPageEdge(dir.toInt())
+    }
+
+    @JavascriptInterface
+    fun onPagerStuck() {
+        onPagerStuck()
     }
 }
 

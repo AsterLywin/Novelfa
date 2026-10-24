@@ -250,4 +250,5 @@
     <string name="theme_unlock_xp">%1$d از %2$d XP (عنوان «%3$s»)</string>
     <string name="font_size_min">کمترین سایز فونت مجاز %1$d است</string>
     <string name="font_size_max">بیشترین سایز فونت مجاز %1$d است</string>
+    <string name="pager_reload">در حال بارگذاری دوباره‌ی فصل…</string>
 </resources>

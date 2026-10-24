@@ -250,4 +250,5 @@
     <string name="theme_unlock_xp">%1$d of %2$d XP (title “%3$s”)</string>
     <string name="font_size_min">Minimum allowed font size is %1$d</string>
     <string name="font_size_max">Maximum allowed font size is %1$d</string>
+    <string name="pager_reload">Reloading the chapter…</string>
 </resources>

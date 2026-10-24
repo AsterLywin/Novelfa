@@ -394,12 +394,13 @@ private fun ActionButton(
     else MaterialTheme.colorScheme.surfaceVariant
     val fg = if (primary) MaterialTheme.colorScheme.onPrimaryContainer
     else MaterialTheme.colorScheme.onSurface
-    // The label is centered in the button, not just the icon+label
-    // group: with a plain centered group the text sits half an icon
-    // off-center (that is what the backup buttons showed). A balance
-    // spacer mirroring the icon+gap on the other side puts the text's
-    // own center on the button's center. fillMaxHeight keeps sibling
-    // buttons in a row the same height if a label ever wraps.
+    // The icon+label GROUP is centered in the button (the standard
+    // button look). An earlier version added a balance spacer to center
+    // the label itself instead; measured on device, that left the
+    // group ~20 units right of center (the invisible spacer sat on
+    // the left), which read as "the content is not centered at all".
+    // fillMaxHeight keeps sibling buttons in a row the same height
+    // if a label ever wraps.
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
@@ -420,10 +421,6 @@ private fun ActionButton(
                 color = fg,
                 textAlign = TextAlign.Center
             )
-            if (icon != null) {
-                Spacer(Modifier.width(6.dp))
-                Spacer(Modifier.width(15.dp))
-            }
         }
     }
 }
