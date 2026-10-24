@@ -43,11 +43,13 @@ fun RanksDialog(totalXp: Int, isEnglishUi: Boolean, onDismiss: () -> Unit) {
         text = {
             Column {
                 Text(
-                    text = level.displayName(isEnglishUi),
+                    text = level.title.displayName(isEnglishUi),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary
                 )
+                Spacer(modifier = Modifier.height(4.dp))
+                StarRow(fill = level.starFill, starSize = 18.dp)
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = stringResource(R.string.xp_total_label, totalXp),
@@ -88,10 +90,12 @@ private fun RankTitleRow(title: XpTitle, level: XpLevel, isEnglishUi: Boolean) {
     val achieved = title.index < level.titleIndex
     val isCurrent = title.index == level.titleIndex
     val locked = !achieved && !isCurrent
-    val stars = when {
-        achieved -> "★★★★★"
-        isCurrent -> "★".repeat(level.stars) + "☆".repeat(5 - level.stars)
-        else -> "☆☆☆☆☆"
+    // Drawn fill: achieved titles full, the current title fractional
+    // (progress inside it), locked titles empty outlines.
+    val fill = when {
+        achieved -> 5f
+        isCurrent -> level.starFill
+        else -> 0f
     }
     Row(
         modifier = Modifier
@@ -144,15 +148,7 @@ private fun RankTitleRow(title: XpTitle, level: XpLevel, isEnglishUi: Boolean) {
             }
         }
         Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = stars,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (locked) {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-                MaterialTheme.colorScheme.primary
-            }
-        )
+        StarRow(fill = fill, starSize = 15.dp)
     }
 }
 

@@ -74,6 +74,7 @@ import com.novelfa.reader.theme.FontPickerDialog
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankService
 import com.novelfa.reader.theme.RanksDialog
+import com.novelfa.reader.theme.StarRow
 import com.novelfa.reader.theme.XpRank
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -778,11 +779,13 @@ private fun RankSection(viewModel: SettingsViewModel) {
             // "تازه‌وارد" while home showed "کتاب‌باز ★☆☆☆☆" for the same
             // user, because settings used the old finished-books rank.
             Text(
-                text = level.displayName(isEnglishUi),
+                text = level.title.displayName(isEnglishUi),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.primary
             )
+            Spacer(modifier = Modifier.height(4.dp))
+            StarRow(fill = level.starFill, starSize = 18.dp)
             Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = stringResource(R.string.xp_total_label, s.totalXp),

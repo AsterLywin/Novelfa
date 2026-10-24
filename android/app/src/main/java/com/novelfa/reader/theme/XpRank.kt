@@ -53,6 +53,16 @@ data class XpLevel(
         null
     }
 
+    /**
+     * Continuous star fill for the drawn StarRow (0..5 across the row):
+     * progress inside the current title, so 12% in fills ~0.6 of a star
+     * instead of one whole glyph star. Past the cap the title is
+     * complete, so 5. [displayName] keeps the whole-glyph text form
+     * (used in sentences and unit tests); the drawn UI uses this.
+     */
+    val starFill: Float
+        get() = if (eternityMarks >= 1) 5f else (progress * 5.0).toFloat().coerceIn(0f, 5f)
+
     /** Display like «کتابدار ★★★☆☆» / «بلعنده‌ی جهان‌ها ✦۳». */
     fun displayName(isEnglish: Boolean): String {
         val base = title.displayName(isEnglish)

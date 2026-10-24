@@ -134,6 +134,7 @@ import com.novelfa.reader.theme.XpLevel
 import com.novelfa.reader.theme.XpRank
 import com.novelfa.reader.theme.RankService
 import com.novelfa.reader.theme.RanksDialog
+import com.novelfa.reader.theme.StarRow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -483,8 +484,11 @@ fun LibraryScreen(
     var removeFor by remember { mutableStateOf<BookEntity?>(null) }
 
     val finishedCount = remember(allBooks) { allBooks.count { isCompleted(it) } }
-    val rankName = remember(xpLevel, isEnglishUi) {
-        (xpLevel ?: XpRank.levelFor(0)).displayName(isEnglishUi)
+    val rankTitle = remember(xpLevel, isEnglishUi) {
+        (xpLevel ?: XpRank.levelFor(0)).title.displayName(isEnglishUi)
+    }
+    val rankStarFill = remember(xpLevel) {
+        (xpLevel ?: XpRank.levelFor(0)).starFill
     }
     // Precompute display titles once per book-list emission (O(n), not O(n²)).
     val titleMap = remember(allBooks) { displayTitleMap(allBooks) }
@@ -666,7 +670,8 @@ fun LibraryScreen(
                 ) {
                 libraryHeaderSpan(
                     profileName = profileName ?: "",
-                    rankName = rankName,
+                    rankTitle = rankTitle,
+                    rankStarFill = rankStarFill,
                     bookCount = visible.size,
                     avatarPath = avatarPath,
                     onAvatarClick = { avatarOpen = true },
@@ -755,7 +760,8 @@ fun LibraryScreen(
                 ) {
                 libraryHeaderList(
                     profileName = profileName ?: "",
-                    rankName = rankName,
+                    rankTitle = rankTitle,
+                    rankStarFill = rankStarFill,
                     bookCount = visible.size,
                     avatarPath = avatarPath,
                     onAvatarClick = { avatarOpen = true },
@@ -911,25 +917,32 @@ fun LibraryScreen(
             onDismissRequest = { dismissXpUp() },
             title = { Text(stringResource(tierTitleRes)) },
             text = {
-                Text(
-                    if (best != null) {
-                        val names = up.newThemes.joinToString(if (isEnglishUi) ", " else "، ") {
-                            it.displayName(isEnglishUi)
+                Column {
+                    Text(
+                        if (best != null) {
+                            val names = up.newThemes.joinToString(if (isEnglishUi) ", " else "، ") {
+                                it.displayName(isEnglishUi)
+                            }
+                            stringResource(
+                                R.string.xp_celebration_with_theme,
+                                up.toLevel.title.displayName(isEnglishUi),
+                                names,
+                                best.displayName(isEnglishUi)
+                            )
+                        } else {
+                            stringResource(
+                                R.string.xp_celebration_plain,
+                                up.toLevel.title.displayName(isEnglishUi),
+                                up.toLevel.xpToNext
+                            )
                         }
-                        stringResource(
-                            R.string.xp_celebration_with_theme,
-                            up.toLevel.displayName(isEnglishUi),
-                            names,
-                            best.displayName(isEnglishUi)
-                        )
-                    } else {
-                        stringResource(
-                            R.string.xp_celebration_plain,
-                            up.toLevel.displayName(isEnglishUi),
-                            up.toLevel.xpToNext
-                        )
-                    }
-                )
+                    )
+                    // Drawn stars under the sentence (fractional fill,
+                    // like everywhere else) instead of glyph stars
+                    // embedded in the message text.
+                    Spacer(modifier = Modifier.height(10.dp))
+                    StarRow(fill = up.toLevel.starFill, starSize = 20.dp)
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -1191,7 +1204,8 @@ fun LibraryScreen(
 
 private fun LazyGridScope.libraryHeaderSpan(
     profileName: String,
-    rankName: String,
+    rankTitle: String,
+    rankStarFill: Float,
     bookCount: Int,
     avatarPath: String,
     onAvatarClick: () -> Unit,
@@ -1216,7 +1230,8 @@ private fun LazyGridScope.libraryHeaderSpan(
     item(span = { GridItemSpan(maxLineSpan) }) {
         ProfileHeader(
             name = profileName.ifBlank { "…" },
-            rankName = rankName,
+            rankTitle = rankTitle,
+            rankStarFill = rankStarFill,
             bookCount = bookCount,
             avatarPath = avatarPath,
             onAvatarClick = onAvatarClick,
@@ -1258,7 +1273,8 @@ private fun LazyGridScope.libraryHeaderSpan(
 
 private fun LazyListScope.libraryHeaderList(
     profileName: String,
-    rankName: String,
+    rankTitle: String,
+    rankStarFill: Float,
     bookCount: Int,
     avatarPath: String,
     onAvatarClick: () -> Unit,
@@ -1283,7 +1299,8 @@ private fun LazyListScope.libraryHeaderList(
     item {
         ProfileHeader(
             name = profileName.ifBlank { "…" },
-            rankName = rankName,
+            rankTitle = rankTitle,
+            rankStarFill = rankStarFill,
             bookCount = bookCount,
             avatarPath = avatarPath,
             onAvatarClick = onAvatarClick,
@@ -1547,7 +1564,8 @@ private fun BiteOverlay(modifier: Modifier = Modifier) {
 @Composable
 private fun ProfileHeader(
     name: String,
-    rankName: String,
+    rankTitle: String,
+    rankStarFill: Float,
     bookCount: Int,
     avatarPath: String,
     onAvatarClick: () -> Unit,
@@ -1589,6 +1607,8 @@ private fun ProfileHeader(
                 // Tapping it opens the full ranks overview (same dialog as
                 // the settings Progress card); the rest of the header still
                 // opens rename, since this inner clickable wins on the badge.
+                // Title + drawn stars (StarRow): the old glyph stars are
+                // gone — fill is fractional, so progress reads precisely.
                 Box(
                     modifier = Modifier
                         .padding(top = 2.dp)
@@ -1600,11 +1620,15 @@ private fun ProfileHeader(
                         .padding(horizontal = 8.dp, vertical = 2.dp)
                         .clickable(onClick = onRankClick)
                 ) {
-                    Text(
-                        rankName,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            rankTitle,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        StarRow(fill = rankStarFill, starSize = 13.dp)
+                    }
                 }
                 Text(
                     pluralBooks(bookCount),
