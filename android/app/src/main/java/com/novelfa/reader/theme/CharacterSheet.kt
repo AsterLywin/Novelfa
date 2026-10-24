@@ -15,14 +15,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
+import android.util.Log
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +42,20 @@ import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.novelfa.reader.R
+
+/**
+ * Unlock conditions for one character theme, in both independent gates:
+ * the legacy finished-books rank and the XP title. The caller (settings)
+ * fills the localized rank/title names and the current counts.
+ */
+data class ThemeUnlockInfo(
+    val legacyDone: Int,
+    val legacyNeed: Int,
+    val legacyRankName: String,
+    val xpNow: Int,
+    val xpNeed: Int,
+    val xpTitleName: String
+)
 
 /**
  * Character-theme picker. Each row shows an initial-letter avatar in
@@ -51,9 +73,33 @@ fun CharacterSheet(
     onPick: (String?) -> Unit,
     onDismiss: () -> Unit,
     particlesEnabled: Boolean = false,
-    onToggleParticles: (Boolean) -> Unit = {}
+    onToggleParticles: (Boolean) -> Unit = {},
+    /**
+     * Loads unlock conditions for a theme on demand. When provided,
+     * tapping a locked row loads its conditions and opens the
+     * unlock-conditions dialog instead of doing nothing. Loading on
+     * tap (not when the sheet opens) avoids a race where a tap before
+     * the preload finished would silently do nothing.
+     */
+    unlockInfoLoader: (suspend (CharacterTheme) -> ThemeUnlockInfo?)? = null
 ) {
     val isEnglishUi = LocalConfiguration.current.locales[0].language.startsWith("en")
+    var pendingTheme by remember { mutableStateOf<CharacterTheme?>(null) }
+    var infoTheme by remember { mutableStateOf<Pair<CharacterTheme, ThemeUnlockInfo>?>(null) }
+    LaunchedEffect(pendingTheme) {
+        val theme = pendingTheme ?: return@LaunchedEffect
+        val loader = unlockInfoLoader
+        if (loader == null) {
+            pendingTheme = null
+            return@LaunchedEffect
+        }
+        try {
+            loader(theme)?.let { infoTheme = theme to it }
+        } catch (e: Exception) {
+            Log.w("NovelfaTheme", "Theme unlock info load failed", e)
+        }
+        pendingTheme = null
+    }
     Dialog(onDismissRequest = onDismiss) {
         Card {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -84,7 +130,13 @@ fun CharacterSheet(
                             accent = theme.dark.accent,
                             locked = locked,
                             active = activeId == theme.id,
-                            onClick = { if (!locked) onPick(theme.id) }
+                            onClick = {
+                                if (locked) {
+                                    pendingTheme = theme
+                                } else {
+                                    onPick(theme.id)
+                                }
+                            }
                         )
                     }
                 }
@@ -107,6 +159,80 @@ fun CharacterSheet(
             }
         }
     }
+    infoTheme?.let { (theme, info) ->
+        ThemeUnlockDialog(
+            theme = theme,
+            info = info,
+            isEnglishUi = isEnglishUi,
+            onDismiss = { infoTheme = null }
+        )
+    }
+}
+
+@Composable
+private fun ThemeUnlockDialog(
+    theme: CharacterTheme,
+    info: ThemeUnlockInfo,
+    isEnglishUi: Boolean,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(theme.displayName(isEnglishUi)) },
+        text = {
+            Column {
+                Text(
+                    text = theme.displayTagline(isEnglishUi),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = stringResource(R.string.theme_unlock_either),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = stringResource(
+                        R.string.theme_unlock_books,
+                        info.legacyDone, info.legacyNeed, info.legacyRankName
+                    ),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = {
+                        if (info.legacyNeed > 0) {
+                            (info.legacyDone.toFloat() / info.legacyNeed.toFloat()).coerceIn(0f, 1f)
+                        } else 1f
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = stringResource(
+                        R.string.theme_unlock_xp,
+                        info.xpNow, info.xpNeed, info.xpTitleName
+                    ),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = {
+                        if (info.xpNeed > 0) {
+                            (info.xpNow.toFloat() / info.xpNeed.toFloat()).coerceIn(0f, 1f)
+                        } else 1f
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.ok_2))
+            }
+        }
+    )
 }
 
 @Composable
@@ -125,7 +251,7 @@ private fun CharacterRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = !locked, onClick = onClick)
+            .clickable(onClick = onClick)
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

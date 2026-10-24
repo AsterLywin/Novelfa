@@ -1,6 +1,8 @@
 package com.novelfa.reader.settings
 
 import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -70,6 +72,7 @@ import com.novelfa.reader.theme.CharacterSheet
 import com.novelfa.reader.theme.FontPickerDialog
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankService
+import com.novelfa.reader.theme.XpRank
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -107,7 +110,13 @@ fun SettingsRoute(
             item { ThemeSection(viewModel) }
             item { AccentSection(viewModel) }
             item { CharacterSection(viewModel) }
-            item { ReaderDefaultsSection(viewModel, fontStore) }
+            item {
+                ReaderDefaultsSection(
+                    viewModel = viewModel,
+                    fontStore = fontStore,
+                    notify = { msg -> scope.launch { snackbar.showSnackbar(msg) } }
+                )
+            }
             item { LanguageSection(viewModel) }
             item { SupportSection(viewModel) }
             item {
@@ -136,9 +145,13 @@ fun SettingsRoute(
     }
 }
 
-/** Support prompt dialog (fa text from the Task 4 map). */
+/** Support prompt dialog (fa text from the Task 4 map). WPF parity:
+ * the Windows SupportToast is a clickable pill opening
+ * Daramet.com/NovelFa, so this dialog gets the same donate action
+ * instead of thank-you text with no way to act on it. */
 @Composable
 fun SupportDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.support_novelfa)) },
@@ -146,6 +159,16 @@ fun SupportDialog(onDismiss: () -> Unit) {
         confirmButton = {
             TextButton(onClick = onDismiss) {
                 Text(stringResource(R.string.ok_2))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse("http://Daramet.com/NovelFa"))
+                )
+                onDismiss()
+            }) {
+                Text(stringResource(R.string.link_donate))
             }
         }
     )
@@ -474,13 +497,18 @@ private fun CharacterSection(viewModel: SettingsViewModel) {
             particlesEnabled = particles,
             onToggleParticles = { enabled ->
                 scope.launch { viewModel.setThemeParticles(enabled) }
-            }
+            },
+            unlockInfoLoader = { theme -> viewModel.themeUnlockInfo(theme, isEnglishUi) }
         )
     }
 }
 
 @Composable
-private fun ReaderDefaultsSection(viewModel: SettingsViewModel, fontStore: FontStore) {
+private fun ReaderDefaultsSection(
+    viewModel: SettingsViewModel,
+    fontStore: FontStore,
+    notify: (String) -> Unit = {}
+) {
     val fontSize by viewModel.fontSize.collectAsState(initial = 18)
     val fontFamily by viewModel.fontFamily.collectAsState(initial = "")
     val lineHeight by viewModel.readerLineHeight.collectAsState(initial = "1.8")
@@ -491,6 +519,8 @@ private fun ReaderDefaultsSection(viewModel: SettingsViewModel, fontStore: FontS
     var familyEdit by remember { mutableStateOf(false) }
     var familyText by remember { mutableStateOf(fontFamily) }
     val invalidFontMsg = stringResource(R.string.invalid_font_name)
+    val fontMinMsg = stringResource(R.string.font_size_min, 10)
+    val fontMaxMsg = stringResource(R.string.font_size_max, 72)
 
     SectionCard(title = stringResource(R.string.reading_page), icon = AppIconKind.Reading) {
         IntStepper(
@@ -498,7 +528,9 @@ private fun ReaderDefaultsSection(viewModel: SettingsViewModel, fontStore: FontS
             value = fontSize,
             step = 1,
             range = 10..72,
-            onSet = { scope.launch { viewModel.setFontSize(it) } }
+            onSet = { scope.launch { viewModel.setFontSize(it) } },
+            onMinLimit = { notify(fontMinMsg) },
+            onMaxLimit = { notify(fontMaxMsg) }
         )
         RowDivider()
         Text(
@@ -717,46 +749,107 @@ private fun PinSection(viewModel: SettingsViewModel, notify: (String) -> Unit) {
 
 @Composable
 private fun RankSection(viewModel: SettingsViewModel) {
-    var summary by remember { mutableStateOf<RankSummary?>(null) }
+    var summary by remember { mutableStateOf<XpProgressSummary?>(null) }
     LaunchedEffect(Unit) {
-        summary = viewModel.currentRank()
+        summary = viewModel.xpProgress()
     }
+    val lang by viewModel.lang.collectAsState(initial = "fa")
+    val isEnglishUi = lang.startsWith("en")
     SectionCard(title = stringResource(R.string.progress), icon = AppIconKind.CheckCircle) {
         val s = summary
         if (s == null) {
             Text(stringResource(R.string.str_0))
         } else {
+            val level = s.level
+            // Same XP level display as the home header (title + stars or
+            // eternity marks): this is the fix for settings showing
+            // "تازه‌وارد" while home showed "کتاب‌باز ★☆☆☆☆" for the same
+            // user, because settings used the old finished-books rank.
             Text(
-                text = s.currentName,
+                text = level.displayName(isEnglishUi),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                fnPlural(R.string.book_completed_books_completed, s.completed, s.completed.toString()),
+                text = stringResource(R.string.xp_total_label, s.totalXp),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            if (s.nextName != null) {
-                Spacer(modifier = Modifier.height(12.dp))
-                LinearProgressIndicator(
-                    progress = {
-                        s.completed.toFloat() /
-                            (s.completed + s.remaining).coerceAtLeast(1).toFloat()
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                )
-                Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = stringResource(R.string.xp_title_of, level.titleIndex + 1),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (level.mark != null) {
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    fnPlural(
-                        R.string.more_book_to_reach_more_books_to_reach,
-                        s.remaining,
-                        s.remaining.toString(),
-                        s.nextName
+                    text = "✦ ${level.mark!!.displayName(isEnglishUi)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            LinearProgressIndicator(
+                progress = { level.progress.toFloat() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val nextStepName = if (level.titleIndex < XpRank.Titles.size - 1) {
+                XpRank.Titles[level.titleIndex + 1].displayName(isEnglishUi)
+            } else {
+                XpRank.eternityMarkFor(level.eternityMarks + 1).displayName(isEnglishUi)
+            }
+            Text(
+                text = stringResource(R.string.xp_more_to, level.xpToNext, nextStepName),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                fnPlural(
+                    R.string.book_completed_books_completed,
+                    s.finishedBooks,
+                    s.finishedBooks.toString()
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = stringResource(R.string.xp_legacy_rank, s.legacyRankName),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            val nextTheme = s.nextLockedTheme
+            if (nextTheme != null) {
+                val xpTitle = XpRank.Titles[nextTheme.xpTitle]
+                val legacyRank = RankService.Ranks[nextTheme.requiredRank]
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = stringResource(R.string.xp_next_theme, nextTheme.displayName(isEnglishUi)),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(
+                        R.string.theme_unlock_xp,
+                        s.totalXp, xpTitle.minXp, xpTitle.displayName(isEnglishUi)
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = stringResource(
+                        R.string.theme_unlock_books,
+                        s.finishedBooks, legacyRank.minBooks,
+                        legacyRank.displayName(isEnglishUi)
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -998,13 +1091,26 @@ private fun IntStepper(
     value: Int,
     step: Int,
     range: IntRange,
-    onSet: (Int) -> Unit
+    onSet: (Int) -> Unit,
+    /**
+     * Called instead of [onSet] when a press would pass a bound, so the
+     * caller can tell the user the limit instead of silently staying
+     * put (the font-size case: minus at 10 looked like a broken app).
+     */
+    onMinLimit: (() -> Unit)? = null,
+    onMaxLimit: (() -> Unit)? = null
 ) {
     StepperShell(
         label = label,
         valueText = value.toString(),
-        onMinus = { onSet((value - step).coerceIn(range)) },
-        onPlus = { onSet((value + step).coerceIn(range)) }
+        onMinus = {
+            val next = value - step
+            if (next < range.first) onMinLimit?.invoke() else onSet(next)
+        },
+        onPlus = {
+            val next = value + step
+            if (next > range.last) onMaxLimit?.invoke() else onSet(next)
+        }
     )
 }
 

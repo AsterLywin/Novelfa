@@ -236,4 +236,14 @@
     <string name="chapter_fallback">Section %1$d</string>
     <string name="no_character_theme_tagline">Back to the app\'s plain colors</string>
     <string name="animated_particles">Animated particles</string>
+    <string name="xp_total_label">Total XP: %1$d</string>
+    <string name="xp_title_of">Title %1$d of 12</string>
+    <string name="xp_more_to">%1$d more XP to “%2$s”</string>
+    <string name="xp_legacy_rank">Legacy rank (finished books): %1$s</string>
+    <string name="xp_next_theme">Next theme: %1$s</string>
+    <string name="theme_unlock_either">Unlocks through either path:</string>
+    <string name="theme_unlock_books">%1$d of %2$d finished books (rank “%3$s”)</string>
+    <string name="theme_unlock_xp">%1$d of %2$d XP (title “%3$s”)</string>
+    <string name="font_size_min">Minimum allowed font size is %1$d</string>
+    <string name="font_size_max">Maximum allowed font size is %1$d</string>
 </resources>

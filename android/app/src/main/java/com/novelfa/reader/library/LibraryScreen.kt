@@ -1,6 +1,7 @@
 package com.novelfa.reader.library
 
 import android.content.Intent
+import android.util.Log
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -398,10 +399,15 @@ fun LibraryScreen(
     var xpLevel by remember { mutableStateOf<XpLevel?>(null) }
     LaunchedEffect(tab) {
         gateTick++
-        runCatching {
+        try {
             RankHook.refreshXpRank(viewModel.dao, rankPrefs, prefs.getFinishedBooksRestored())
                 ?.let { xpRankUp = it }
             xpLevel = RankHook.xpLevelNow(viewModel.dao, rankPrefs, prefs.getFinishedBooksRestored())
+        } catch (e: Exception) {
+            // Was runCatching{} with no onFailure: a failing refresh silently
+            // skipped the celebration with nothing in logcat. Log it so a
+            // missing celebration is diagnosable instead of invisible.
+            Log.w("NovelfaXp", "XP celebration refresh failed", e)
         }
     }
     // Re-check XP on resume (gateTick): returning from the reader does not
@@ -409,10 +415,14 @@ fun LibraryScreen(
     // celebration earned mid-reading would wait for a tab switch. This
     // effect must NOT increment gateTick itself (that would loop).
     LaunchedEffect(gateTick) {
-        runCatching {
+        try {
             RankHook.refreshXpRank(viewModel.dao, rankPrefs, prefs.getFinishedBooksRestored())
                 ?.let { xpRankUp = it }
             xpLevel = RankHook.xpLevelNow(viewModel.dao, rankPrefs, prefs.getFinishedBooksRestored())
+        } catch (e: Exception) {
+            // See the LaunchedEffect(tab) block above: never swallow this
+            // silently, or a missing celebration leaves no trace.
+            Log.w("NovelfaXp", "XP celebration refresh failed", e)
         }
     }
     // Also re-check on resume: the PIN can be set/removed in Settings, and

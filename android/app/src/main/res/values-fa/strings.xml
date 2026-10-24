@@ -236,4 +236,14 @@
     <string name="chapter_fallback">بخش %1$d</string>
     <string name="no_character_theme_tagline">برگشت به رنگ ساده‌ی برنامه</string>
     <string name="animated_particles">ذرات متحرک</string>
+    <string name="xp_total_label">مجموع XP: %1$d</string>
+    <string name="xp_title_of">عنوان %1$d از ۱۲</string>
+    <string name="xp_more_to">%1$d XP دیگه تا «%2$s»</string>
+    <string name="xp_legacy_rank">رتبه‌ی قدیمی (کتاب تمام‌شده): %1$s</string>
+    <string name="xp_next_theme">تم بعدی: %1$s</string>
+    <string name="theme_unlock_either">با هرکدام از این دو راه باز می‌شود:</string>
+    <string name="theme_unlock_books">%1$d از %2$d کتاب تمام‌شده (رتبه‌ی «%3$s»)</string>
+    <string name="theme_unlock_xp">%1$d از %2$d XP (عنوان «%3$s»)</string>
+    <string name="font_size_min">کمترین سایز فونت مجاز %1$d است</string>
+    <string name="font_size_max">بیشترین سایز فونت مجاز %1$d است</string>
 </resources>

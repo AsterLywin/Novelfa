@@ -4,18 +4,28 @@ import android.content.Context
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.isCompleted
+import com.novelfa.reader.theme.CharacterTheme
+import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.RankPrefs
 import com.novelfa.reader.theme.RankService
+import com.novelfa.reader.theme.ThemeUnlockInfo
+import com.novelfa.reader.theme.XpLevel
+import com.novelfa.reader.theme.XpRank
 import java.util.Locale
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 
-/** Rank summary for the settings screen. */
-data class RankSummary(
-    val completed: Int,
-    val currentName: String,
-    val nextName: String?,
-    val remaining: Int
+/** Full XP progress for the settings Progress card (replaces the old
+ * finished-books-only rank: the home header already showed the XP level,
+ * so settings showed a different rank than home for the same user). */
+data class XpProgressSummary(
+    val totalXp: Int,
+    val level: XpLevel,
+    val finishedBooks: Int,
+    val legacyRankName: String,
+    val legacyIndex: Int,
+    /** Nearest still-locked theme by its XP gate, or null when all are open. */
+    val nextLockedTheme: CharacterTheme?
 )
 
 /**
@@ -88,24 +98,52 @@ class SettingsViewModel(
         applyLocale(context, clean)
     }
 
-    suspend fun currentRank(): RankSummary {
-        // Effective finished count includes the backup-restored floor, so
-        // the settings rank display matches the restored record even on an
-        // empty library (plan §7).
-        val done = maxOf(
+    /**
+     * XP level + finished-book count + legacy rank, after the one-time XP
+     * migration (idempotent: later calls just read the migrated totals).
+     * The effective finished count includes the backup-restored floor, so
+     * the display matches the restored record even on an empty library
+     * (plan §7).
+     */
+    suspend fun xpProgress(): XpProgressSummary {
+        val floor = prefs.getFinishedBooksRestored()
+        val level = RankHook.xpLevelNow(dao, rankPrefs, floor)
+        val finished = maxOf(
             dao.allBooks().first().count { !it.isPrivate && isCompleted(it) },
-            prefs.getFinishedBooksRestored()
+            floor
         )
         val service = rankService()
-        val idx = service.rankIndexFor(done)
-        val current = RankService.Ranks[idx]
-        val next = RankService.Ranks.getOrNull(idx + 1)
+        val legacyIndex = service.rankIndexFor(finished)
         val isEnglish = prefs.lang.first().startsWith("en")
-        return RankSummary(
-            completed = done,
-            currentName = current.displayName(isEnglish),
-            nextName = next?.displayName(isEnglish),
-            remaining = if (next != null) (next.minBooks - done).coerceAtLeast(0) else 0
+        val nextLocked = CharacterThemes.All
+            .filter { !service.isUnlocked(it) }
+            .minByOrNull { XpRank.Titles[it.xpTitle].minXp }
+        return XpProgressSummary(
+            totalXp = level.xp,
+            level = level,
+            finishedBooks = finished,
+            legacyRankName = RankService.Ranks[legacyIndex].displayName(isEnglish),
+            legacyIndex = legacyIndex,
+            nextLockedTheme = nextLocked
+        )
+    }
+
+    /**
+     * Unlock conditions for one character theme, in both gates: the legacy
+     * finished-books rank and the XP title. A locked theme is locked in
+     * both gates (plus no secret), so both progress bars are meaningful.
+     */
+    suspend fun themeUnlockInfo(theme: CharacterTheme, isEnglish: Boolean): ThemeUnlockInfo {
+        val progress = xpProgress()
+        val legacy = RankService.Ranks.getOrNull(theme.requiredRank)
+        val title = XpRank.Titles.getOrNull(theme.xpTitle)
+        return ThemeUnlockInfo(
+            legacyDone = progress.finishedBooks,
+            legacyNeed = legacy?.minBooks ?: 0,
+            legacyRankName = legacy?.displayName(isEnglish) ?: "",
+            xpNow = progress.totalXp,
+            xpNeed = title?.minXp ?: 0,
+            xpTitleName = title?.displayName(isEnglish) ?: ""
         )
     }
 

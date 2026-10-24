@@ -172,6 +172,11 @@ fun ReaderScreen(
     val chapterErr = stringResource(R.string.couldn_t_display_the_chapter)
     val openErr = stringResource(R.string.couldn_t_open_the_book)
     val themeErr = stringResource(R.string.couldn_t_apply_the_theme)
+    // Font-size limit messages (hoisted: stringResource is not callable
+    // from inside a coroutine). Shown when the user hits 10 or 72, so a
+    // press that changes nothing is explained instead of looking broken.
+    val fontMinMsg = stringResource(R.string.font_size_min, 10)
+    val fontMaxMsg = stringResource(R.string.font_size_max, 72)
 
     suspend fun showVmError(v: ReaderViewModel) {
         snackbar.showSnackbar(chapterErr + (v.lastError ?: ""))
@@ -602,21 +607,33 @@ fun ReaderScreen(
                             onClick = {
                                 scope.launch {
                                     val vv = vm ?: return@launch
-                                    vv.changeFontSize(-2)
-                                    pageHtml = vv.html
-                                    rev++
+                                    if (vv.fontSize <= 10) {
+                                        snackbar.showSnackbar(fontMinMsg)
+                                    } else {
+                                        vv.changeFontSize(-2)
+                                        pageHtml = vv.html
+                                        rev++
+                                    }
                                 }
                             },
                             enabled = v != null
                         ) { Text("−A") }
                         // Numeric size box between −A and +A (WPF txtFontSize
                         // parity): shows the current size, tap to type one.
+                        // A typed value outside 10..72 is reported (not
+                        // silently snapped): the ViewModel still clamps as
+                        // a safety net, but the user now knows the limit.
                         FontSizeBox(
                             fontSize = v?.fontSize ?: 18,
                             enabled = v != null,
                             onCommit = { size ->
                                 scope.launch {
                                     val vv = vm ?: return@launch
+                                    if (size < 10) {
+                                        snackbar.showSnackbar(fontMinMsg)
+                                    } else if (size > 72) {
+                                        snackbar.showSnackbar(fontMaxMsg)
+                                    }
                                     vv.setFontSize(size)
                                     pageHtml = vv.html
                                     rev++
@@ -627,9 +644,13 @@ fun ReaderScreen(
                             onClick = {
                                 scope.launch {
                                     val vv = vm ?: return@launch
-                                    vv.changeFontSize(2)
-                                    pageHtml = vv.html
-                                    rev++
+                                    if (vv.fontSize >= 72) {
+                                        snackbar.showSnackbar(fontMaxMsg)
+                                    } else {
+                                        vv.changeFontSize(2)
+                                        pageHtml = vv.html
+                                        rev++
+                                    }
                                 }
                             },
                             enabled = v != null
@@ -1099,10 +1120,13 @@ private fun ReadingModeChoice(
  * Shows the current size; tap to type a new one. Windows parity:
  * - digits only (MaxLength=2); Persian/Arabic digits are accepted and
  *   normalized to English digits on commit (NormalizeDigits parity);
- * - Done/Enter commits, clamped to 10..72;
- * - focus loss commits (LostFocus parity);
+ * - Done/Enter commits, focus loss commits (LostFocus parity);
  * - invalid/empty input reverts to the current size;
  * - A+/A− presses update the box via [fontSize].
+ *
+ * The raw typed value reaches [onCommit] unclamped: the caller reports
+ * an out-of-range value (10..72) to the user, and the ViewModel clamps
+ * as a safety net. Clamping here would hide the limit hit again.
  */
 @Composable
 private fun FontSizeBox(
@@ -1123,7 +1147,7 @@ private fun FontSizeBox(
             .joinToString("") { it.toString() }
         val value = digits.toIntOrNull()
         if (value != null) {
-            onCommit(value.coerceIn(10, 72))
+            onCommit(value)
         }
         // Revert the box to the current size (the remember(fontSize)
         // above refreshes it once the ViewModel reports the new size).
