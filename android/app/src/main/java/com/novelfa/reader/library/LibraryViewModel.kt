@@ -282,6 +282,17 @@ class LibraryViewModel(
         collections.removeBook(book.id)
     }
 
+    /**
+     * Deletes every private book (row, EPUB file, cover, chapter cache)
+     * through the normal remove path. Reading records are kept, like any
+     * other removal, so re-importing a file later restores its place.
+     * Used by the forgot-PIN recovery: without the PIN the protected
+     * content cannot be kept, so it is destroyed instead of bypassed.
+     */
+    suspend fun deleteAllPrivateBooks() {
+        dao.allBooks().first().filter { it.isPrivate }.forEach { removeBook(it) }
+    }
+
     suspend fun togglePrivate(book: BookEntity) = collections.togglePrivate(book.id)
 
     suspend fun removeFromCollection(book: BookEntity) =

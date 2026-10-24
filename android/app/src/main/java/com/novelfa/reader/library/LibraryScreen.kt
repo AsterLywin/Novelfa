@@ -121,6 +121,7 @@ import com.novelfa.reader.settings.PinDialog
 import com.novelfa.reader.settings.PinManager
 import com.novelfa.reader.settings.PinMode
 import com.novelfa.reader.settings.PinSession
+import com.novelfa.reader.settings.PinThrottle
 import com.novelfa.reader.settings.RankHook
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
@@ -382,6 +383,7 @@ fun LibraryScreen(
     val pinManager = viewModel.pinGate as? PinManager
     var unlocked by remember { mutableStateOf(PinSession.unlocked) }
     var pinOpen by remember { mutableStateOf(false) }
+    var forgotConfirm by remember { mutableStateOf(false) }
     // Re-check the gate whenever the tab is opened (PIN may be set/removed
     // from Settings while the library stays composed).
     var gateTick by remember { mutableIntStateOf(0) }
@@ -863,7 +865,47 @@ fun LibraryScreen(
                 unlocked = true
                 pinOpen = false
             },
-            onDismiss = { pinOpen = false }
+            onDismiss = { pinOpen = false },
+            onForgotPin = {
+                pinOpen = false
+                forgotConfirm = true
+            }
+        )
+    }
+
+    // Forgot-PIN recovery: the user is locked out, so the only safe way
+    // back is destroying the protected content, never bypassing the lock.
+    // Confirm first (irreversible), then delete all private books, clear
+    // the PIN and the throttle, and unlock the (now empty) private tab.
+    if (forgotConfirm && pinManager != null) {
+        val forgotDoneMsg = stringResource(R.string.forgot_pin_done)
+        AlertDialog(
+            onDismissRequest = { forgotConfirm = false },
+            title = { Text(stringResource(R.string.forgot_pin)) },
+            text = { Text(stringResource(R.string.forgot_pin_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        viewModel.deleteAllPrivateBooks()
+                        pinManager.clearPin()
+                        PinThrottle.reset()
+                        PinSession.unlocked = true
+                        unlocked = true
+                        forgotConfirm = false
+                        snackbar.showSnackbar(forgotDoneMsg)
+                    }
+                }) {
+                    Text(
+                        text = stringResource(R.string.delete),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { forgotConfirm = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
         )
     }
 

@@ -74,7 +74,9 @@ fun PinDialog(
     mode: PinMode,
     manager: PinManager,
     onSuccess: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** VERIFY mode only: "Forgot PIN" recovery. Null hides the button. */
+    onForgotPin: (() -> Unit)? = null
 ) {
     var first by remember { mutableStateOf("") }
     var second by remember { mutableStateOf("") }
@@ -219,6 +221,18 @@ fun PinDialog(
                 error?.let {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(text = it, color = MaterialTheme.colorScheme.error)
+                }
+                // Locked out of the private section with no PIN to enter:
+                // the only recovery is the forgot-PIN flow (parent shows
+                // the irreversible-deletion confirmation).
+                if (mode == PinMode.VERIFY && onForgotPin != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    TextButton(onClick = onForgotPin) {
+                        Text(
+                            text = stringResource(R.string.forgot_pin),
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
         },

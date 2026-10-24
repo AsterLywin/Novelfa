@@ -177,6 +177,9 @@
     <string name="invalid_font_name">اسم فونت معتبر نیست.</string>
     <string name="remove_pin">حذف پین</string>
     <string name="remove_pin_confirm">پین حذف بشه و بخش خصوصی بدون قفل باز بشه؟</string>
+    <string name="forgot_pin">فراموشی پین</string>
+    <string name="forgot_pin_message">این عمل همه‌ی کتاب‌های خصوصی را برای همیشه حذف می‌کند و غیر قابل بازگشت است. این یک محافظت امنیتی است: بدون پین نمی‌توان کتاب‌های خصوصی را باز کرد، و برای اینکه قفل دور زده نشود، تنها راه بازگشت حذف آن‌هاست. آیا می‌خواهید ادامه دهید؟</string>
+    <string name="forgot_pin_done">همه‌ی کتاب‌های خصوصی حذف شدند و پین پاک شد.</string>
     <string name="custom_font">فونت شخصی</string>
     <string name="font_name">اسم فونت</string>
     <string name="pick_font_file">انتخاب فایل فونت</string>

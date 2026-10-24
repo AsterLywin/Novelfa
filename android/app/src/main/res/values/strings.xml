@@ -177,6 +177,9 @@
     <string name="invalid_font_name">Font name is not valid.</string>
     <string name="remove_pin">Remove PIN</string>
     <string name="remove_pin_confirm">Remove the PIN and open the private section without a lock?</string>
+    <string name="forgot_pin">Forgot PIN</string>
+    <string name="forgot_pin_message">This will permanently delete all private books and cannot be undone. This is a security protection: without the PIN, private books cannot be opened, and so the lock cannot be bypassed, deleting them is the only way back. Do you want to continue?</string>
+    <string name="forgot_pin_done">All private books were deleted and the PIN was cleared.</string>
     <string name="custom_font">Custom font</string>
     <string name="font_name">Font name</string>
     <string name="pick_font_file">Choose font file</string>
