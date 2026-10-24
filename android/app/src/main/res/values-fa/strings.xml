@@ -240,6 +240,11 @@
     <string name="xp_more_to">%1$d XP دیگه تا «%2$s»</string>
     <string name="xp_legacy_rank">رتبه‌ی قدیمی (کتاب تمام‌شده): %1$s</string>
     <string name="xp_next_theme">تم بعدی: %1$s</string>
+    <string name="ranks_title">رنک‌ها</string>
+    <string name="ranks_view_all">مشاهده‌ی همه‌ی رنک‌ها</string>
+    <string name="ranks_eternity">نشان‌های ابدیت</string>
+    <string name="ranks_xp_required">%1$d XP لازم است</string>
+    <string name="ranks_from_xp">از %1$d XP</string>
     <string name="theme_unlock_either">با هرکدام از این دو راه باز می‌شود:</string>
     <string name="theme_unlock_books">%1$d از %2$d کتاب تمام‌شده (رتبه‌ی «%3$s»)</string>
     <string name="theme_unlock_xp">%1$d از %2$d XP (عنوان «%3$s»)</string>

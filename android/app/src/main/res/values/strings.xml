@@ -240,6 +240,11 @@
     <string name="xp_more_to">%1$d more XP to “%2$s”</string>
     <string name="xp_legacy_rank">Legacy rank (finished books): %1$s</string>
     <string name="xp_next_theme">Next theme: %1$s</string>
+    <string name="ranks_title">Ranks</string>
+    <string name="ranks_view_all">View all ranks</string>
+    <string name="ranks_eternity">Eternity marks</string>
+    <string name="ranks_xp_required">%1$d XP required</string>
+    <string name="ranks_from_xp">From %1$d XP</string>
     <string name="theme_unlock_either">Unlocks through either path:</string>
     <string name="theme_unlock_books">%1$d of %2$d finished books (rank “%3$s”)</string>
     <string name="theme_unlock_xp">%1$d of %2$d XP (title “%3$s”)</string>

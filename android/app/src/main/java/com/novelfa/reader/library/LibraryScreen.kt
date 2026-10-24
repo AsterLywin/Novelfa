@@ -133,6 +133,7 @@ import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.XpLevel
 import com.novelfa.reader.theme.XpRank
 import com.novelfa.reader.theme.RankService
+import com.novelfa.reader.theme.RanksDialog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -402,6 +403,7 @@ fun LibraryScreen(
     // app was closed in between. It stays pending until dismissed.
     var xpRankUp by remember { mutableStateOf<RankHook.XpRankUp?>(null) }
     var xpLevel by remember { mutableStateOf<XpLevel?>(null) }
+    var showRanks by remember { mutableStateOf(false) }
     LaunchedEffect(tab) {
         gateTick++
         try {
@@ -669,6 +671,7 @@ fun LibraryScreen(
                     avatarPath = avatarPath,
                     onAvatarClick = { avatarOpen = true },
                     onRename = { renameOpen = true },
+                    onRankClick = { showRanks = true },
                     total = visible.size,
                     reading = visible.count { isInProgress(it) },
                     done = finishedCount,
@@ -757,6 +760,7 @@ fun LibraryScreen(
                     avatarPath = avatarPath,
                     onAvatarClick = { avatarOpen = true },
                     onRename = { renameOpen = true },
+                    onRankClick = { showRanks = true },
                     total = visible.size,
                     reading = visible.count { isInProgress(it) },
                     done = finishedCount,
@@ -875,6 +879,14 @@ fun LibraryScreen(
 
     if (aboutOpen) {
         AboutDialog(onDismiss = { aboutOpen = false })
+    }
+
+    if (showRanks) {
+        RanksDialog(
+            totalXp = xpLevel?.xp ?: 0,
+            isEnglishUi = isEnglishUi,
+            onDismiss = { showRanks = false }
+        )
     }
 
     // XP celebration (home screen only): tiered by the highest new step —
@@ -1184,6 +1196,7 @@ private fun LazyGridScope.libraryHeaderSpan(
     avatarPath: String,
     onAvatarClick: () -> Unit,
     onRename: () -> Unit,
+    onRankClick: () -> Unit,
     total: Int,
     reading: Int,
     done: Int,
@@ -1207,7 +1220,8 @@ private fun LazyGridScope.libraryHeaderSpan(
             bookCount = bookCount,
             avatarPath = avatarPath,
             onAvatarClick = onAvatarClick,
-            onRename = onRename
+            onRename = onRename,
+            onRankClick = onRankClick
         )
     }
     item(span = { GridItemSpan(maxLineSpan) }) {
@@ -1249,6 +1263,7 @@ private fun LazyListScope.libraryHeaderList(
     avatarPath: String,
     onAvatarClick: () -> Unit,
     onRename: () -> Unit,
+    onRankClick: () -> Unit,
     total: Int,
     reading: Int,
     done: Int,
@@ -1272,7 +1287,8 @@ private fun LazyListScope.libraryHeaderList(
             bookCount = bookCount,
             avatarPath = avatarPath,
             onAvatarClick = onAvatarClick,
-            onRename = onRename
+            onRename = onRename,
+            onRankClick = onRankClick
         )
     }
     item {
@@ -1535,7 +1551,8 @@ private fun ProfileHeader(
     bookCount: Int,
     avatarPath: String,
     onAvatarClick: () -> Unit,
-    onRename: () -> Unit
+    onRename: () -> Unit,
+    onRankClick: () -> Unit
 ) {
     Card(onClick = onRename, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -1569,6 +1586,9 @@ private fun ProfileHeader(
             Column(modifier = Modifier.padding(start = 10.dp)) {
                 Text(name, style = MaterialTheme.typography.titleMedium)
                 // Rank badge with a colored outline, like the desktop client.
+                // Tapping it opens the full ranks overview (same dialog as
+                // the settings Progress card); the rest of the header still
+                // opens rename, since this inner clickable wins on the badge.
                 Box(
                     modifier = Modifier
                         .padding(top = 2.dp)
@@ -1578,6 +1598,7 @@ private fun ProfileHeader(
                             RoundedCornerShape(8.dp)
                         )
                         .padding(horizontal = 8.dp, vertical = 2.dp)
+                        .clickable(onClick = onRankClick)
                 ) {
                     Text(
                         rankName,

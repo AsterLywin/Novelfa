@@ -73,6 +73,7 @@ import com.novelfa.reader.theme.CharacterSheet
 import com.novelfa.reader.theme.FontPickerDialog
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankService
+import com.novelfa.reader.theme.RanksDialog
 import com.novelfa.reader.theme.XpRank
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -763,6 +764,7 @@ private fun PinSection(viewModel: SettingsViewModel, notify: (String) -> Unit) {
 @Composable
 private fun RankSection(viewModel: SettingsViewModel) {
     var summary by remember { mutableStateOf<XpProgressSummary?>(null) }
+    var showRanks by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         summary = viewModel.xpProgress()
     }
@@ -866,6 +868,17 @@ private fun RankSection(viewModel: SettingsViewModel) {
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            TextButton(onClick = { showRanks = true }) {
+                Text(stringResource(R.string.ranks_view_all))
+            }
+            if (showRanks) {
+                RanksDialog(
+                    totalXp = s.totalXp,
+                    isEnglishUi = isEnglishUi,
+                    onDismiss = { showRanks = false }
                 )
             }
         }
