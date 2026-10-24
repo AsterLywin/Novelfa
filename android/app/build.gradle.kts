@@ -20,7 +20,7 @@ val releaseKeyPassword: String? =
 android {
     namespace = "com.novelfa.reader"
     compileSdk = 35
-    defaultConfig { applicationId = "com.novelfa.reader"; minSdk = 29; targetSdk = 35; versionCode = 2; versionName = "1.0.1"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "com.novelfa.reader"; minSdk = 29; targetSdk = 35; versionCode = 2; versionName = "1.0.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     if (releaseKeystorePath != null) {
         signingConfigs {
             create("release") {
