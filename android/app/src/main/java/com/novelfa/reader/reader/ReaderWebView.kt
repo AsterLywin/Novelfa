@@ -29,7 +29,9 @@ class ScrollBridge(
     /** Paged-mode tap turn at a chapter edge: +1 = last page, -1 = first page. */
     private val onPageEdge: (Int) -> Unit = {},
     /** Paged-mode turn failed: pager torn down or missing (see recoverPagerTurn). */
-    private val onPagerStuck: () -> Unit = {}
+    private val onPagerStuck: () -> Unit = {},
+    /** Pager teardown reason from JS (see PAGER_JS teardown): surfaced to logcat. */
+    private val onPagerError: (String) -> Unit = {}
 ) {
 
     @JavascriptInterface
@@ -55,6 +57,11 @@ class ScrollBridge(
     @JavascriptInterface
     fun onPagerStuck() {
         onPagerStuck()
+    }
+
+    @JavascriptInterface
+    fun onPagerError(msg: String) {
+        onPagerError(msg)
     }
 }
 

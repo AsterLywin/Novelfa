@@ -268,4 +268,5 @@
     <string name="font_size_min">Minimum allowed font size is %1$d</string>
     <string name="font_size_max">Maximum allowed font size is %1$d</string>
     <string name="pager_reload">Reloading the chapter…</string>
+    <string name="pager_failed">This chapter’s pagination failed; scroll vertically to read, or open another chapter from the list.</string>
 </resources>

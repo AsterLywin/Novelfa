@@ -158,6 +158,13 @@ fun ReaderScreen(
     // whose pager already got its one reload; reset in gotoChapter
     // whenever the chapter actually changes.
     var pagerReloadTriedIndex by remember { mutableStateOf(-1) }
+    // Guard-spent message guard (same reset rule): the chapter index
+    // the "pagination failed" notice was already shown for.
+    var pagerFailedShownIndex by remember { mutableStateOf(-1) }
+    // Last JS pager-teardown reason (via the onPagerError bridge),
+    // shown in the recovery notices so a still-dead reader is
+    // diagnosable instead of a mystery.
+    var lastPagerError by remember { mutableStateOf<String?>(null) }
     // Fragment to land on after a cross-chapter in-book link opens its
     // chapter; applied (and cleared) by the onPageFinished hook.
     var pendingAnchor by remember { mutableStateOf<String?>(null) }
@@ -184,6 +191,7 @@ fun ReaderScreen(
     val fontMinMsg = stringResource(R.string.font_size_min, 10)
     val fontMaxMsg = stringResource(R.string.font_size_max, 72)
     val pagerReloadMsg = stringResource(R.string.pager_reload)
+    val pagerFailedMsg = stringResource(R.string.pager_failed)
 
     suspend fun showVmError(v: ReaderViewModel) {
         snackbar.showSnackbar(chapterErr + (v.lastError ?: ""))
@@ -306,7 +314,11 @@ fun ReaderScreen(
         // A real chapter change re-arms pager recovery; a same-chapter
         // reload (the recovery itself, a mode switch) must not, or a
         // permanently torn-down chapter would reload-loop on every tap.
-        if (i != v.index) pagerReloadTriedIndex = -1
+        if (i != v.index) {
+            pagerReloadTriedIndex = -1
+            pagerFailedShownIndex = -1
+            lastPagerError = null
+        }
         if (v.loadChapter(i)) {
             pageHtml = v.html
             pageBase = v.baseUrl
@@ -330,12 +342,25 @@ fun ReaderScreen(
     fun recoverPagerTurn() {
         val vv = vm ?: return
         if (pagerReloadTriedIndex == vv.index) {
+            // The one reload already happened and the pager still
+            // fails: further turns used to die silently here, leaving
+            // a dead reader with no signal at all. Say so once per
+            // chapter, with the JS teardown reason when known, and
+            // point at the ways the chapter stays readable (teardown
+            // restores it as a scrolling page, and the drawer can open
+            // another chapter whose pager may work).
             Log.w("NovelfaPager", "page turn still failing after pager reload (chapter ${vv.index})")
+            if (pagerFailedShownIndex != vv.index) {
+                pagerFailedShownIndex = vv.index
+                val suffix = lastPagerError?.let { " ($it)" } ?: ""
+                scope.launch { snackbar.showSnackbar(pagerFailedMsg + suffix) }
+            }
             return
         }
         pagerReloadTriedIndex = vv.index
         scope.launch {
-            snackbar.showSnackbar(pagerReloadMsg)
+            val suffix = lastPagerError?.let { " ($it)" } ?: ""
+            snackbar.showSnackbar(pagerReloadMsg + suffix)
             gotoChapter(vv, vv.index)
         }
     }
@@ -419,6 +444,13 @@ fun ReaderScreen(
             // turnPage (one reload per chapter, guarded there).
             onPagerStuck = {
                 scope.launch { recoverPagerTurn() }
+            },
+            // JS teardown reason: logged and kept for the recovery
+            // notices, so a deterministically failing chapter reports
+            // WHY instead of just dying.
+            onPagerError = { msg ->
+                Log.w("NovelfaPager", "pager teardown: $msg")
+                scope.launch { lastPagerError = msg }
             }
         )
     }

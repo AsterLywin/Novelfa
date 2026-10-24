@@ -843,6 +843,7 @@ object HtmlBuilder {
         tornDown = true;
         window.__rdrPagerError = String(err && err.message || err || 'teardown');
         window.__rdrPagerFailed = true;
+        try { if (window.Android && Android.onPagerError) Android.onPagerError(window.__rdrPagerError); } catch (e) { }
         try {
             if (strip && strip.parentNode) strip.parentNode.removeChild(strip);
             if (source && chap) {
