@@ -44,7 +44,7 @@ class HtmlBuilderTest {
         val html = build()
         assertTrue(html.contains("font-size:18px"))
         assertTrue(html.contains("Vazirmatn"))
-        assertTrue(html.contains("Tahoma,sans-serif"))
+        assertTrue(html.contains("'NovelfaFallback',sans-serif"))
     }
 
     @Test

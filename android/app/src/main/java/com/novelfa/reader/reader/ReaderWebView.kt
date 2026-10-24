@@ -25,7 +25,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 class ScrollBridge(
     private val onScroll: (Int, Int, Int, Int) -> Unit,
     private val onLinkClick: (String, Int) -> Unit = { _, _ -> },
-    private val onChapterVisible: (Int, Int) -> Unit = { _, _ -> }
+    private val onChapterVisible: (Int, Int) -> Unit = { _, _ -> },
+    /** Paged-mode tap turn at a chapter edge: +1 = last page, -1 = first page. */
+    private val onPageEdge: (Int) -> Unit = {}
 ) {
 
     @JavascriptInterface
@@ -41,6 +43,11 @@ class ScrollBridge(
     @JavascriptInterface
     fun onChapter(ci: Long, gen: Long) {
         onChapterVisible(ci.toInt(), gen.toInt())
+    }
+
+    @JavascriptInterface
+    fun onPageEdge(dir: Long) {
+        onPageEdge(dir.toInt())
     }
 }
 
@@ -121,25 +128,48 @@ fun ReaderWebView(
                 settings.defaultTextEncodingName = "utf-8"
                 // Horizontal fling -> previous/next page. Observed only, never
                 // consumed, so vertical scrolling and pinch zoom keep working.
+                // Plus drag-to-turn (paged mode only): a slow horizontal
+                // drag that passes 140px also turns once per gesture, so
+                // paging does not depend on fling velocity alone. The
+                // flag stops a drag-turn and its release fling from
+                // turning twice, and resets on every new touch-down.
+                var turnedThisGesture = false
                 val swipeDetector = GestureDetector(ctx,
                     object : GestureDetector.SimpleOnGestureListener() {
                         override fun onFling(
                             e1: MotionEvent?, e2: MotionEvent,
                             velocityX: Float, velocityY: Float
                         ): Boolean {
-                            if (e1 == null) return false
+                            if (e1 == null || turnedThisGesture) return false
                             val dx = e2.x - e1.x
                             val dy = e2.y - e1.y
                             if (abs(dx) > abs(dy) * 1.5f &&
                                 abs(dx) > 80f && abs(velocityX) > 400f
                             ) {
                                 if (dx < 0) onSwipeLeft() else onSwipeRight()
+                                turnedThisGesture = true
+                                return true
+                            }
+                            return false
+                        }
+
+                        override fun onScroll(
+                            e1: MotionEvent?, e2: MotionEvent,
+                            distanceX: Float, distanceY: Float
+                        ): Boolean {
+                            if (e1 == null || turnedThisGesture || !pagedNow.value) return false
+                            val dx = e2.x - e1.x
+                            val dy = e2.y - e1.y
+                            if (abs(dx) > abs(dy) * 1.5f && abs(dx) > 140f) {
+                                if (dx < 0) onSwipeLeft() else onSwipeRight()
+                                turnedThisGesture = true
                                 return true
                             }
                             return false
                         }
                     })
                 setOnTouchListener { _, event ->
+                    if (event.action == MotionEvent.ACTION_DOWN) turnedThisGesture = false
                     val handled = swipeDetector.onTouchEvent(event)
                     // In paged mode the turn is fully programmatic; consume
                     // the fling so the WebView can't fling-scroll natively

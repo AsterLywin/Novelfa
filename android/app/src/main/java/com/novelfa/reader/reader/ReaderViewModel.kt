@@ -59,6 +59,13 @@ class ReaderViewModel(
     var theme: ReaderTheme = Themes.DARK,
     var isEnglish: Boolean = false,
     var fontFiles: List<File> = emptyList(),
+    /**
+     * Bundled fallback font files (Vazirmatn). Their faces are emitted
+     * under [HtmlBuilder.FALLBACK_FAMILY] so the reader font stack never
+     * falls through to the phone's own system font: a user-installed
+     * phone font must not re-shape reader layout or glyphs.
+     */
+    var fallbackFontFiles: List<File> = emptyList(),
     /** XP clock (injectable for tests); default is wall-clock time. */
     private val xpClock: () -> Long = { System.currentTimeMillis() },
     /**
@@ -98,7 +105,12 @@ class ReaderViewModel(
     /** In-memory cache of prepared chapter bodies (trimWindow rebuilds). */
     private val preparedCache = LinkedHashMap<Int, String>()
 
-    var fontFamily: String = initialBook.fontFamily.ifBlank { "Tahoma" }
+    // Tahoma is gone from the Android app (it does not exist on Android
+    // and only ever fell through to the phone's system font): a blank
+    // or legacy-Tahoma family renders with the bundled NovelfaFallback
+    // face from the CSS stack instead.
+    var fontFamily: String =
+        initialBook.fontFamily.takeIf { it.isNotBlank() && !it.equals("Tahoma", ignoreCase = true) } ?: ""
         private set
     // Observable so the bottom-bar FontSizeBox recomposes when A+/A- or
     // the numeric box changes it (a plain var never notifies Compose).
@@ -116,13 +128,14 @@ class ReaderViewModel(
      * on every call; the files don't change mid-session, so cache by
      * (family, file list). Invalidated when the font changes.
      */
-    private var fontFaceCacheKey: Pair<String, List<File>>? = null
+    private var fontFaceCacheKey: Triple<String, List<File>, List<File>>? = null
     private var fontFaceCacheValue: String = ""
 
     private fun cachedFontFaceCss(): String {
-        val key = fontFamily to fontFiles
+        val key = Triple(fontFamily, fontFiles, fallbackFontFiles)
         if (key != fontFaceCacheKey) {
-            fontFaceCacheValue = HtmlBuilder.fontFaceCss(fontFamily, fontFiles)
+            fontFaceCacheValue = HtmlBuilder.fontFaceCss(fontFamily, fontFiles) +
+                HtmlBuilder.fontFaceCss(HtmlBuilder.FALLBACK_FAMILY, fallbackFontFiles)
             fontFaceCacheKey = key
         }
         return fontFaceCacheValue

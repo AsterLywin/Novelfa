@@ -13,7 +13,7 @@ data class BookEntity(
     val coverPath: String? = null,
     val totalChapters: Int,
     val lastChapterIndex: Int = 0,
-    val fontFamily: String = "Tahoma",
+    val fontFamily: String = "",
     val fontSize: Int = 18,
     val lineHeight: Double = 0.0,
     val sideMargin: Int = 0,

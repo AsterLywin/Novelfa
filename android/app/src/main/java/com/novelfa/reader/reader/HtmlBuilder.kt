@@ -20,6 +20,17 @@ import java.util.Locale
  */
 object HtmlBuilder {
 
+    /**
+     * Family name of the bundled fallback face. The reader font stack
+     * ends with this face (see [build]) so text NEVER resolves to the
+     * phone's own system font: a user-installed phone font must not be
+     * able to re-shape the reader's layout or glyphs. The face is fed
+     * by the bundled Vazirmatn files (the same files the app UI font
+     * comes from); when they are absent it simply resolves to nothing
+     * and the old system-sans-serif fallback applies.
+     */
+    const val FALLBACK_FAMILY = "NovelfaFallback"
+
     fun cssQuote(s: String): String =
         (s).replace("\\", "\\\\").replace("'", "\\'")
 
@@ -68,7 +79,7 @@ object HtmlBuilder {
         } else {
             sb.append("body{direction:rtl;text-align:right;font-family:'")
         }
-        sb.append(cssQuote(fontFamily)).append("',Tahoma,sans-serif;font-size:").append(fontSize)
+        sb.append(cssQuote(fontFamily)).append("','").append(FALLBACK_FAMILY).append("',sans-serif;font-size:").append(fontSize)
         sb.append("px;line-height:1.8;padding:16px 24px;background-color:")
             .append(theme.bg).append(";color:").append(theme.text)
             .append(";animation:rdrFade .3s ease-out;}")
@@ -172,6 +183,18 @@ object HtmlBuilder {
         // image's own margins (24px) and a possible caption, so a figure
         // can never overflow its page or force a phantom page.
         sb.append("html.rdr-paged img{max-height:calc(100vh - 128px) !important;}")
+        // Full-bleed image pages (see markImagePages in PAGER_JS): the
+        // page padding is dropped, the single image fills the whole
+        // content box (contain: never cropped, never distorted), and a
+        // blurred cover copy of the same image sits behind it, so the
+        // aspect-mismatch remainder reads as artwork-colored ambience
+        // instead of empty black bars. The backdrop rule is deliberately
+        // more specific than the main-image rule below so it wins.
+        sb.append(".rdr-page.rdr-imgpage{padding:0 !important;}")
+        sb.append(".rdr-page.rdr-imgpage>:not(.rdr-imgbg){position:relative;z-index:1;height:100% !important;margin:0 !important;display:flex;align-items:center;justify-content:center;}")
+        sb.append(".rdr-page.rdr-imgpage img,.rdr-page.rdr-imgpage svg{width:100% !important;height:100% !important;max-width:100% !important;max-height:none !important;margin:0 !important;object-fit:contain !important;}")
+        sb.append(".rdr-imgbg{position:absolute;top:0;right:0;bottom:0;left:0;overflow:hidden;pointer-events:none;}")
+        sb.append(".rdr-page.rdr-imgpage .rdr-imgbg img,.rdr-page.rdr-imgpage .rdr-imgbg svg{width:100% !important;height:100% !important;max-width:none !important;max-height:none !important;margin:0 !important;object-fit:cover !important;filter:blur(28px) brightness(0.65);transform:scale(1.15);}")
         return sb.toString()
     }
 
@@ -878,6 +901,63 @@ object HtmlBuilder {
             show(pageForAnchor(anchor), true);
         }
         watchLateImages();
+        // After the watch: backdrops must never be watched as late
+        // images (they load from cache and would only cause extra
+        // repagination cycles), so marking runs last.
+        markImagePages();
+    }
+
+    // Full-bleed image pages: a page whose only visual content is one
+    // image (possibly wrapped once in a div/figure/p, or an SVG) gets
+    // .rdr-imgpage (see pagedCss): padding drops, the image fills the
+    // content box, and a blurred cover copy of the same image is laid
+    // behind it so the aspect-mismatch remainder is ambience, not
+    // black bars. Book-markup vertical centering (flex wrappers,
+    // full-height SVGs) is neutralized by the CSS forcing the wrapper
+    // to full height with no margins. Tall (scrolling) pages are left
+    // alone, and text pages with inline pictures are never marked:
+    // the rule requires exactly one visual element. Runs after every
+    // build (including repaginations); the next rebuild wipes the
+    // strip, so backdrops can never be measured as content.
+    function singleVisual(el) {
+        var n = el, depth = 0;
+        while (n && depth < 4) {
+            if (n.nodeType === 1 && (n.tagName === 'IMG' || n.tagName === 'SVG')) return n;
+            var kids = [], i, c;
+            for (i = 0; i < n.childNodes.length; i++) {
+                c = n.childNodes[i];
+                if (c.nodeType === 1) kids.push(c);
+                else if (c.nodeType === 3 && /\S/.test(c.nodeValue)) return null;
+            }
+            if (kids.length !== 1) return null;
+            n = kids[0];
+            depth++;
+        }
+        return null;
+    }
+    function markImagePages() {
+        var i, pg, vis, bg, clone, j, ch, kids;
+        for (i = 0; i < pages.length; i++) {
+            pg = pages[i].el;
+            if (pg.className.indexOf('rdr-tall') >= 0) continue;
+            kids = [];
+            for (j = 0; j < pg.childNodes.length; j++) {
+                ch = pg.childNodes[j];
+                if (ch.nodeType === 1) kids.push(ch);
+            }
+            if (kids.length !== 1) continue;
+            vis = singleVisual(kids[0]);
+            if (!vis) continue;
+            pg.classList.add('rdr-imgpage');
+            bg = document.createElement('div');
+            bg.className = 'rdr-imgbg';
+            clone = vis.cloneNode(true);
+            if (clone.tagName === 'SVG') {
+                try { clone.setAttribute('preserveAspectRatio', 'xMidYMid slice'); } catch (e) { }
+            }
+            bg.appendChild(clone);
+            pg.insertBefore(bg, pg.firstChild);
+        }
     }
 
     function scheduleRepaginate() {
@@ -980,6 +1060,41 @@ object HtmlBuilder {
     window.rdrPageCount = function () { return ready ? pages.length : 0; };
     window.rdrCurrentPage = function () { return ready ? cur : 0; };
     window.rdrPaginate = function () { scheduleRepaginate(); };
+
+    // Tap zones (paged mode): tapping the outer quarters of the page
+    // turns it — the bottom-bar chapter buttons are hidden in paged
+    // mode, so this (plus swipe/drag) is how pages turn. The middle
+    // half does nothing, so ordinary text taps never turn a page.
+    // Links are excluded: LINK_JS (capture phase) owns them, and this
+    // bubble-phase handler returns early for any tap inside an <a>.
+    // At a chapter edge rdrTurn answers 'end'/'start'; those go to
+    // native code via Android.onPageEdge so the chapter advances
+    // exactly like a swipe turn does. A 'busy' answer (pagination
+    // still building, or mid-animation) is retried like native
+    // turnPage does instead of being dropped.
+    document.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.nodeType !== 1) t = t.parentElement;
+        if (t && t.closest && t.closest('a[href]')) return;
+        var w = window.innerWidth || 0;
+        if (!w) return;
+        var x = e.clientX || 0;
+        var fw = rtl ? (x < w * 0.25) : (x > w * 0.75);
+        var bk = rtl ? (x > w * 0.75) : (x < w * 0.25);
+        if (!fw && !bk) return;
+        var d = fw ? 1 : -1;
+        (function tryTurn(n) {
+            var r = null;
+            try { r = window.rdrTurn(d); } catch (err) { return; }
+            if (r === 'busy' && n < 10) {
+                setTimeout(function () { tryTurn(n + 1); }, 300);
+            } else if (r === 'end') {
+                try { if (window.Android && Android.onPageEdge) Android.onPageEdge(1); } catch (err) { }
+            } else if (r === 'start') {
+                try { if (window.Android && Android.onPageEdge) Android.onPageEdge(-1); } catch (err) { }
+            }
+        })(0);
+    });
 
     // ------------------------------------------------------------------
     // Boot: park the original chapter content in .rdr-source, create the

@@ -129,7 +129,6 @@
     <string name="make_public">عمومی کن</string>
     <string name="choose_theme">تم مطالعه</string>
     <string name="choose_font">فونت مطالعه</string>
-    <string name="font_system_tahoma">Tahoma (سیستمی)</string>
     <string name="exit_fullscreen">خروج از تمام‌صفحه</string>
 
     <string name="n_selected">%1$d انتخاب شده</string>

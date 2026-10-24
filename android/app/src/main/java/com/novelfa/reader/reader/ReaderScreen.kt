@@ -225,6 +225,15 @@ fun ReaderScreen(
                     it.nameWithoutExtension.contains(entity.fontFamily, ignoreCase = true)
                 }
             }
+            // Bundled fallback faces (Vazirmatn): installed from assets
+            // on first launch, so they are present whenever the reader
+            // opens. They feed the NovelfaFallback stack entry that keeps
+            // reader text off the phone's own system font.
+            val fallbackFiles = withContext(Dispatchers.IO) {
+                store.list().filter {
+                    it.nameWithoutExtension.contains("Vazirmatn", ignoreCase = true)
+                }
+            }
             val savedTheme = withContext(Dispatchers.IO) { prefs.getReaderTheme(bookId) }
             val savedMode = withContext(Dispatchers.IO) { prefs.getReadingMode() }
             val charThemeId = withContext(Dispatchers.IO) { prefs.charTheme.first() }
@@ -249,6 +258,7 @@ fun ReaderScreen(
                 parsed.chapters,
                 theme = ReaderViewModel.themeForBook(savedTheme, charThemeId, isLight),
                 fontFiles = files,
+                fallbackFontFiles = fallbackFiles,
                 onXpUnitFinished = xpCallback
             )
             v.readingMode = ReadingMode.fromKey(savedMode)
@@ -354,6 +364,20 @@ fun ReaderScreen(
                     if (gen != v.docGen) return@launch
                     v.onChapterVisible(ci)
                     rev++
+                }
+            },
+            // Paged-mode tap turn at a chapter edge (the JS tap zones
+            // call rdrTurn directly, so edges need native handling just
+            // like swipe turns get in turnPage).
+            onPageEdge = { dir ->
+                scope.launch {
+                    val v = vm ?: return@launch
+                    if (dir > 0 && v.index + 1 < v.chapters.size) {
+                        gotoChapter(v, v.index + 1)
+                    } else if (dir < 0 && v.index > 0) {
+                        pendingLastPage = true
+                        gotoChapter(v, v.index - 1)
+                    }
                 }
             }
         )
@@ -604,6 +628,12 @@ fun ReaderScreen(
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Paged (horizontal) mode: chapter jumps happen
+                        // by turning past the chapter's edges (tap zones,
+                        // swipe, drag) and via the chapter drawer, so the
+                        // Previous/Next section buttons are replaced by
+                        // those gestures here. Vertical mode keeps them.
+                        if (modeNow != ReadingMode.PAGED_HORIZONTAL) {
                         TextButton(
                             onClick = {
                                 val vv = vm ?: return@TextButton
@@ -618,6 +648,7 @@ fun ReaderScreen(
                             },
                             enabled = v != null && v.index < v.chapters.size - 1
                         ) { Text(stringResource(R.string.next_chapter)) }
+                        }
                         TextButton(
                             onClick = {
                                 scope.launch {
@@ -918,11 +949,13 @@ fun ReaderScreen(
     if (fontOpen) {
         val v = vm
         // Disk I/O off the composition: load the family list once on IO.
-        var families by remember { mutableStateOf(listOf("Tahoma")) }
+        // No Tahoma entry: it does not exist on Android and only ever
+        // fell through to the phone's system font.
+        var families by remember { mutableStateOf(emptyList<String>()) }
         LaunchedEffect(fontOpen) {
             families = withContext(Dispatchers.IO) {
                 val store = FontStore(context)
-                listOf("Tahoma") + store.list()
+                store.list()
                     .map { it.nameWithoutExtension }
                     .filter { it.isNotBlank() }
                     .distinct()
@@ -939,12 +972,8 @@ fun ReaderScreen(
                             scope.launch {
                                 val store = FontStore(context)
                                 val files = withContext(Dispatchers.IO) {
-                                    if (family == "Tahoma") {
-                                        emptyList()
-                                    } else {
-                                        store.list().filter {
-                                            it.nameWithoutExtension.contains(family, ignoreCase = true)
-                                        }
+                                    store.list().filter {
+                                        it.nameWithoutExtension.contains(family, ignoreCase = true)
                                     }
                                 }
                                 if (v?.changeFontFamily(family, files) == true) {
@@ -955,10 +984,7 @@ fun ReaderScreen(
                                 fontOpen = false
                             }
                         }) {
-                            Text(
-                                if (family == "Tahoma") stringResource(R.string.font_system_tahoma)
-                                else family
-                            )
+                            Text(family)
                         }
                     }
                 }

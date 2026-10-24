@@ -129,7 +129,6 @@
     <string name="make_public">Make public</string>
     <string name="choose_theme">Reading theme</string>
     <string name="choose_font">Reading font</string>
-    <string name="font_system_tahoma">Tahoma (system)</string>
     <string name="exit_fullscreen">Exit fullscreen</string>
 
     <string name="n_selected">%1$d selected</string>
