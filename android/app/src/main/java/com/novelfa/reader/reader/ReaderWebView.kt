@@ -98,6 +98,7 @@ fun ReaderWebView(
     bridge: ScrollBridge,
     onError: (String) -> Unit,
     onWebView: (WebView) -> Unit = {},
+    onPageStarted: () -> Unit = {},
     onPageFinished: () -> Unit = {},
     onSwipeLeft: () -> Unit = {},
     onSwipeRight: () -> Unit = {},
@@ -332,6 +333,7 @@ fun ReaderWebView(
             }
             if (loaded.value != html) {
                 loaded.value = html
+                onPageStarted()
                 wv.loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", null)
             }
         },

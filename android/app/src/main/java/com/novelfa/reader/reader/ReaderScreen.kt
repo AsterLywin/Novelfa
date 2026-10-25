@@ -178,6 +178,23 @@ fun ReaderScreen(
     // chapter, and refreshed on page-finish and on every turn.
     var pagedPage by remember { mutableIntStateOf(0) }
     var pagedPageCount by remember { mutableIntStateOf(0) }
+    // True once the live document has finished loading. A turn that
+    // finds rdrTurn missing WHILE the page is still loading must wait
+    // (like a 'busy' turn), not recover: recovery reloads the chapter,
+    // which cancels the in-flight load, and a tap during the reload
+    // then sees a missing rdrTurn again — a "turn -> reload -> turn
+    // -> pagination failed" loop on a chapter whose pager was never
+    // actually broken. Set false by onPageStarted, true by
+    // onPageFinished; only a missing rdrTurn on a LOADED document
+    // means a pager-less page and earns a recovery.
+    var pageLoaded by remember { mutableStateOf(false) }
+    // True once the live document's pager has torn down (JS
+    // teardown): the chapter stays readable as a scrolling page, but
+    // its page numbers are dead — the bridge must stop feeding the
+    // indicator from scroll geometry, or the pill shows a stale
+    // "1/60" over a pager that no longer exists. Reset by gotoChapter
+    // and by onPageStarted (a new document gets a fresh pager).
+    var pagerTornDown by remember { mutableStateOf(false) }
     // Fragment to land on after a cross-chapter in-book link opens its
     // chapter; applied (and cleared) by the onPageFinished hook.
     var pendingAnchor by remember { mutableStateOf<String?>(null) }
@@ -338,6 +355,7 @@ fun ReaderScreen(
             pagerReloadTriedIndex = -1
             pagerFailedShownIndex = -1
             lastPagerError = null
+            pagerTornDown = false
         }
         if (v.loadChapter(i)) {
             pageHtml = v.html
@@ -463,7 +481,7 @@ fun ReaderScreen(
                 // fires once early with 1/1 in a paged document, but it
                 // never fires again (nothing scrolls), so the pager's
                 // later report always wins and the count stays correct.
-                if (v.readingMode == ReadingMode.PAGED_HORIZONTAL && c > 0 && h > 0 && t >= 0) {
+                if (v.readingMode == ReadingMode.PAGED_HORIZONTAL && !pagerTornDown && c > 0 && h > 0 && t >= 0) {
                     val total = h / c
                     val page = t / c + 1
                     if (total > 0 && page in 1..total) {
@@ -523,7 +541,17 @@ fun ReaderScreen(
             // WHY instead of just dying.
             onPagerError = { msg ->
                 Log.w("NovelfaPager", "pager teardown: $msg")
-                scope.launch { lastPagerError = msg }
+                scope.launch {
+                    lastPagerError = msg
+                    // The pager is gone and the chapter is a scrolling
+                    // page now: hide the pill instead of leaving the
+                    // last good number on screen as a stale "1/60".
+                    // (The bridge guard above stops scroll geometry
+                    // from repopulating it afterwards.)
+                    pagerTornDown = true
+                    pagedPage = 0
+                    pagedPageCount = 0
+                }
             }
         )
     }
@@ -551,11 +579,25 @@ fun ReaderScreen(
             // busy retries, so a healthy turn logs exactly once).
             Log.d("NovelfaPager", "turnPage forward=$forward attempt=$attempt rdrTurn=$r")
             if (r == null) {
-                // rdrTurn itself is missing: the live page was built
-                // without the pager (a mode/desync), so no retry can
-                // ever turn it — recover instead of dying silently.
-                Log.w("NovelfaPager", "turnPage rdrTurn missing -> recover")
-                recoverPagerTurn()
+                // rdrTurn itself is missing. While the document is
+                // still loading that is EXPECTED (its scripts have not
+                // run yet): wait like a 'busy' turn instead of
+                // recovering, because recovery reloads the chapter and
+                // a tap during the reload would see a missing rdrTurn
+                // again — the reload loop behind the "pagination
+                // failed" notice on a healthy chapter. Only a missing
+                // rdrTurn on a loaded document means a pager-less page
+                // (a mode/desync), which no retry can ever turn.
+                if (!pageLoaded && attempt < 10) {
+                    Log.d("NovelfaPager", "turnPage rdrTurn missing while loading -> wait attempt=$attempt")
+                    scope.launch {
+                        delay(300)
+                        if (vm === v) turnPage(v, forward, attempt + 1)
+                    }
+                } else {
+                    Log.w("NovelfaPager", "turnPage rdrTurn missing -> recover")
+                    recoverPagerTurn()
+                }
                 return@evaluateJavascript
             }
             if (r == "busy") {
@@ -940,7 +982,17 @@ fun ReaderScreen(
                         },
                         onWebView = { webView = it },
                         paged = modeNow == ReadingMode.PAGED_HORIZONTAL,
+                        onPageStarted = {
+                            // A new document is loading: its pager does
+                            // not exist yet, and any indicator numbers
+                            // on screen belong to the previous document.
+                            pageLoaded = false
+                            pagerTornDown = false
+                            pagedPage = 0
+                            pagedPageCount = 0
+                        },
                         onPageFinished = {
+                            pageLoaded = true
                             // Backward chapter jump in paged mode lands on
                             // the new chapter's last page (manga-reader
                             // behavior); forward jumps start at page one.

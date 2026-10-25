@@ -213,9 +213,26 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     messageFa = context.getString(R.string.import_error_no_readable_sections)
                 )
             }
-            val coverPath = parsed.coverFile
+            var coverPath = parsed.coverFile
                 ?.takeIf { it.exists() }
                 ?.let { CoverStore(context).saveCover(it, destFile.absolutePath).absolutePath }
+            if (coverPath == null) {
+                // Coverless book (plain-text formats carry no art, and
+                // some EPUBs ship without a cover): generate a
+                // typographic cover instead of a blank box. A failure
+                // here must never fail the import — the book simply
+                // stays coverless, exactly as before.
+                coverPath = runCatching {
+                    val tmp = GeneratedCover.generate(
+                        context, parsed.title, destFile.absolutePath
+                    ) ?: return@runCatching null
+                    try {
+                        CoverStore(context).saveCover(tmp, destFile.absolutePath).absolutePath
+                    } finally {
+                        tmp.delete()
+                    }
+                }.getOrNull()
+            }
             db.bookDao().insert(
                 BookEntity(
                     id = id,
