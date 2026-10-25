@@ -17,6 +17,7 @@
   <img src="https://img.shields.io/badge/Version-1.0.0-4C8DFF" alt="Version"/>
   <img src="https://img.shields.io/badge/Status-In%20Development-F48C06" alt="Status"/>
   <img src="https://img.shields.io/badge/UI-FA%20%7C%20EN-2EA043" alt="UI languages"/>
+  <img src="https://img.shields.io/badge/License-GPL--3.0-4C8DFF" alt="License"/>
 </p>
 
 <p align="center">
@@ -206,6 +207,7 @@ Novelfa/
 │   │   └── theme/               # تم‌ها، رتبه‌ها، ذرات و آثار تزئینی
 │   └── task.cmd                 # ابزار بیلد ویندوزی (Debug / Release + بررسی خروجی)
 ├── docs/                        # راهنمای انتشار و اسناد طرح‌های توسعه
+├── LICENSE                      # مجوز GPL-3.0
 ├── README.md                    # همین فایل (فارسی)
 └── README.en.md                 # نسخه‌ی انگلیسی
 ```

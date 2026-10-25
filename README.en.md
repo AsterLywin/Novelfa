@@ -17,6 +17,7 @@
   <img src="https://img.shields.io/badge/Version-1.0.0-4C8DFF" alt="Version"/>
   <img src="https://img.shields.io/badge/Status-In%20Development-F48C06" alt="Status"/>
   <img src="https://img.shields.io/badge/UI-FA%20%7C%20EN-2EA043" alt="UI languages"/>
+  <img src="https://img.shields.io/badge/License-GPL--3.0-4C8DFF" alt="License"/>
 </p>
 
 <p align="center">
@@ -205,6 +206,7 @@ Novelfa/
 │   │   └── theme/               # Themes, ranks, particles, decorative effects
 │   └── task.cmd                 # Windows build tool (Debug / Release + output check)
 ├── docs/                        # Release guide and development plan documents
+├── LICENSE                      # GPL-3.0 license
 ├── README.md                    # Persian version
 └── README.en.md                 # This file (English)
 ```
