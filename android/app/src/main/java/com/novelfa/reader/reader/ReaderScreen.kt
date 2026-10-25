@@ -170,6 +170,14 @@ fun ReaderScreen(
     // shown in the recovery notices so a still-dead reader is
     // diagnosable instead of a mystery.
     var lastPagerError by remember { mutableStateOf<String?>(null) }
+    // Paged-mode page indicator (ComicScreen "page move preview"
+    // analogue for text): the current page and the chapter's page
+    // count, read from the pager's own rdrCurrentPage/rdrPageCount
+    // (0/0 = unknown, e.g. while a chapter is loading). Reset in
+    // gotoChapter so a stale chapter's numbers never show on the new
+    // chapter, and refreshed on page-finish and on every turn.
+    var pagedPage by remember { mutableIntStateOf(0) }
+    var pagedPageCount by remember { mutableIntStateOf(0) }
     // Fragment to land on after a cross-chapter in-book link opens its
     // chapter; applied (and cleared) by the onPageFinished hook.
     var pendingAnchor by remember { mutableStateOf<String?>(null) }
@@ -280,7 +288,6 @@ fun ReaderScreen(
                 fallbackFontFiles = fallbackFiles,
                 onXpUnitFinished = xpCallback
             )
-            v.readingMode = ReadingMode.fromKey(savedMode)
             // Book direction from CONTENT, not from the UI language:
             // `isEnglish` drives the paged strip geometry (which side the
             // next page sits on) and the swipe/tap maps, and it used to
@@ -288,6 +295,7 @@ fun ReaderScreen(
             // right-to-left. Per-paragraph direction inside the page is
             // stamped separately by prepareChapterBody either way.
             v.isEnglish = detectBookIsLtr(parsed.chapters)
+            v.readingMode = ReadingMode.fromKey(savedMode)
             val target = entity.lastChapterIndex.coerceIn(0, parsed.chapters.size - 1)
             if (!v.loadChapter(target)) {
                 throw IOException(v.lastError ?: "")
@@ -334,9 +342,39 @@ fun ReaderScreen(
         if (v.loadChapter(i)) {
             pageHtml = v.html
             pageBase = v.baseUrl
+            pagedPage = 0
+            pagedPageCount = 0
             rev++
         } else {
             showVmError(v)
+        }
+    }
+
+    /**
+     * Refreshes the paged-mode page indicator from the pager itself
+     * (never from the scroll reporter: in paged mode the document does
+     * not scroll, so scrollTop/scrollHeight would report a bogus 1/1).
+     * Called on page-finish and after a successful turn; while the
+     * pager is still building, rdrPageCount() is 0 and the indicator
+     * stays hidden instead of showing a wrong number.
+     */
+    fun refreshPagedIndicator() {
+        val wv = webView ?: return
+        wv.evaluateJavascript(
+            "(function(){try{if(window.rdrPageCount&&window.rdrCurrentPage)" +
+                "{var c=window.rdrPageCount();if(c>0)return (window.rdrCurrentPage()+1)+'/'+c;}" +
+                "return '';}catch(e){return '';}})();"
+        ) { result ->
+            val clean = result?.trim()?.trim { it == '"' } ?: ""
+            val parts = clean.split("/")
+            if (parts.size == 2) {
+                val p = parts[0].toIntOrNull()
+                val total = parts[1].toIntOrNull()
+                if (p != null && total != null && total > 0 && p in 1..total) {
+                    pagedPage = p
+                    pagedPageCount = total
+                }
+            }
         }
     }
 
@@ -370,6 +408,7 @@ fun ReaderScreen(
             return
         }
         pagerReloadTriedIndex = vv.index
+        Log.d("NovelfaPager", "recoverPagerTurn reload chapter=${vv.index} lastError=$lastPagerError")
         scope.launch {
             val suffix = lastPagerError?.let { " ($it)" } ?: ""
             snackbar.showSnackbar(pagerReloadMsg + suffix)
@@ -418,6 +457,27 @@ fun ReaderScreen(
                 val last = v.contLast
                 val first = v.contFirst
                 v.onScroll(t, h, c)
+                // Paged-mode indicator: the pager's report() synthesizes
+                // t = page*clientH, h = pages*clientH, so t/c and h/c
+                // ARE the page numbers here. The plain scroll reporter
+                // fires once early with 1/1 in a paged document, but it
+                // never fires again (nothing scrolls), so the pager's
+                // later report always wins and the count stays correct.
+                if (v.readingMode == ReadingMode.PAGED_HORIZONTAL && c > 0 && h > 0 && t >= 0) {
+                    val total = h / c
+                    val page = t / c + 1
+                    if (total > 0 && page in 1..total) {
+                        // Diagnostic: log only on change, so a healthy
+                        // pager logs one line per turn, and a pager that
+                        // never reports logs nothing at all — that
+                        // silence IS the diagnosis.
+                        if (pagedPage != page || pagedPageCount != total) {
+                            Log.d("NovelfaPager", "pager report page=$page/$total")
+                        }
+                        pagedPage = page
+                        pagedPageCount = total
+                    }
+                }
                 applyIncrementalJs(v, last, first)
                 rev++
             }
@@ -455,6 +515,7 @@ fun ReaderScreen(
             // needs the same native recovery as swipe turns get in
             // turnPage (one reload per chapter, guarded there).
             onPagerStuck = {
+                Log.w("NovelfaPager", "onPagerStuck from JS -> recover")
                 scope.launch { recoverPagerTurn() }
             },
             // JS teardown reason: logged and kept for the recovery
@@ -480,13 +541,20 @@ fun ReaderScreen(
      * in the new chapter by accident.
      */
     fun turnPage(v: ReaderViewModel, forward: Boolean, attempt: Int = 0) {
-        val wv = webView ?: return
+        val wv = webView ?: run {
+            Log.d("NovelfaPager", "turnPage dropped webView=null forward=$forward")
+            return
+        }
         wv.evaluateJavascript("rdrTurn(${if (forward) 1 else -1})") { result ->
             val r = result?.trim()?.trim { it == '"' }
+            // Diagnostic: one line per turn attempt (attempt>0 only on
+            // busy retries, so a healthy turn logs exactly once).
+            Log.d("NovelfaPager", "turnPage forward=$forward attempt=$attempt rdrTurn=$r")
             if (r == null) {
                 // rdrTurn itself is missing: the live page was built
                 // without the pager (a mode/desync), so no retry can
                 // ever turn it — recover instead of dying silently.
+                Log.w("NovelfaPager", "turnPage rdrTurn missing -> recover")
                 recoverPagerTurn()
                 return@evaluateJavascript
             }
@@ -500,13 +568,16 @@ fun ReaderScreen(
                     // Pagination never became ready (torn down) — the
                     // old code just stopped here and the reader sat
                     // dead with no signal at all.
+                    Log.w("NovelfaPager", "turnPage rdrTurn busy exhausted -> recover")
                     recoverPagerTurn()
                 }
                 return@evaluateJavascript
             }
             scope.launch {
                 val vv = vm ?: return@launch
-                if (r == "end" && forward && vv.index + 1 < vv.chapters.size) {
+                if (r == "page") {
+                    refreshPagedIndicator()
+                } else if (r == "end" && forward && vv.index + 1 < vv.chapters.size) {
                     gotoChapter(vv, vv.index + 1)
                 } else if (r == "start" && !forward && vv.index > 0) {
                     // Land on the previous chapter's last page; the
@@ -886,6 +957,13 @@ fun ReaderScreen(
                                 pendingAnchor = null
                                 vm?.let { jumpToAnchor(it, frag) }
                             }
+                            // Fallback refresh: the pager's report()
+                            // (via onScroll above) is the primary source,
+                            // but a turn that landed via rdrLast() or an
+                            // anchor jump also needs the indicator updated.
+                            if (modeNow == ReadingMode.PAGED_HORIZONTAL) {
+                                refreshPagedIndicator()
+                            }
                         },
                         onSwipeLeft = {
                             val v = vm
@@ -909,7 +987,46 @@ fun ReaderScreen(
                                 // (content dragged right) advances.
                                 turnPage(v, forward = !v.isEnglish)
                             }
+                        },
+                        // Native tap edges (see ReaderWebView): the
+                        // position-to-direction map is the JS tap-zone
+                        // map, NOT the swipe map — tapping the side a
+                        // page sits on turns to it. RTL: left = forward,
+                        // right = back. LTR: the mirror.
+                        onTapLeftEdge = {
+                            val v = vm
+                            if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
+                                turnPage(v, forward = !v.isEnglish)
+                            }
+                        },
+                        onTapRightEdge = {
+                            val v = vm
+                            if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
+                                turnPage(v, forward = v.isEnglish)
+                            }
                         }
+                    )
+                }
+                // Paged mode: ComicScreen-style page-move preview,
+                // text edition — a small "page X of Y" pill, so a turn
+                // is never a blind jump and a stuck pager (frozen
+                // number) is visible at a glance. Hidden while the
+                // pager is still building (0/0) and in fullscreen.
+                if (modeNow == ReadingMode.PAGED_HORIZONTAL && !fullscreenUi &&
+                    pagedPageCount > 0 && pagedPage in 1..pagedPageCount
+                ) {
+                    Text(
+                        text = stringResource(R.string.page_indicator, pagedPage, pagedPageCount),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 8.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                            )
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
                 // Vertical mode: the next chapter is stitched in on

@@ -1,5 +1,6 @@
 package com.novelfa.reader.reader
 
+import android.util.Log
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.webkit.JavascriptInterface
@@ -100,6 +101,16 @@ fun ReaderWebView(
     onPageFinished: () -> Unit = {},
     onSwipeLeft: () -> Unit = {},
     onSwipeRight: () -> Unit = {},
+    // Paged-mode native tap edges (language-agnostic: left/right quarter
+    // of the view). The caller maps them to forward/back from the book
+    // language, mirroring the JS tap zones. Native taps are PRIMARY in
+    // paged mode because the touch listener below consumes ACTION_DOWN,
+    // which breaks WebView's own JS-click synthesis (WebView needs its
+    // own DOWN+UP to fire a document click) — so the JS tap zones in
+    // PAGER_JS never fire on device. They stay as a fallback for
+    // environments without this native listener (e.g. headless tests).
+    onTapLeftEdge: () -> Unit = {},
+    onTapRightEdge: () -> Unit = {},
     // Paged (horizontal) mode: the page turn is fully programmatic
     // (rdrTurn); the fling must be consumed so the WebView doesn't also
     // fling-scroll natively and fight the turn animation.
@@ -148,6 +159,12 @@ fun ReaderWebView(
                 // flag stops a drag-turn and its release fling from
                 // turning twice, and resets on every new touch-down.
                 var turnedThisGesture = false
+                // Diagnostic tag: filter logcat with
+                // `adb logcat -s NovelfaTouch NovelfaPager` to see which
+                // gate a dead drag/tap dies at. Logs are per-gesture
+                // (DOWN, fling, threshold-cross, tap), never per-MOVE,
+                // so they do not spam on ordinary scrolling.
+                val host = this
                 val swipeDetector = GestureDetector(ctx,
                     object : GestureDetector.SimpleOnGestureListener() {
                         // REQUIRED: SimpleOnGestureListener.onDown returns
@@ -156,7 +173,10 @@ fun ReaderWebView(
                         // onFling never fire. That is why swipe/drag page
                         // turns silently did nothing at all (the buttons
                         // used to hide the fact that swipes never worked).
-                        override fun onDown(e: MotionEvent): Boolean = true
+                        override fun onDown(e: MotionEvent): Boolean {
+                            Log.d("NovelfaTouch", "down paged=${pagedNow.value} w=${host.width}")
+                            return true
+                        }
 
                         override fun onFling(
                             e1: MotionEvent?, e2: MotionEvent,
@@ -165,9 +185,13 @@ fun ReaderWebView(
                             if (e1 == null || turnedThisGesture) return false
                             val dx = e2.x - e1.x
                             val dy = e2.y - e1.y
-                            if (abs(dx) > abs(dy) * 1.5f &&
+                            val qualified = abs(dx) > abs(dy) * 1.5f &&
                                 abs(dx) > 80f && abs(velocityX) > 400f
-                            ) {
+                            Log.d(
+                                "NovelfaTouch",
+                                "fling dx=$dx dy=$dy vx=$velocityX qualified=$qualified paged=${pagedNow.value}"
+                            )
+                            if (qualified) {
                                 if (dx < 0) onSwipeLeft() else onSwipeRight()
                                 turnedThisGesture = true
                                 return true
@@ -183,11 +207,70 @@ fun ReaderWebView(
                             val dx = e2.x - e1.x
                             val dy = e2.y - e1.y
                             if (abs(dx) > abs(dy) * 1.5f && abs(dx) > 140f) {
+                                Log.d("NovelfaTouch", "drag-turn dx=$dx dy=$dy")
                                 if (dx < 0) onSwipeLeft() else onSwipeRight()
                                 turnedThisGesture = true
                                 return true
                             }
                             return false
+                        }
+
+                        /**
+                         * Native paged-mode tap. Fires only in paged mode;
+                         * in vertical mode it returns false so the WebView
+                         * keeps its own tap/click handling (and LINK_JS).
+                         * In paged mode the WebView never sees DOWN (the
+                         * listener below consumes it), so a JS click is
+                         * never synthesized — this is the tap path.
+                         * Link safety: the tap point is hit-tested in JS
+                         * first (CSS coords = view px / density, paged
+                         * scale is 1). A link tap gets a synthetic
+                         * click on the hit element, which LINK_JS
+                         * intercepts exactly like a real tap; a non-link
+                         * tap on an outer quarter turns, a middle tap
+                         * does nothing (same zones as the JS tap code).
+                         */
+                        override fun onSingleTapUp(e: MotionEvent): Boolean {
+                            if (!pagedNow.value) return false
+                            val w = host.width
+                            if (w <= 0) {
+                                Log.d("NovelfaTouch", "tap ignored w=0")
+                                return false
+                            }
+                            val zone = when {
+                                e.x < w * 0.25f -> "left"
+                                e.x > w * 0.75f -> "right"
+                                else -> "middle"
+                            }
+                            val density = host.resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
+                            val cssX = (e.x / density).toInt()
+                            val cssY = (e.y / density).toInt()
+                            Log.d("NovelfaTouch", "tap x=${e.x} w=$w zone=$zone css=$cssX,$cssY")
+                            host.evaluateJavascript(
+                                "(function(){var el=document.elementFromPoint($cssX,$cssY);" +
+                                    "if(!el) return 'none';" +
+                                    "var a=el.closest?el.closest('a[href]'):null;" +
+                                    "return a?'link':'notlink';})();"
+                            ) { result ->
+                                val hit = result?.trim()?.trim { it == '"' } ?: ""
+                                Log.d("NovelfaTouch", "tap hit=$hit zone=$zone")
+                                if (hit == "link") {
+                                    // Preserve the link: dispatch a click
+                                    // on the hit element; LINK_JS (capture
+                                    // phase) owns it from here.
+                                    host.evaluateJavascript(
+                                        "(function(){var el=document.elementFromPoint($cssX,$cssY);" +
+                                            "if(el) el.click(); return 'ok';})();",
+                                        null
+                                    )
+                                } else if (zone == "left") {
+                                    onTapLeftEdge()
+                                } else if (zone == "right") {
+                                    onTapRightEdge()
+                                }
+                                // Middle non-link taps are inert by design.
+                            }
+                            return true
                         }
                     })
                 setOnTouchListener { _, event ->
