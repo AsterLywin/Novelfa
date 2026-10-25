@@ -3,6 +3,7 @@ package com.novelfa.reader.parser
 import com.novelfa.reader.model.ParsedBook
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.Locale
 import java.util.zip.Inflater
 
 /**
@@ -15,10 +16,15 @@ import java.util.zip.Inflater
  * browser- and LaTeX-produced PDFs, including Persian PDFs whose
  * embedded fonts carry a ToUnicode map.
  *
- * Honest limits (a text extractor cannot invent text): encrypted PDFs
- * are rejected, scanned-image PDFs have no text layer and therefore
- * import as "no readable sections", and PDFs whose fonts lack both a
- * ToUnicode map and a usable encoding lose the affected glyphs.
+ * Honest limits (a text extractor cannot invent text): scanned-image
+ * PDFs have no text layer and therefore import as "no readable sections",
+ * and PDFs whose fonts lack both a ToUnicode map and a usable encoding
+ * lose the affected glyphs. Encrypted PDFs using the Standard security
+ * handler (R2–R6) are supported: an empty user password opens
+ * automatically, otherwise [PdfPasswordRequiredException] asks the caller
+ * for a password ([PdfPasswordWrongException] on a wrong one) and
+ * [decryptToPlainPdf] rewrites the file without encryption for storage.
+ * Non-Standard security handlers (vendor DRM) are not supported.
  * Text is kept in stream order; the reader's per-paragraph direction
  * stamping then lays RTL and LTR paragraphs out correctly.
  */
@@ -30,9 +36,10 @@ object PdfParser {
         bytes: ByteArray,
         fileName: String,
         outDir: File,
-        chapterFallback: (Int) -> String
+        chapterFallback: (Int) -> String,
+        password: String? = null
     ): ParsedBook {
-        val doc = PdfDoc(bytes)
+        val doc = PdfDoc(bytes, password)
         val pages = doc.pageObjectNumbers()
         if (pages.isEmpty()) {
             throw IllegalArgumentException("PDF has no pages")
@@ -86,17 +93,37 @@ object PdfParser {
 
     private data class OutlineEntry(val title: String, val pageIndex: Int)
 
-    private class PdfDoc(private val bytes: ByteArray) {
+    /**
+     * Returns the stored file rewritten without encryption, or null when
+     * the file is not encrypted at all. The caller stores the result, so
+     * the book opens later without ever asking for a password again —
+     * the password itself is never stored. Throws
+     * [PdfPasswordRequiredException] when [password] is null and the
+     * empty password does not open the file, [PdfPasswordWrongException]
+     * when a given password fails, and
+     * [PdfUnsupportedEncryptionException] for non-Standard handlers.
+     */
+    fun decryptToPlainPdf(data: ByteArray, password: String?): ByteArray? {
+        val doc = PdfDoc(data, password)
+        if (doc.security == null) return null
+        return doc.writeDecryptedPdf()
+    }
+
+    private class PdfDoc(private val bytes: ByteArray, private val password: String? = null) {
         /** Latin-1 view: char index == byte index, so offsets stay valid. */
         val text: String = String(bytes, Charsets.ISO_8859_1)
 
         private val offsets = mutableMapOf<Int, Int>()
+        private val genMap = mutableMapOf<Int, Int>()
         private val objStm = mutableMapOf<Int, Pair<Int, Int>>()
         private val objStmCache = mutableMapOf<Int, Map<Int, String>>()
         private val rawCache = mutableMapOf<Int, String>()
         private val streamCache = mutableMapOf<Int, ByteArray?>()
         private val fontCache = mutableMapOf<Int, FontInfo?>()
         private var trailerDict: String? = null
+        /** Null for unencrypted files; set once the /Encrypt dict is seen. */
+        var security: Security? = null
+            private set
 
         init {
             buildXref()
@@ -137,12 +164,14 @@ object PdfParser {
                                 val num = start + k
                                 if (num !in offsets) {
                                     offsets[num] = entry.groupValues[1].toInt()
+                                    genMap[num] = entry.groupValues[2].toIntOrNull() ?: 0
                                 }
                             }
                             pos = entryEnd + 1
                         }
                     }
                     if (trailerDict == null) trailerDict = trailer
+                    if (trailer != null) ensureSecurity(trailer)
                     offset = trailer?.let { intValue(it, "Prev") }
                 } else {
                     // An xref-stream object: its dict IS the trailer.
@@ -157,20 +186,620 @@ object PdfParser {
                     if (objNum !in offsets) offsets[objNum] = header.range.first
                     val dict = dictOf(objNum) ?: break
                     if (trailerDict == null) trailerDict = dict
+                    // The xref stream itself is encrypted (StmF), but its
+                    // dict — and the /Encrypt + /ID entries in it — are
+                    // plaintext, so security can be built BEFORE the
+                    // stream bytes are read below.
+                    ensureSecurity(dict)
                     parseXrefStream(objNum, dict)
                     offset = intValue(dict, "Prev")
                 }
             }
             if (offsets.isEmpty() && objStm.isEmpty()) {
                 // Last resort: linear scan for "N G obj" occurrences.
-                Regex("(\\d+)\\s+\\d+\\s+obj").findAll(text).forEach { m ->
+                Regex("(\\d+)\\s+(\\d+)\\s+obj").findAll(text).forEach { m ->
                     val num = m.groupValues[1].toInt()
-                    if (num !in offsets) offsets[num] = m.range.first
+                    if (num !in offsets) {
+                        offsets[num] = m.range.first
+                        genMap[num] = m.groupValues[2].toIntOrNull() ?: 0
+                    }
+                }
+            }
+            // A trailer without /Encrypt (or a file whose trailers were
+            // all unreadable) simply stays unencrypted.
+            trailerDict?.let { ensureSecurity(it) }
+        }
+
+        /**
+         * Builds [security] from a trailer dict the first time an
+         * /Encrypt entry is seen. The encrypt dict is a regular object:
+         * in classic files it is already in [offsets]; in xref-stream
+         * files the stream is not parsed yet, so it is found by a linear
+         * scan (producers never compress the encrypt dict).
+         */
+        private fun ensureSecurity(trailer: String) {
+            if (security != null) return
+            val encDict = dictSegment(trailer, "Encrypt")
+                ?: refIn(trailer, "Encrypt")?.let { encNum ->
+                    dictOf(encNum) ?: linearScanDict(encNum)
+                    ?: throw PdfUnsupportedEncryptionException(
+                        "Encrypt dict object $encNum not found"
+                    )
+                }
+                ?: return
+            security = Security(encDict, idFromTrailer(trailer))
+        }
+
+        private fun linearScanDict(num: Int): String? {
+            val header = Regex("(?m)^$num\\s+(\\d+)\\s+obj").find(text) ?: return null
+            if (num !in offsets) {
+                offsets[num] = header.range.first
+                genMap[num] = header.groupValues[1].toIntOrNull() ?: 0
+            }
+            val rawStart = text.indexOf("<<", header.range.last + 1)
+            if (rawStart < 0) return null
+            return balancedDict(text, rawStart)
+        }
+
+        private fun idFromTrailer(trailer: String): ByteArray? {
+            val seg = arraySegment(trailer, "ID") ?: return null
+            val hex = Regex("<([0-9A-Fa-f]+)>").find(seg)?.groupValues?.get(1)
+            if (hex != null) return hexBytes(hex)
+            val lit = Regex("\\(([^)]*)\\)").find(seg)?.groupValues?.get(1)
+            return lit?.toByteArray(Charsets.ISO_8859_1)
+        }
+
+        // -- encryption (Standard security handler) ---------------------
+
+        private enum class CryptMethod { IDENTITY, RC4, AES128, AES256 }
+
+        /**
+         * The Standard security handler for this file, built from the
+         * /Encrypt dict. The constructor validates the password: it tries
+         * the given password first, then the empty password (level 1:
+         * permission-only files open with no prompt at all). Both failing
+         * throws [PdfPasswordWrongException] when a password was given,
+         * [PdfPasswordRequiredException] otherwise. Malformed dicts and
+         * non-Standard handlers throw [PdfUnsupportedEncryptionException].
+         */
+        private inner class Security(encDict: String, id0: ByteArray?) {
+            private val revision: Int =
+                intValue(encDict, "R")
+                    ?: throw PdfUnsupportedEncryptionException("Encrypt dict has no /R")
+            private val version: Int = intValue(encDict, "V") ?: 0
+            private val keyLen: Int =
+                if (revision >= 5) 32 else (intValue(encDict, "Length") ?: 40) / 8
+            private val oBytes: ByteArray =
+                stringBytesAfterKey(encDict, "O")
+                    ?: throw PdfUnsupportedEncryptionException("Encrypt dict has no /O")
+            private val uBytes: ByteArray =
+                stringBytesAfterKey(encDict, "U")
+                    ?: throw PdfUnsupportedEncryptionException("Encrypt dict has no /U")
+            private val oeBytes: ByteArray? = stringBytesAfterKey(encDict, "OE")
+            private val ueBytes: ByteArray? = stringBytesAfterKey(encDict, "UE")
+            private val permsBytes: ByteArray? = stringBytesAfterKey(encDict, "Perms")
+            private val pValue: Int = intValue(encDict, "P") ?: 0
+            private val pBytes: ByteArray = byteArrayOf(
+                pValue.toByte(), (pValue shr 8).toByte(),
+                (pValue shr 16).toByte(), (pValue shr 24).toByte()
+            )
+            private val cfDict: String? = dictSegment(encDict, "CF")
+            private val stringMethod: CryptMethod
+            private val streamMethod: CryptMethod
+
+            /** False when the metadata stream is stored unencrypted. */
+            val encryptMetadata: Boolean
+
+            /** The file key: derived once, used for every object. */
+            val fileKey: ByteArray
+
+            init {
+                val filter = nameIn(encDict, "Filter")
+                if (filter != null && filter != "Standard") {
+                    throw PdfUnsupportedEncryptionException(
+                        "Security handler is not Standard: $filter"
+                    )
+                }
+                if (revision !in 2..6) {
+                    throw PdfUnsupportedEncryptionException(
+                        "Unsupported security revision: $revision"
+                    )
+                }
+                if (revision < 5) {
+                    if (oBytes.size != 32 || uBytes.size != 32) {
+                        throw PdfUnsupportedEncryptionException("Malformed /O or /U")
+                    }
+                } else {
+                    if (uBytes.size != 48 || oBytes.size != 48 ||
+                        ueBytes?.size != 32 || oeBytes?.size != 32
+                    ) {
+                        throw PdfUnsupportedEncryptionException("Malformed R5/R6 entries")
+                    }
+                }
+                fun methodFor(which: String?): CryptMethod {
+                    if (version < 4) return CryptMethod.RC4
+                    val name = which ?: return CryptMethod.IDENTITY
+                    if (name == "Identity") return CryptMethod.IDENTITY
+                    val seg = cfDict?.let { dictSegment(it, name) }
+                        ?: throw PdfUnsupportedEncryptionException(
+                            "Unknown crypt filter: $name"
+                        )
+                    return when (nameIn(seg, "CFM")) {
+                        "None" -> CryptMethod.IDENTITY
+                        "V1", "V2" -> CryptMethod.RC4
+                        "AESV2" -> CryptMethod.AES128
+                        "AESV3" -> CryptMethod.AES256
+                        else -> throw PdfUnsupportedEncryptionException(
+                            "Unsupported crypt filter method in $name"
+                        )
+                    }
+                }
+                stringMethod = methodFor(nameIn(encDict, "StrF"))
+                streamMethod = methodFor(nameIn(encDict, "StmF"))
+                if (revision >= 5 &&
+                    (stringMethod == CryptMethod.RC4 || stringMethod == CryptMethod.AES128 ||
+                        streamMethod == CryptMethod.RC4 || streamMethod == CryptMethod.AES128)
+                ) {
+                    throw PdfUnsupportedEncryptionException(
+                        "R5/R6 requires AESV3 crypt filters"
+                    )
+                }
+                encryptMetadata = if (revision >= 5) {
+                    permsBytes?.getOrNull(8)?.toInt()?.and(0xFF) != 0x46
+                } else {
+                    !Regex("/EncryptMetadata\\s+false").containsMatchIn(encDict)
+                }
+                val pwBytes = password?.toByteArray(Charsets.UTF_8)
+                val candidates = mutableListOf<ByteArray>()
+                if (pwBytes != null) candidates += pwBytes
+                if (pwBytes == null || !pwBytes.contentEquals(ByteArray(0))) {
+                    candidates += ByteArray(0)
+                }
+                var found: ByteArray? = null
+                for (pw in candidates) {
+                    found = tryPassword(pw, id0)
+                    if (found != null) break
+                }
+                fileKey = found ?: if (password != null) {
+                    throw PdfPasswordWrongException()
+                } else {
+                    throw PdfPasswordRequiredException()
+                }
+            }
+
+            /** File key for [pw], or null when it does not open the file. */
+            private fun tryPassword(pw: ByteArray, id0: ByteArray?): ByteArray? {
+                return when (revision) {
+                    2 -> {
+                        val padded = PdfCrypto.padPassword32(pw)
+                        val key = PdfCrypto.md5(
+                            padded, oBytes, pBytes, id0 ?: ByteArray(0)
+                        ).copyOf(5)
+                        val computed = PdfCrypto.rc4(key, PdfCrypto.PADDING)
+                        if (computed.contentEquals(uBytes)) key else null
+                    }
+                    3, 4 -> {
+                        val padded = PdfCrypto.padPassword32(pw)
+                        val meta = if (revision >= 4 && !encryptMetadata) {
+                            byteArrayOf(0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte())
+                        } else {
+                            ByteArray(0)
+                        }
+                        val digest = PdfCrypto.md5(
+                            padded, oBytes, pBytes, id0 ?: ByteArray(0), meta
+                        )
+                        val key = digest.copyOf(keyLen)
+                        if (validatesU(digest, key)) key else null
+                    }
+                    5, 6 -> {
+                        val pw127 = PdfCrypto.truncatePassword127(pw)
+                        // User password first, then owner password (an owner
+                        // password also opens the document).
+                        val userKey = userFileKey(pw127, revision == 6)
+                        if (userKey != null) return userKey
+                        ownerFileKey(pw127, revision == 6)
+                    }
+                    else -> null
+                }
+            }
+
+            /**
+             * R3/R4 U validation: 20 RC4 passes over the digest, keyed by
+             * the digest XORed with the round number. The spec's "original
+             * key" is read two ways in the wild (key-length bytes vs the
+             * full digest); both are tried, since a password validating
+             * under either reading is certainly correct.
+             */
+            private fun validatesU(digest: ByteArray, key: ByteArray): Boolean {
+                if (uBytes.size < 16) return false
+                val target = uBytes.copyOfRange(0, 16)
+                for (keySize in listOf(keyLen, 16)) {
+                    var data = digest.copyOf()
+                    for (i in 0 until 20) {
+                        val k = ByteArray(keySize) {
+                            (digest[it].toInt() xor i).toByte()
+                        }
+                        data = PdfCrypto.rc4(k, data)
+                    }
+                    if (data.copyOfRange(0, 16).contentEquals(target)) return true
+                }
+                return false
+            }
+
+            private fun userFileKey(pw127: ByteArray, isR6: Boolean): ByteArray? {
+                if (uBytes.size < 48 || ueBytes == null) return null
+                val hash = if (isR6) {
+                    PdfCrypto.r6Hash(pw127, uBytes.copyOfRange(32, 40), ByteArray(0))
+                } else {
+                    PdfCrypto.sha256(pw127, uBytes.copyOfRange(32, 40))
+                }
+                if (!hash.contentEquals(uBytes.copyOfRange(0, 32))) return null
+                val salt = uBytes.copyOfRange(40, 48)
+                val keyHash = if (isR6) {
+                    PdfCrypto.r6Hash(pw127, salt, ByteArray(0))
+                } else {
+                    PdfCrypto.sha256(pw127, salt)
+                }
+                val key = PdfCrypto.aesEcbDecrypt(keyHash, ueBytes) ?: return null
+                return if (validPerms(key)) key else null
+            }
+
+            private fun ownerFileKey(pw127: ByteArray, isR6: Boolean): ByteArray? {
+                if (oBytes.size < 48 || oeBytes == null || uBytes.size < 48) return null
+                val u48 = uBytes.copyOfRange(0, 48)
+                val hash = if (isR6) {
+                    PdfCrypto.r6Hash(pw127, oBytes.copyOfRange(32, 40), u48)
+                } else {
+                    PdfCrypto.sha256(pw127, oBytes.copyOfRange(32, 40), u48)
+                }
+                if (!hash.contentEquals(oBytes.copyOfRange(0, 32))) return null
+                val salt = oBytes.copyOfRange(40, 48)
+                val keyHash = if (isR6) {
+                    PdfCrypto.r6Hash(pw127, salt, u48)
+                } else {
+                    PdfCrypto.sha256(pw127, salt, u48)
+                }
+                val key = PdfCrypto.aesEcbDecrypt(keyHash, oeBytes) ?: return null
+                return if (validPerms(key)) key else null
+            }
+
+            /** Perms integrity: P, all-ones, and the 'adb' marker. */
+            private fun validPerms(key: ByteArray): Boolean {
+                val perms = permsBytes ?: return true
+                if (perms.size != 16) return true
+                val dec = PdfCrypto.aesEcbDecrypt(key, perms) ?: return false
+                if (!dec.copyOfRange(0, 4).contentEquals(pBytes)) return false
+                for (i in 4 until 8) {
+                    if ((dec[i].toInt() and 0xFF) != 0xFF) return false
+                }
+                return dec[9] == 0x61.toByte() && dec[10] == 0x64.toByte() &&
+                    dec[11] == 0x62.toByte()
+            }
+
+            /** Per-object key (R<5): file key + object/generation + salt. */
+            private fun objectKey(objNum: Int, aesSalt: Boolean): ByteArray {
+                val gen = genMap[objNum] ?: 0
+                val material = fileKey +
+                    byteArrayOf(
+                        (objNum and 0xFF).toByte(), ((objNum shr 8) and 0xFF).toByte(),
+                        ((objNum shr 16) and 0xFF).toByte()
+                    ) +
+                    byteArrayOf((gen and 0xFF).toByte(), ((gen shr 8) and 0xFF).toByte()) +
+                    if (aesSalt) {
+                        byteArrayOf(0x73, 0x41, 0x6C, 0x54)
+                    } else {
+                        ByteArray(0)
+                    }
+                val digest = PdfCrypto.md5(material)
+                val len = minOf(keyLen + 5, 16)
+                val key = digest.copyOf(len)
+                return if (aesSalt && key.size < 16) {
+                    key + ByteArray(16 - key.size)
+                } else {
+                    key
+                }
+            }
+
+            /** Decrypts one string value belonging to [objNum]. */
+            fun decryptString(data: ByteArray, objNum: Int): ByteArray {
+                // Strings inside object streams are plaintext: the whole
+                // stream was decrypted, not its members.
+                if (objNum in objStm) return data
+                return when (stringMethod) {
+                    CryptMethod.IDENTITY -> data
+                    CryptMethod.RC4 -> PdfCrypto.rc4(objectKey(objNum, false), data)
+                    CryptMethod.AES128 -> PdfCrypto.aesCbcDecryptWithIvPrefix(
+                        objectKey(objNum, true), data
+                    ) ?: ByteArray(0)
+                    CryptMethod.AES256 -> PdfCrypto.aesCbcDecryptWithIvPrefix(
+                        fileKey, data
+                    ) ?: ByteArray(0)
+                }
+            }
+
+            /** Decrypts one stream belonging to [objNum]. */
+            fun decryptStream(data: ByteArray, objNum: Int): ByteArray {
+                return when (streamMethod) {
+                    CryptMethod.IDENTITY -> data
+                    CryptMethod.RC4 -> PdfCrypto.rc4(objectKey(objNum, false), data)
+                    CryptMethod.AES128 -> PdfCrypto.aesCbcDecryptWithIvPrefix(
+                        objectKey(objNum, true), data
+                    ) ?: ByteArray(0)
+                    CryptMethod.AES256 -> PdfCrypto.aesCbcDecryptWithIvPrefix(
+                        fileKey, data
+                    ) ?: ByteArray(0)
+                }
+            }
+        }
+
+        /**
+         * The stored file rewritten without encryption: every regular
+         * object with its strings decrypted and its stream decrypted
+         * (filters kept, /Length fixed), object-stream members expanded
+         * to regular objects, all references renumbered to generation 0,
+         * and a fresh classic xref + trailer without /Encrypt. The result
+         * parses with this same parser sans password — which the caller
+         * verifies by parsing it before storing.
+         */
+        fun writeDecryptedPdf(): ByteArray {
+            val sec = security ?: return bytes
+            val out = ByteArrayOutputStream()
+            fun ascii(s: String) = out.write(s.toByteArray(Charsets.ISO_8859_1))
+            ascii("%PDF-1.7\n")
+            val writtenOffsets = mutableMapOf<Int, Int>()
+            // The metadata stream stays plaintext when EncryptMetadata is
+            // false; everything else is decrypted.
+            val metadataNum = if (!sec.encryptMetadata) {
+                val trailer = trailerDict ?: ""
+                refIn(trailer, "Root")?.let { dictOf(it) }?.let { refIn(it, "Metadata") }
+            } else {
+                null
+            }
+            fun emitObject(num: Int, body: String, streamBytes: ByteArray?) {
+                writtenOffsets[num] = out.size()
+                ascii("$num 0 obj\n")
+                if (streamBytes != null) {
+                    ascii(body)
+                    ascii("\nstream\n")
+                    out.write(streamBytes)
+                    ascii("\nendstream\nendobj\n")
+                } else {
+                    ascii(body)
+                    ascii("\nendobj\n")
+                }
+            }
+            fun rewriteRefs(text: String): String =
+                Regex("(\\d+)\\s+(\\d+)\\s+R").replace(text) { "${it.groupValues[1]} 0 R" }
+
+            // The encrypt dict itself is dropped: the rewritten trailer
+            // has no /Encrypt, so it would only be an orphan.
+            val encryptNum = trailerDict?.let { refIn(it, "Encrypt") }
+            fun fixLength(dict: String, len: Int): String {
+                val refLen = Regex("/Length\\s+\\d+\\s+0\\s+R").find(dict)
+                if (refLen != null) {
+                    return dict.replaceRange(refLen.range, "/Length $len")
+                }
+                val directLen = Regex("/Length\\s+\\d+").find(dict)
+                if (directLen != null) {
+                    return dict.replaceRange(directLen.range, "/Length $len")
+                }
+                val idx = dict.lastIndexOf(">>")
+                return if (idx >= 0) {
+                    dict.substring(0, idx) + " /Length $len " + dict.substring(idx)
+                } else {
+                    dict
+                }
+            }
+            for (num in offsets.keys.sorted()) {
+                if (num == 0 || num == encryptNum) continue
+                val raw = rawObject(num) ?: continue
+                val dictStart = raw.indexOf("<<")
+                if (dictStart < 0) {
+                    // Bare value: decrypt any strings, rewrite refs.
+                    emitObject(num, rewriteRefs(decryptStringsInText(raw, num)), null)
+                    continue
+                }
+                val dict = balancedDict(raw, dictStart) ?: continue
+                val stream = rawStream(num)
+                if (stream == null) {
+                    // Dict object without a readable stream.
+                    emitObject(num, rewriteRefs(decryptStringsInText(dict, num)), null)
+                    continue
+                }
+                val (streamDict, stored) = stream
+                val plain = if (num == metadataNum) {
+                    stored
+                } else {
+                    sec.decryptStream(stored, num)
+                }
+                val newDict = fixLength(
+                    rewriteRefs(decryptStringsInText(streamDict, num)), plain.size
+                )
+                emitObject(num, newDict, plain)
+            }
+            // Object-stream members become regular objects (their text is
+            // already plaintext — the stream was decrypted as a whole).
+            val inner = mutableMapOf<Int, String>()
+            for ((stmNum, _) in objStm) {
+                for ((n, body) in objStmObjects(stmNum)) inner[n] = body
+            }
+            for ((num, body) in inner) {
+                if (num == 0 || num in writtenOffsets) continue
+                emitObject(num, rewriteRefs(body), null)
+            }
+            val maxNum = writtenOffsets.keys.maxOrNull() ?: 0
+            val xrefPos = out.size()
+            ascii("xref\n0 ${maxNum + 1}\n")
+            ascii("0000000000 65535 f \n")
+            for (n in 1..maxNum) {
+                val off = writtenOffsets[n]
+                if (off != null) {
+                    // Locale.US: Persian-locale %d would emit Eastern-Arabic
+                    // digits and corrupt the xref table.
+                    ascii(String.format(Locale.US, "%010d 00000 n \n", off))
+                } else {
+                    ascii("0000000000 00000 f \n")
                 }
             }
             val trailer = trailerDict ?: ""
-            if (Regex("/Encrypt\\s").containsMatchIn(trailer)) {
-                throw IllegalArgumentException("PDF is encrypted")
+            val root = refIn(trailer, "Root")
+            val info = refIn(trailer, "Info")
+            val idSeg = arraySegment(trailer, "ID")
+            val trailerOut = StringBuilder("<< /Size ${maxNum + 1}")
+            if (root != null) trailerOut.append(" /Root $root 0 R")
+            if (info != null) trailerOut.append(" /Info $info 0 R")
+            if (idSeg != null) trailerOut.append(" /ID $idSeg")
+            trailerOut.append(" >>")
+            ascii("trailer\n$trailerOut\nstartxref\n$xrefPos\n%%EOF\n")
+            return out.toByteArray()
+        }
+
+        /**
+         * Decrypts every literal/hex string token in [text] (dicts and
+         * bare values) with [objNum]'s key, re-emitting each as a hex
+         * string — unambiguous, no escaping questions. Dict delimiters
+         * << >> are passed through, never mistaken for hex strings.
+         */
+        private fun decryptStringsInText(text: String, objNum: Int): String {
+            val sec = security ?: return text
+            val out = StringBuilder()
+            var i = 0
+            while (i < text.length) {
+                when {
+                    text.startsWith("<<", i) -> {
+                        out.append("<<")
+                        i += 2
+                    }
+                    text.startsWith(">>", i) -> {
+                        out.append(">>")
+                        i += 2
+                    }
+                    text[i] == '(' -> {
+                        val parsed = parseLiteralBytes(text, i)
+                        if (parsed == null) {
+                            out.append(text[i])
+                            i++
+                        } else {
+                            val (data, end) = parsed
+                            val plain = sec.decryptString(data, objNum)
+                            out.append('<')
+                            for (b in plain) {
+                                out.append(String.format(Locale.US, "%02X", b.toInt() and 0xFF))
+                            }
+                            out.append('>')
+                            i = end
+                        }
+                    }
+                    text[i] == '<' -> {
+                        val end = text.indexOf('>', i)
+                        if (end < 0) {
+                            out.append(text[i])
+                            i++
+                        } else {
+                            val plain = sec.decryptString(hexBytes(text.substring(i + 1, end)), objNum)
+                            out.append('<')
+                            for (b in plain) {
+                                out.append(String.format(Locale.US, "%02X", b.toInt() and 0xFF))
+                            }
+                            out.append('>')
+                            i = end + 1
+                        }
+                    }
+                    else -> {
+                        out.append(text[i])
+                        i++
+                    }
+                }
+            }
+            return out.toString()
+        }
+
+        /** Literal string at [start] ('(') → its bytes + end index. */
+        private fun parseLiteralBytes(text: String, start: Int): Pair<ByteArray, Int>? {
+            var i = start + 1
+            var depth = 1
+            val out = ByteArrayOutputStream()
+            while (i < text.length && depth > 0) {
+                val c = text[i]
+                if (c == '\\' && i + 1 < text.length) {
+                    val e = text[i + 1]
+                    when (e) {
+                        'n' -> {
+                            out.write('\n'.code)
+                            i += 2
+                        }
+                        'r' -> {
+                            out.write('\r'.code)
+                            i += 2
+                        }
+                        't' -> {
+                            out.write('\t'.code)
+                            i += 2
+                        }
+                        'b' -> {
+                            out.write('\b'.code)
+                            i += 2
+                        }
+                        'f' -> {
+                            out.write(0x0C)
+                            i += 2
+                        }
+                        '(', ')', '\\' -> {
+                            out.write(e.code)
+                            i += 2
+                        }
+                        '\n' -> i += 2
+                        '\r' -> i += if (text.getOrNull(i + 2) == '\n') 3 else 2
+                        else -> {
+                            if (e.isDigit()) {
+                                var oct = ""
+                                var j = i + 1
+                                while (j < text.length && j < i + 4 && text[j].isDigit()) {
+                                    oct += text[j]
+                                    j++
+                                }
+                                out.write(oct.toIntOrNull(8) ?: e.code)
+                                i = j
+                            } else {
+                                out.write(e.code)
+                                i += 2
+                            }
+                        }
+                    }
+                } else if (c == '(') {
+                    depth++
+                    out.write(c.code)
+                    i++
+                } else if (c == ')') {
+                    depth--
+                    if (depth > 0) out.write(c.code)
+                    i++
+                } else {
+                    out.write(c.code and 0xFF)
+                    i++
+                }
+            }
+            if (depth != 0) return null
+            return out.toByteArray() to i
+        }
+
+        /** Raw bytes of the string value after `/Key` (no text decoding). */
+        private fun stringBytesAfterKey(dict: String, key: String): ByteArray? {
+            val m = Regex("/$key\\s*").find(dict) ?: return null
+            var i = m.range.last + 1
+            while (i < dict.length && dict[i].isWhitespace()) i++
+            if (i >= dict.length) return null
+            return when (dict[i]) {
+                '(' -> parseLiteralBytes(dict, i)?.first
+                '<' -> {
+                    if (dict.startsWith("<<", i)) {
+                        null
+                    } else {
+                        val end = dict.indexOf('>', i)
+                        if (end < 0) null else hexBytes(dict.substring(i + 1, end))
+                    }
+                }
+                else -> null
             }
         }
 
@@ -208,7 +837,10 @@ object PdfParser {
                     val f3 = field(w[2], 0)
                     val num = first + k
                     when (type) {
-                        1 -> if (num !in offsets) offsets[num] = f2
+                        1 -> if (num !in offsets) {
+                            offsets[num] = f2
+                            genMap[num] = f3
+                        }
                         2 -> if (num !in objStm) objStm[num] = f2 to f3
                     }
                 }
@@ -220,6 +852,12 @@ object PdfParser {
         fun rawObject(num: Int): String? {
             rawCache[num]?.let { return it }
             val result = offsets[num]?.let { off ->
+                val header = Regex("(\\d+)\\s+(\\d+)\\s+obj").find(text, off)
+                if (header != null && header.groupValues[1].toIntOrNull() == num &&
+                    num !in genMap
+                ) {
+                    genMap[num] = header.groupValues[2].toIntOrNull() ?: 0
+                }
                 val contentStart = Regex("obj\\s").find(text, off)
                     ?.range?.last?.plus(1) ?: return@let null
                 val end = text.indexOf("endobj", contentStart)
@@ -270,6 +908,19 @@ object PdfParser {
         }
 
         private fun computeStream(num: Int): ByteArray? {
+            val (dict, stored) = rawStream(num) ?: return null
+            // Encryption is applied AFTER filters on write, so it comes
+            // off FIRST on read; then the filters decode as usual.
+            val plain = security?.decryptStream(stored, num) ?: stored
+            return decodeFilters(dict, plain)
+        }
+
+        /**
+         * A stream's dict and its STORED bytes (still encrypted when the
+         * file is encrypted). Shared by [computeStream] and the
+         * decrypted-file rewriter.
+         */
+        private fun rawStream(num: Int): Pair<String, ByteArray>? {
             val raw = rawObject(num) ?: return null
             val dictStart = raw.indexOf("<<")
             val dict = balancedDict(raw, dictStart) ?: return null
@@ -315,7 +966,7 @@ object PdfParser {
             }
             if (dataEnd <= streamFileIdx) return null
             val rawBytes = bytes.copyOfRange(streamFileIdx, minOf(dataEnd, bytes.size))
-            return decodeFilters(dict, rawBytes)
+            return dict to rawBytes
         }
 
         private fun decodeFilters(dict: String, data: ByteArray): ByteArray? {
@@ -513,7 +1164,7 @@ object PdfParser {
             val infoNum = refIn(trailer, "Info") ?: return null
             val dict = dictOf(infoNum) ?: return null
             val raw = rawObject(infoNum) ?: return null
-            return stringAfterKey(raw, "Title")
+            return stringAfterKey(raw, "Title", infoNum)
         }
 
         fun outlineEntries(pages: List<Int>): List<OutlineEntry> {
@@ -530,7 +1181,7 @@ object PdfParser {
             while (guard++ < 10_000) {
                 val dict = dictOf(current) ?: break
                 val raw = rawObject(current) ?: break
-                val title = stringAfterKey(raw, "Title")
+                val title = stringAfterKey(raw, "Title", current)
                 var pageNum: Int? = null
                 val destSeg = arraySegment(dict, "Dest")
                 if (destSeg != null) {
@@ -549,10 +1200,20 @@ object PdfParser {
                     }
                 }
                 if (pageNum == null) {
-                    // Named destination: /Dest (name).
-                    val name = Regex("/Dest\\s*\\(([^)]*)\\)").find(dict)
+                    // Named destination: /Dest (name) — decrypted with
+                    // this object's key when the file is encrypted.
+                    val nameRaw = Regex("/Dest\\s*\\(([^)]*)\\)").find(dict)
                         ?.groupValues?.get(1)
-                    if (name != null) pageNum = destByName[name]
+                    if (nameRaw != null) {
+                        val nameBytes = parseLiteralBytes("($nameRaw)", 0)?.first
+                            ?: nameRaw.toByteArray(Charsets.ISO_8859_1)
+                        val plain = if (current !in objStm) {
+                            security?.decryptString(nameBytes, current) ?: nameBytes
+                        } else {
+                            nameBytes
+                        }
+                        pageNum = destByName[decodePdfString(plain)]
+                    }
                 }
                 if (title != null && pageNum != null) {
                     val idx = pageIndexByNum[pageNum]
@@ -575,96 +1236,60 @@ object PdfParser {
             val pairs = Regex("\\(([^)]*)\\)\\s*\\[(\\d+)\\s+\\d+\\s+R")
                 .findAll(array)
             for (m in pairs) {
-                out[m.groupValues[1]] = m.groupValues[2].toInt()
+                // Names live in the dests object: decrypt them when the
+                // file is encrypted (unless the object is compressed).
+                val nameBytes = parseLiteralBytes("(${m.groupValues[1]})", 0)?.first
+                    ?: m.groupValues[1].toByteArray(Charsets.ISO_8859_1)
+                val plain = if (destsNum !in objStm) {
+                    security?.decryptString(nameBytes, destsNum) ?: nameBytes
+                } else {
+                    nameBytes
+                }
+                out[decodePdfString(plain)] = m.groupValues[2].toInt()
             }
             return out
         }
 
-        /** PDF string value after `/Key`: literal `(…)` or hex `<…>`. */
-        fun stringAfterKey(raw: String, key: String): String? {
+        /**
+         * PDF string value after `/Key`: literal `(…)` or hex `<…>`.
+         * [objNum] decrypts the value when the file is encrypted (the
+         * string lives in that object); object-stream members are
+         * already plaintext and must not be decrypted again.
+         */
+        fun stringAfterKey(raw: String, key: String, objNum: Int? = null): String? {
             val m = Regex("/$key\\s*").find(raw) ?: return null
             var i = m.range.last + 1
             while (i < raw.length && raw[i].isWhitespace()) i++
             if (i >= raw.length) return null
-            return when (raw[i]) {
-                '(' -> {
-                    val sb = StringBuilder()
-                    var depth = 1
-                    i++
-                    while (i < raw.length && depth > 0) {
-                        val c = raw[i]
-                        if (c == '\\' && i + 1 < raw.length) {
-                            val e = raw[i + 1]
-                            when (e) {
-                                'n' -> sb.append('\n')
-                                'r' -> sb.append('\r')
-                                't' -> sb.append('\t')
-                                'b' -> sb.append('\b')
-                                'f' -> sb.append('\u000C')
-                                '(', ')', '\\' -> sb.append(e)
-                                '\n' -> Unit
-                                '\r' -> {
-                                    if (raw.getOrNull(i + 2) == '\n') i++
-                                }
-                                else -> {
-                                    if (e.isDigit()) {
-                                        var oct = ""
-                                        var j = i + 1
-                                        while (j < raw.length && j < i + 4 && raw[j].isDigit()) {
-                                            oct += raw[j]
-                                            j++
-                                        }
-                                        sb.append(oct.toIntOrNull(8)?.toChar() ?: e)
-                                        i = j - 1
-                                    } else sb.append(e)
-                                }
-                            }
-                            i += 2
-                        } else if (c == '(') {
-                            depth++
-                            sb.append(c)
-                            i++
-                        } else if (c == ')') {
-                            depth--
-                            if (depth > 0) sb.append(c)
-                            i++
-                        } else {
-                            sb.append(c)
-                            i++
-                        }
-                    }
-                    decodePdfString(sb.toString())
-                }
+            val bytes: ByteArray = when (raw[i]) {
+                '(' -> parseLiteralBytes(raw, i)?.first ?: return null
                 '<' -> {
+                    if (raw.startsWith("<<", i)) return null
                     val end = raw.indexOf('>', i)
-                    if (end < 0) null else decodePdfString(
-                        hexBytes(raw.substring(i + 1, end))
-                    )
+                    if (end < 0) return null
+                    hexBytes(raw.substring(i + 1, end))
                 }
-                else -> null
+                else -> return null
             }
+            val plain = if (objNum != null && objNum !in objStm) {
+                security?.decryptString(bytes, objNum) ?: bytes
+            } else {
+                bytes
+            }
+            return decodePdfString(plain)
         }
 
         /**
-         * A decoded PDF string. In the Latin-1 view a BOM is two separate
-         * bytes (FE FF), not one U+FEFF character — so the BOM test is on
-         * byte values, and the payload is rebuilt as real UTF-16 bytes.
+         * A decoded PDF string. A BOM is two separate bytes (FE FF), not
+         * one U+FEFF character — so the BOM test is on byte values, and
+         * the payload is rebuilt as real UTF-16 bytes.
          */
-        private fun decodePdfString(s: String): String {
-            if (s.length >= 2 && s[0].code == 0xFE && s[1].code == 0xFF) {
-                val raw = ByteArray(s.length - 2) { (s[it + 2].code and 0xFF).toByte() }
-                return runCatching { String(raw, Charsets.UTF_16BE) }.getOrDefault(s)
-            }
-            if (s.length >= 2 && s[0].code == 0xFF && s[1].code == 0xFE) {
-                val raw = ByteArray(s.length - 2) { (s[it + 2].code and 0xFF).toByte() }
-                return runCatching { String(raw, Charsets.UTF_16LE) }.getOrDefault(s)
-            }
-            return s
-        }
-
         private fun decodePdfString(bytes: ByteArray): String {
             if (bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()) {
                 return String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
+            }
+            if (bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) {
+                return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
             }
             return String(bytes, Charsets.ISO_8859_1)
         }

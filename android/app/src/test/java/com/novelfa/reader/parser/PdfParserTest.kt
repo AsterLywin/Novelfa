@@ -147,7 +147,9 @@ class PdfParserTest {
     }
 
     @Test
-    fun encryptedPdf_rejected() {
+    fun encryptedPdf_danglingEncryptRef_unsupported() {
+        // A trailer claiming /Encrypt whose dict object does not exist
+        // is malformed encryption, not an unencrypted file.
         val content = "BT /F1 12 Tf (Secret) Tj ET".toByteArray(Charsets.ISO_8859_1)
         val pdf = buildPdf(
             mapOf(
@@ -165,9 +167,9 @@ class PdfParserTest {
         val out = tempFolder.newFolder("out")
         try {
             PdfParser.parse(pdf, "book.pdf", out, ::fallback)
-            throw AssertionError("expected encrypted rejection")
-        } catch (e: IllegalArgumentException) {
-            assertTrue(e.message!!.contains("encrypted"))
+            throw AssertionError("expected unsupported-encryption rejection")
+        } catch (e: PdfUnsupportedEncryptionException) {
+            assertTrue(e.message!!.contains("not found"))
         }
     }
 

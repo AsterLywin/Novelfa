@@ -8,6 +8,10 @@ import com.novelfa.reader.R
 import com.novelfa.reader.parser.BookConverter
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.EpubParser
+import com.novelfa.reader.parser.PdfParser
+import com.novelfa.reader.parser.PdfPasswordRequiredException
+import com.novelfa.reader.parser.PdfPasswordWrongException
+import com.novelfa.reader.parser.PdfUnsupportedEncryptionException
 import java.io.File
 import java.io.IOException
 import java.time.Instant
@@ -40,6 +44,14 @@ class ImportException(
     val messageFa: String,
     cause: Throwable? = null
 ) : Exception(message, cause)
+
+/**
+ * Password prompt the UI supplies for encrypted PDFs: the file name and
+ * whether a previous attempt was wrong, returning the password or null
+ * when the user cancels. Null (no UI attached) means only permission-only
+ * files — empty user password — can open.
+ */
+typealias PdfPasswordProvider = suspend (fileName: String, retry: Boolean) -> String?
 
 class Importer(private val context: Context, private val db: ReaderDb) {
 
@@ -90,7 +102,11 @@ class Importer(private val context: Context, private val db: ReaderDb) {
      * gets stored, with its real extension, so backups and re-opens keep
      * working from the source format, not from a lossy conversion.
      */
-    suspend fun importBook(sourceUri: Uri, overwrite: Boolean = false): String = withContext(Dispatchers.IO) {
+    suspend fun importBook(
+        sourceUri: Uri,
+        overwrite: Boolean = false,
+        passwordProvider: PdfPasswordProvider? = null
+    ): String = withContext(Dispatchers.IO) {
         // When overwriting, find and delete the existing book with the same
         // original file name first.
         if (overwrite) {
@@ -161,6 +177,23 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             val parsed = if (format == BookFormat.EPUB) {
                 unzip(destFile, tmpDir)
                 EpubParser.parse(tmpDir, displayName, chapterFallback)
+            } else if (format == BookFormat.PDF) {
+                // Password-protected PDFs are stored DECRYPTED (see
+                // resolvePdfDecryption): the reader then opens them like
+                // any plain PDF, and the password itself is never stored.
+                val decrypted = resolvePdfDecryption(
+                    destFile.readBytes(), displayName, passwordProvider
+                )
+                if (decrypted != null) destFile.writeBytes(decrypted)
+                try {
+                    BookConverter.parse(destFile, File(tmpDir, "chapters"), chapterFallback)
+                } catch (e: Exception) {
+                    throw ImportException(
+                        e.message ?: "parse failed",
+                        messageFa = context.getString(parseErrorMessageRes(e)),
+                        cause = e
+                    )
+                }
             } else {
                 // Converted formats: parse errors get a format-aware
                 // user-facing message instead of the EPUB-only texts.
@@ -220,6 +253,63 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 cause = e
             )
         }
+    }
+
+    /**
+     * Decrypts an encrypted PDF for storage, or returns null when the
+     * file is not encrypted at all. The first attempt uses no password:
+     * permission-only files open right there (level 1, no prompt). When
+     * a password is required, the UI provider is asked up to three times
+     * (retry flag set after a wrong password); cancelling, or three
+     * wrong answers, fails the import with a localized message.
+     */
+    private suspend fun resolvePdfDecryption(
+        data: ByteArray,
+        displayName: String,
+        provider: PdfPasswordProvider?
+    ): ByteArray? {
+        try {
+            return PdfParser.decryptToPlainPdf(data, null)
+        } catch (e: PdfUnsupportedEncryptionException) {
+            throw ImportException(
+                e.message ?: "unsupported encryption",
+                messageFa = context.getString(R.string.import_error_pdf_unsupported_encryption),
+                cause = e
+            )
+        } catch (e: PdfPasswordRequiredException) {
+            // Fall through to the prompt loop below.
+        }
+        val prompt = provider ?: throw ImportException(
+            "PDF password required",
+            messageFa = context.getString(R.string.import_error_pdf_password_required)
+        )
+        var retry = false
+        repeat(3) {
+            val pw = prompt(displayName, retry)
+                ?: throw ImportException(
+                    "PDF password required",
+                    messageFa = context.getString(R.string.import_error_pdf_password_required)
+                )
+            try {
+                return PdfParser.decryptToPlainPdf(data, pw)
+                    ?: throw ImportException(
+                        "PDF decryption failed",
+                        messageFa = context.getString(R.string.import_error_damaged)
+                    )
+            } catch (e: PdfPasswordWrongException) {
+                retry = true
+            } catch (e: PdfUnsupportedEncryptionException) {
+                throw ImportException(
+                    e.message ?: "unsupported encryption",
+                    messageFa = context.getString(R.string.import_error_pdf_unsupported_encryption),
+                    cause = e
+                )
+            }
+        }
+        throw ImportException(
+            "PDF password wrong",
+            messageFa = context.getString(R.string.import_error_pdf_password_wrong)
+        )
     }
 
     /**

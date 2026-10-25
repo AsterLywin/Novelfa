@@ -233,6 +233,13 @@
     <string name="import_error_unsupported_format">این قالب فایل پشتیبانی نمی‌شود. ناول‌فا فایل‌های EPUB ،TXT ،PDF ،Markdown و Word (.docx) را باز می‌کند.</string>
     <string name="import_error_pdf_encrypted">این فایل PDF قفل‌شده است و باز نمی‌شود.</string>
     <string name="import_error_damaged">به نظر می‌رسد این فایل آسیب دیده است و باز نمی‌شود.</string>
+    <string name="pdf_password_title">PDF رمزدار</string>
+    <string name="pdf_password_message">رمز فایل «%1$s» را وارد کنید.</string>
+    <string name="pdf_password_wrong">رمز اشتباه است. دوباره تلاش کنید.</string>
+    <string name="pdf_password_unlock">باز کردن</string>
+    <string name="import_error_pdf_password_required">این PDF رمزدار است. برای ایمپورت، رمزش را وارد کنید.</string>
+    <string name="import_error_pdf_password_wrong">رمز اشتباه بود و این PDF ایمپورت نشد.</string>
+    <string name="import_error_pdf_unsupported_encryption">این PDF از روش رمزنگاری‌ای استفاده می‌کند که ناول‌فا پشتیبانی نمی‌کند.</string>
     <string name="collection_name_exists">مجموعه‌ای با این اسم از قبل وجود داره.</string>
     <string name="collection_create_failed">ساخت مجموعه انجام نشد.</string>
     <string name="collection_rename_failed">تغییر نام مجموعه انجام نشد.</string>

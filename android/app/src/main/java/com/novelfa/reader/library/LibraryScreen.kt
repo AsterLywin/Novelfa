@@ -318,12 +318,15 @@ fun LibraryScreen(
     // State for duplicate-overwrite confirmation dialog
     var pendingDuplicates by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var pendingDuplicateNames by remember { mutableStateOf<List<String>>(emptyList()) }
+    // Encrypted-PDF password prompt (also covers the ACTION_VIEW path,
+    // which funnels through importUris below).
+    val pdfPasswordPrompt = rememberPdfPasswordPrompt()
 
     suspend fun importUris(uris: List<Uri>) {
         // List separator follows the UI language — never a hardcoded «، ».
         val sep = if (java.util.Locale.getDefault().language.startsWith("en")) ", " else "، "
         try {
-            val summary = viewModel.importMultiple(uris)
+            val summary = viewModel.importMultiple(uris, passwordProvider = pdfPasswordPrompt.provider)
             // If duplicates found, ask for confirmation instead of silently skipping
             if (summary.duplicates > 0 && summary.duplicateUris.isNotEmpty()) {
                 pendingDuplicates = summary.duplicateUris
@@ -1242,7 +1245,9 @@ fun LibraryScreen(
                     pendingDuplicates = emptyList()
                     pendingDuplicateNames = emptyList()
                     scope.launch {
-                        val summary = viewModel.overwriteDuplicates(uris)
+                        val summary = viewModel.overwriteDuplicates(
+                            uris, passwordProvider = pdfPasswordPrompt.provider
+                        )
                         val parts = mutableListOf<String>()
                         if (summary.added > 0) parts.add(addedFmt.format(summary.added))
                         if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
@@ -1261,6 +1266,8 @@ fun LibraryScreen(
             }
         )
     }
+
+    PdfPasswordDialog(pdfPasswordPrompt)
 
     if (avatarOpen) {
         AlertDialog(

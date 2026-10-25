@@ -90,6 +90,7 @@ fun CollectionsScreen(
 
     // WPF parity: import books straight into a collection (CollectionAdd).
     var importTarget by remember { mutableStateOf<String?>(null) }
+    val pdfPasswordPrompt = rememberPdfPasswordPrompt()
     val importPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
@@ -97,7 +98,9 @@ fun CollectionsScreen(
         importTarget = null
         if (uris.isNotEmpty() && target != null) {
             scope.launch {
-                val summary = viewModel.importMultiple(uris)
+                val summary = viewModel.importMultiple(
+                    uris, passwordProvider = pdfPasswordPrompt.provider
+                )
                 if (summary.addedNames.isNotEmpty()) {
                     val all = viewModel.books.first()
                     for (key in summary.addedNames) {
@@ -122,6 +125,8 @@ fun CollectionsScreen(
             }
         }
     }
+
+    PdfPasswordDialog(pdfPasswordPrompt)
 
     // Top safe area: the header must not collide with the status bar.
     Column(modifier = Modifier.statusBarsPadding()) {

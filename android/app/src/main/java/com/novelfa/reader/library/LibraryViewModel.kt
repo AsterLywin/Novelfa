@@ -4,6 +4,7 @@ import android.net.Uri
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.BookEntity
 import com.novelfa.reader.data.Importer
+import com.novelfa.reader.data.PdfPasswordProvider
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.SortFa
 import com.novelfa.reader.data.isCompleted
@@ -182,7 +183,8 @@ class LibraryViewModel(
      */
     suspend fun importMultiple(
         uris: List<Uri>,
-        overwriteDuplicates: Boolean = false
+        overwriteDuplicates: Boolean = false,
+        passwordProvider: PdfPasswordProvider? = null
     ): ImportSummary {
         val imp = requireNotNull(importer) { "Importer not provided" }
         val known = dao.allBooks().first()
@@ -205,7 +207,11 @@ class LibraryViewModel(
                 continue
             }
             try {
-                val newId = imp.importBook(uri, overwrite = overwriteDuplicates)
+                val newId = imp.importBook(
+                    uri,
+                    overwrite = overwriteDuplicates,
+                    passwordProvider = passwordProvider
+                )
                 added++
                 if (imp.applyReadingRecord(newId)) restored++
                 if (key != null) {
@@ -228,7 +234,10 @@ class LibraryViewModel(
      * Overwrites existing books with the given URIs: removes the old book
      * (by original file name match) then imports the new file.
      */
-    suspend fun overwriteDuplicates(uris: List<Uri>): ImportSummary {
+    suspend fun overwriteDuplicates(
+        uris: List<Uri>,
+        passwordProvider: PdfPasswordProvider? = null
+    ): ImportSummary {
         val imp = requireNotNull(importer) { "Importer not provided" }
         var added = 0
         var failed = 0
@@ -244,7 +253,7 @@ class LibraryViewModel(
                         removeBook(existing)
                     }
                 }
-                val newId = imp.importBook(uri)
+                val newId = imp.importBook(uri, passwordProvider = passwordProvider)
                 added++
                 if (imp.applyReadingRecord(newId)) restored++
             } catch (e: CancellationException) {

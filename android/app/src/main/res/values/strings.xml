@@ -233,6 +233,13 @@
     <string name="import_error_unsupported_format">This file format is not supported. Novelfa opens EPUB, TXT, PDF, Markdown and Word (.docx) files.</string>
     <string name="import_error_pdf_encrypted">This PDF is locked (encrypted) and cannot be opened.</string>
     <string name="import_error_damaged">This file appears to be damaged and could not be opened.</string>
+    <string name="pdf_password_title">Password-protected PDF</string>
+    <string name="pdf_password_message">Enter the password for «%1$s».</string>
+    <string name="pdf_password_wrong">Wrong password. Please try again.</string>
+    <string name="pdf_password_unlock">Unlock</string>
+    <string name="import_error_pdf_password_required">This PDF is password-protected. Enter its password to import it.</string>
+    <string name="import_error_pdf_password_wrong">The password was wrong, so this PDF could not be imported.</string>
+    <string name="import_error_pdf_unsupported_encryption">This PDF uses an encryption method Novelfa does not support.</string>
     <string name="collection_name_exists">A collection with this name already exists.</string>
     <string name="collection_create_failed">Couldn\'t create the collection.</string>
     <string name="collection_rename_failed">Couldn\'t rename the collection.</string>
