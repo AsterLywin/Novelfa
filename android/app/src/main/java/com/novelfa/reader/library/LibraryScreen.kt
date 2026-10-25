@@ -112,6 +112,7 @@ import coil.compose.AsyncImage
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookEntity
 import com.novelfa.reader.data.ImportException
+import com.novelfa.reader.data.SUPPORTED_BOOK_MIME_TYPES
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.isCompleted
 import com.novelfa.reader.data.isInProgress
@@ -368,9 +369,9 @@ fun LibraryScreen(
             }
         }
     }
-    val launchImport = { picker.launch(arrayOf("application/epub+zip", "application/epub")) }
+    val launchImport = { picker.launch(SUPPORTED_BOOK_MIME_TYPES) }
 
-    // EPUB handed in from a file manager (ACTION_VIEW). Imported once, then
+    // Book handed in from a file manager (ACTION_VIEW). Imported once, then
     // the URI is consumed so rotation doesn't re-import it. Consume AFTER the
     // import: consuming first changes the effect key and Compose cancels the
     // in-flight import.

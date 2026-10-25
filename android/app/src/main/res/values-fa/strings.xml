@@ -115,7 +115,6 @@
     <string name="collection_empty">خالی</string>
     <string name="collections_empty_hint">هنوز مجموعه‌ای نساختی. روی «＋ مجموعه‌ی جدید» بزن.</string>
     <string name="collection_stats">%1$d جلد · %2$d بخش · %3$d جلد تموم‌شده</string>
-    <string name="add_epub">افزودن EPUB</string>
     <string name="about_title">درباره ناول‌فا</string>
     <string name="about_body">کتاب‌خوان فارسی، کاملاً آفلاین و بدون هیچ دسترسی. هیچ داده‌ای جمع یا ارسال نمی‌شود.</string>
     <string name="app_version">نسخه %1$s</string>
@@ -231,6 +230,9 @@
     <string name="platform_windows">ویندوز</string>
     <string name="import_error_too_large">حجم فایل بیش از حد مجاز است.</string>
     <string name="import_error_no_readable_sections">این فایل هیچ بخش قابل خواندنی ندارد.</string>
+    <string name="import_error_unsupported_format">این قالب فایل پشتیبانی نمی‌شود. ناول‌فا فایل‌های EPUB ،TXT ،PDF ،Markdown و Word (.docx) را باز می‌کند.</string>
+    <string name="import_error_pdf_encrypted">این فایل PDF قفل‌شده است و باز نمی‌شود.</string>
+    <string name="import_error_damaged">به نظر می‌رسد این فایل آسیب دیده است و باز نمی‌شود.</string>
     <string name="collection_name_exists">مجموعه‌ای با این اسم از قبل وجود داره.</string>
     <string name="collection_create_failed">ساخت مجموعه انجام نشد.</string>
     <string name="collection_rename_failed">تغییر نام مجموعه انجام نشد.</string>

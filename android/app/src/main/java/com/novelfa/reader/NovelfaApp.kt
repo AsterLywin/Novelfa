@@ -47,8 +47,8 @@ import com.novelfa.reader.theme.parseHex
 @Composable
 fun NovelfaApp(
     appearance: PrefsStore.Appearance? = null,
-    openEpubUri: Uri? = null,
-    onEpubUriConsumed: () -> Unit = {}
+    openBookUri: Uri? = null,
+    onBookUriConsumed: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
@@ -116,8 +116,8 @@ fun NovelfaApp(
                     )
                 }
                 NavGraph(
-                    openEpubUri = openEpubUri,
-                    onEpubUriConsumed = onEpubUriConsumed
+                    openBookUri = openBookUri,
+                    onBookUriConsumed = onBookUriConsumed
                 )
             }
         }

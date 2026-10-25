@@ -1,0 +1,184 @@
+package com.novelfa.reader.parser
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayOutputStream
+import java.util.zip.Deflater
+
+class PdfParserTest {
+
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
+    private fun fallback(n: Int) = "Section $n"
+
+    /** Builds a classic-xref PDF from object bodies (dict + stream bytes). */
+    private fun buildPdf(
+        objects: Map<Int, ByteArray>,
+        trailerExtra: String = ""
+    ): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write("%PDF-1.4\n".toByteArray(Charsets.ISO_8859_1))
+        val offsets = mutableMapOf<Int, Int>()
+        for ((num, body) in objects.toSortedMap()) {
+            offsets[num] = out.size()
+            out.write("$num 0 obj\n".toByteArray(Charsets.ISO_8859_1))
+            out.write(body)
+            out.write("\nendobj\n".toByteArray(Charsets.ISO_8859_1))
+        }
+        val xrefPos = out.size()
+        val max = objects.keys.max()
+        out.write("xref\n".toByteArray(Charsets.ISO_8859_1))
+        out.write("0 ${max + 1}\n".toByteArray(Charsets.ISO_8859_1))
+        out.write("0000000000 65535 f \n".toByteArray(Charsets.ISO_8859_1))
+        for (n in 1..max) {
+            val off = offsets[n] ?: 0
+            out.write(
+                "%010d 00000 n \n".format(java.util.Locale.US, off)
+                    .toByteArray(Charsets.ISO_8859_1)
+            )
+        }
+        out.write(
+            "trailer\n<< /Size ${max + 1} /Root 1 0 R $trailerExtra >>\nstartxref\n$xrefPos\n%%EOF\n"
+                .toByteArray(Charsets.ISO_8859_1)
+        )
+        return out.toByteArray()
+    }
+
+    private fun streamObj(dict: String, content: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(dict.toByteArray(Charsets.ISO_8859_1))
+        out.write("\nstream\n".toByteArray(Charsets.ISO_8859_1))
+        out.write(content)
+        out.write("\nendstream".toByteArray(Charsets.ISO_8859_1))
+        return out.toByteArray()
+    }
+
+    private fun flate(data: ByteArray): ByteArray {
+        val deflater = Deflater()
+        deflater.setInput(data)
+        deflater.finish()
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(1024)
+        while (!deflater.finished()) {
+            val n = deflater.deflate(buf)
+            out.write(buf, 0, n)
+        }
+        deflater.end()
+        return out.toByteArray()
+    }
+
+    private fun twoPagePdf(
+        page1Content: ByteArray,
+        page1Dict: String = "<< /Length ${page1Content.size} >>",
+        page2Content: ByteArray = "BT /F1 12 Tf (Page two) Tj ET".toByteArray(Charsets.ISO_8859_1),
+        outline: Boolean = true
+    ): ByteArray {
+        val objects = mutableMapOf<Int, ByteArray>()
+        objects[1] = ("<< /Type /Catalog /Pages 2 0 R" +
+            (if (outline) " /Outlines 8 0 R" else "") + " >>")
+            .toByteArray(Charsets.ISO_8859_1)
+        objects[2] = "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>"
+            .toByteArray(Charsets.ISO_8859_1)
+        objects[3] = ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] " +
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>")
+            .toByteArray(Charsets.ISO_8859_1)
+        objects[4] = ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] " +
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>")
+            .toByteArray(Charsets.ISO_8859_1)
+        objects[5] = ("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica " +
+            "/Encoding /WinAnsiEncoding >>").toByteArray(Charsets.ISO_8859_1)
+        objects[6] = streamObj(page1Dict, page1Content)
+        objects[7] = streamObj("<< /Length ${page2Content.size} >>", page2Content)
+        if (outline) {
+            objects[8] = "<< /Type /Outlines /First 9 0 R /Last 10 0 R /Count 2 >>"
+                .toByteArray(Charsets.ISO_8859_1)
+            objects[9] = ("<< /Title (Chapter One) /Parent 8 0 R /Next 10 0 R " +
+                "/Dest [3 0 R /XYZ 0 700 0] >>").toByteArray(Charsets.ISO_8859_1)
+            objects[10] = ("<< /Title (Chapter Two) /Parent 8 0 R /Prev 9 0 R " +
+                "/Dest [4 0 R /XYZ 0 700 0] >>").toByteArray(Charsets.ISO_8859_1)
+        }
+        return buildPdf(objects)
+    }
+
+    @Test
+    fun simplePdf_outlineChapters_textExtracted() {
+        val content = "BT /F1 12 Tf 100 700 Td (Hello World) Tj T* (Second line) Tj ET"
+            .toByteArray(Charsets.ISO_8859_1)
+        val pdf = twoPagePdf(content)
+        val out = tempFolder.newFolder("out")
+        val book = PdfParser.parse(pdf, "book.pdf", out, ::fallback)
+        assertEquals(listOf("Chapter One", "Chapter Two"), book.chapters.map { it.title })
+        val first = book.chapters[0].file.readText()
+        assertTrue(first.contains("Hello World"))
+        assertTrue(first.contains("Second line"))
+        assertTrue(book.chapters[1].file.readText().contains("Page two"))
+    }
+
+    @Test
+    fun flateContent_decodes() {
+        val raw = "BT /F1 12 Tf (Compressed text here) Tj ET"
+            .toByteArray(Charsets.ISO_8859_1)
+        val compressed = flate(raw)
+        val pdf = twoPagePdf(
+            compressed,
+            page1Dict = "<< /Length ${compressed.size} /Filter /FlateDecode >>",
+            outline = false
+        )
+        val out = tempFolder.newFolder("out")
+        val book = PdfParser.parse(pdf, "book.pdf", out, ::fallback)
+        val body = book.chapters.joinToString("") { it.file.readText() }
+        assertTrue(body.contains("Compressed text here"))
+    }
+
+    @Test
+    fun tjArray_kerningNumbers_becomeWordSpaces() {
+        // TJ with a large negative number between words = a word gap.
+        val content = ("BT /F1 12 Tf [(Hel) -300 (lo) ( World)] TJ ET")
+            .toByteArray(Charsets.ISO_8859_1)
+        val pdf = twoPagePdf(content, outline = false)
+        val out = tempFolder.newFolder("out")
+        val book = PdfParser.parse(pdf, "book.pdf", out, ::fallback)
+        val body = book.chapters.joinToString("") { it.file.readText() }
+        assertTrue(body.contains("Hel lo World"))
+    }
+
+    @Test
+    fun encryptedPdf_rejected() {
+        val content = "BT /F1 12 Tf (Secret) Tj ET".toByteArray(Charsets.ISO_8859_1)
+        val pdf = buildPdf(
+            mapOf(
+                1 to "<< /Type /Catalog /Pages 2 0 R >>".toByteArray(Charsets.ISO_8859_1),
+                2 to "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".toByteArray(Charsets.ISO_8859_1),
+                3 to ("<< /Type /Page /Parent 2 0 R " +
+                    "/Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>")
+                    .toByteArray(Charsets.ISO_8859_1),
+                5 to ("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica " +
+                    "/Encoding /WinAnsiEncoding >>").toByteArray(Charsets.ISO_8859_1),
+                6 to streamObj("<< /Length ${content.size} >>", content)
+            ),
+            trailerExtra = "/Encrypt 99 0 R"
+        )
+        val out = tempFolder.newFolder("out")
+        try {
+            PdfParser.parse(pdf, "book.pdf", out, ::fallback)
+            throw AssertionError("expected encrypted rejection")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("encrypted"))
+        }
+    }
+
+    @Test
+    fun noOutline_chunksBySize() {
+        val onePage = ("BT /F1 12 Tf (" + "word ".repeat(3000) + ") Tj ET")
+            .toByteArray(Charsets.ISO_8859_1)
+        val pdf = twoPagePdf(onePage, outline = false)
+        val out = tempFolder.newFolder("out")
+        val book = PdfParser.parse(pdf, "book.pdf", out, ::fallback)
+        assertTrue(book.chapters.size > 1)
+        assertTrue(book.chapters.all { it.title.startsWith("Section") })
+    }
+}

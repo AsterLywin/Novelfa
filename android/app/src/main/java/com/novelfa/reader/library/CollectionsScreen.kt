@@ -45,6 +45,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.widget.Toast
 import com.novelfa.reader.R
+import com.novelfa.reader.data.SUPPORTED_BOOK_MIME_TYPES
 import com.novelfa.reader.data.BookEntity
 import com.novelfa.reader.settings.CollectionException
 import com.novelfa.reader.data.isCompleted
@@ -87,7 +88,7 @@ fun CollectionsScreen(
     val restoredFmt = stringResource(R.string.import_summary_restored)
     val countFmt = stringResource(R.string.collection_count)
 
-    // WPF parity: import EPUBs straight into a collection (CollectionAdd).
+    // WPF parity: import books straight into a collection (CollectionAdd).
     var importTarget by remember { mutableStateOf<String?>(null) }
     val importPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -194,10 +195,10 @@ fun CollectionsScreen(
                                 TextButton(onClick = {
                                     importTarget = name
                                     importPicker.launch(
-                                        arrayOf("application/epub+zip", "application/epub")
+                                        SUPPORTED_BOOK_MIME_TYPES
                                     )
                                 }) {
-                                    Text(stringResource(R.string.add_epub))
+                                    Text(stringResource(R.string.add_book))
                                 }
                                 TextButton(onClick = { renameTarget = name }) {
                                     Text(stringResource(R.string.rename))
@@ -253,9 +254,9 @@ fun CollectionsScreen(
                     }
                     TextButton(onClick = {
                         importTarget = name
-                        importPicker.launch(arrayOf("application/epub+zip", "application/epub"))
+                        importPicker.launch(SUPPORTED_BOOK_MIME_TYPES)
                     }) {
-                        Text(stringResource(R.string.add_epub))
+                        Text(stringResource(R.string.add_book))
                     }
                 }
             }

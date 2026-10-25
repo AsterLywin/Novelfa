@@ -175,7 +175,7 @@ class LibraryViewModel(
     )
 
     /**
-     * Imports several EPUBs, skipping ones already in the library (matched by
+     * Imports several books, skipping ones already in the library (matched by
      * original file name, like the desktop client's path-based dedupe) and
      * ones repeated inside the batch. A single-URI batch rethrows so the
      * diagnostic import-error path keeps working.
@@ -205,7 +205,7 @@ class LibraryViewModel(
                 continue
             }
             try {
-                val newId = imp.importEpub(uri, overwrite = overwriteDuplicates)
+                val newId = imp.importBook(uri, overwrite = overwriteDuplicates)
                 added++
                 if (imp.applyReadingRecord(newId)) restored++
                 if (key != null) {
@@ -244,7 +244,7 @@ class LibraryViewModel(
                         removeBook(existing)
                     }
                 }
-                val newId = imp.importEpub(uri)
+                val newId = imp.importBook(uri)
                 added++
                 if (imp.applyReadingRecord(newId)) restored++
             } catch (e: CancellationException) {

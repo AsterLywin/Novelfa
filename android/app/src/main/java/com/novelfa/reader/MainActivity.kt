@@ -21,7 +21,7 @@ import kotlinx.coroutines.runBlocking
 
 class MainActivity : ComponentActivity() {
     /**
-     * EPUB opened from a file manager (ACTION_VIEW, WPF file-association
+     * Book opened from a file manager (ACTION_VIEW, WPF file-association
      * parity). singleTop + onNewIntent so tapping a file while the app is
      * open reuses this activity instead of stacking a new one.
      */
@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
         // WindowInsets padding so content stays clear of system bars.
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        viewUri = extractEpubUri(intent)
+        viewUri = extractBookUri(intent)
         // Cold-start flash fix: read the appearance prefs ONCE, before the
         // first frame, and seed the UI with them. Without this the first
         // frames render with the collectAsState defaults (dark base,
@@ -69,8 +69,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             NovelfaApp(
                 appearance = appearance,
-                openEpubUri = viewUri,
-                onEpubUriConsumed = { viewUri = null }
+                openBookUri = viewUri,
+                onBookUriConsumed = { viewUri = null }
             )
         }
     }
@@ -78,10 +78,10 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        extractEpubUri(intent)?.let { viewUri = it }
+        extractBookUri(intent)?.let { viewUri = it }
     }
 
-    private fun extractEpubUri(intent: Intent?): Uri? {
+    private fun extractBookUri(intent: Intent?): Uri? {
         if (intent?.action != Intent.ACTION_VIEW) return null
         return intent.data
     }

@@ -5,6 +5,8 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
 import com.novelfa.reader.R
+import com.novelfa.reader.parser.BookConverter
+import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.EpubParser
 import java.io.File
 import java.io.IOException
@@ -15,6 +17,22 @@ import java.util.zip.ZipFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/**
+ * MIME types the in-app pickers offer. Kept here (not in the UI files)
+ * so the library and collections pickers can never drift apart.
+ * File managers may still hand the app anything via ACTION_VIEW; the
+ * importer itself validates the format and rejects the rest.
+ */
+val SUPPORTED_BOOK_MIME_TYPES = arrayOf(
+    "application/epub+zip",
+    "application/epub",
+    "text/plain",
+    "text/markdown",
+    "text/x-markdown",
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
 
 class ImportException(
     message: String,
@@ -64,7 +82,15 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         )
     }
 
-    suspend fun importEpub(sourceUri: Uri, overwrite: Boolean = false): String = withContext(Dispatchers.IO) {
+    /**
+     * Imports one book in any supported format (EPUB, TXT, PDF, Markdown,
+     * DOCX). EPUB keeps its zip path; the rest are converted to chapter
+     * files by [BookConverter] (into a throwaway dir here — the reader
+     * re-converts on open into its own cache). The ORIGINAL file is what
+     * gets stored, with its real extension, so backups and re-opens keep
+     * working from the source format, not from a lossy conversion.
+     */
+    suspend fun importBook(sourceUri: Uri, overwrite: Boolean = false): String = withContext(Dispatchers.IO) {
         // When overwriting, find and delete the existing book with the same
         // original file name first.
         if (overwrite) {
@@ -77,23 +103,26 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         }
         val id = UUID.randomUUID().toString()
         val booksDir = File(context.filesDir, "books").apply { mkdirs() }
-        val dest = File(booksDir, "$id.epub")
+        val tmpDest = File(booksDir, "$id.tmp")
         val tmpDir = File(context.cacheDir, "epub_tmp/$id")
+        // Assigned inside the try (extension known only after sniffing);
+        // the failure paths below delete whichever file got created.
+        var dest: File? = null
         // Fail fast on absurd picks instead of filling internal storage with
         // the unbounded SAF copy below.
         val pickedSize = queryDisplaySize(sourceUri)
-        if (pickedSize != null && pickedSize > MAX_EPUB_BYTES) {
+        if (pickedSize != null && pickedSize > MAX_BOOK_BYTES) {
             throw ImportException(
-                "EPUB too large: $pickedSize bytes",
+                "Book too large: $pickedSize bytes",
                 messageFa = context.getString(R.string.import_error_too_large)
             )
         }
         try {
             context.contentResolver.openInputStream(sourceUri)?.use { input ->
-                dest.outputStream().use { output ->
+                tmpDest.outputStream().use { output ->
                     // Cap the copy even when the provider didn't report a size:
                     // copyTo with a byte budget instead of unbounded.
-                    var remaining = MAX_EPUB_BYTES
+                    var remaining = MAX_BOOK_BYTES
                     val buf = ByteArray(8192)
                     while (true) {
                         val n = input.read(buf)
@@ -101,7 +130,7 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                         remaining -= n
                         if (remaining < 0) {
                             throw ImportException(
-                                "EPUB too large: exceeds $MAX_EPUB_BYTES bytes",
+                                "Book too large: exceeds $MAX_BOOK_BYTES bytes",
                                 messageFa = context.getString(R.string.import_error_too_large)
                             )
                         }
@@ -109,29 +138,56 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     }
                 }
             } ?: throw IOException("Cannot open input stream: $sourceUri")
+            // Keep the original file name: when a book has no internal
+            // title, the parser falls back to the file name — the UUID
+            // name would show up as the book title otherwise.
+            val displayName = queryDisplayName(sourceUri) ?: id
+            val format = BookFormat.fromExtension(displayName)
+                ?: BookFormat.detect(tmpDest)
+                ?: throw ImportException(
+                    "Unsupported book format: $displayName",
+                    messageFa = context.getString(R.string.import_error_unsupported_format)
+                )
+            dest = File(booksDir, "$id.${format.extension}")
+            val destFile = dest!!
+            if (!tmpDest.renameTo(destFile)) {
+                tmpDest.copyTo(destFile, overwrite = true)
+                tmpDest.delete()
+            }
             tmpDir.mkdirs()
-            unzip(dest, tmpDir)
-            // Keep the original file name: when the EPUB has no <dc:title>,
-            // the parser falls back to the file name — the UUID name would
-            // show up as the book title otherwise.
-            val displayName = queryDisplayName(sourceUri) ?: "$id.epub"
-            val parsed = EpubParser.parse(tmpDir, displayName) { n ->
+            val chapterFallback: (Int) -> String = { n ->
                 context.getString(R.string.chapter_fallback, n)
+            }
+            val parsed = if (format == BookFormat.EPUB) {
+                unzip(destFile, tmpDir)
+                EpubParser.parse(tmpDir, displayName, chapterFallback)
+            } else {
+                // Converted formats: parse errors get a format-aware
+                // user-facing message instead of the EPUB-only texts.
+                try {
+                    BookConverter.parse(destFile, File(tmpDir, "chapters"), chapterFallback)
+                } catch (e: Exception) {
+                    throw ImportException(
+                        e.message ?: "parse failed",
+                        messageFa = context.getString(parseErrorMessageRes(e)),
+                        cause = e
+                    )
+                }
             }
             if (parsed.chapters.isEmpty()) {
                 throw ImportException(
-                    "EPUB has no readable chapters",
+                    "Book has no readable chapters",
                     messageFa = context.getString(R.string.import_error_no_readable_sections)
                 )
             }
             val coverPath = parsed.coverFile
                 ?.takeIf { it.exists() }
-                ?.let { CoverStore(context).saveCover(it, dest.absolutePath).absolutePath }
+                ?.let { CoverStore(context).saveCover(it, destFile.absolutePath).absolutePath }
             db.bookDao().insert(
                 BookEntity(
                     id = id,
                     title = parsed.title,
-                    filePath = dest.absolutePath,
+                    filePath = destFile.absolutePath,
                     coverPath = coverPath,
                     totalChapters = parsed.chapters.size,
                     dateAdded = Instant.now().toString(),
@@ -144,23 +200,46 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             // Never swallow coroutine cancellation: clean up and rethrow so the
             // caller's scope cancels properly instead of faking an import error.
             tmpDir.deleteRecursively()
-            dest.delete()
+            dest?.delete()
+            tmpDest.delete()
             throw e
         } catch (e: ImportException) {
             Log.e("NovelfaImporter", "import failed: ${e.message}", e)
             tmpDir.deleteRecursively()
-            dest.delete()
+            dest?.delete()
+            tmpDest.delete()
             throw e
         } catch (e: Exception) {
             Log.e("NovelfaImporter", "import failed: ${e.message}", e)
             tmpDir.deleteRecursively()
-            dest.delete()
+            dest?.delete()
+            tmpDest.delete()
             throw ImportException(
                 e.message ?: "import failed",
                 messageFa = context.getString(importErrorMessageRes(e)),
                 cause = e
             )
         }
+    }
+
+    /**
+     * User-facing message for a converted-format parse failure. Kept
+     * separate from [importErrorMessageRes] (the EPUB path) so a corrupt
+     * DOCX is never reported as "not a valid EPUB".
+     */
+    private fun parseErrorMessageRes(e: Throwable): Int {
+        var t: Throwable? = e
+        while (t != null) {
+            when {
+                t.message?.contains("encrypted", ignoreCase = true) == true ->
+                    return R.string.import_error_pdf_encrypted
+                t is ZipException -> return R.string.import_error_damaged
+                t is SecurityException -> return R.string.import_error_access_denied
+                t is IOException -> return R.string.import_error_cannot_read
+            }
+            t = t.cause
+        }
+        return R.string.import_error_damaged
     }
 
     /**
@@ -173,6 +252,10 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         var t: Throwable? = e
         while (t != null) {
             when {
+                t.message?.contains("encrypted", ignoreCase = true) == true ->
+                    return R.string.import_error_pdf_encrypted
+                t.message?.contains("Unsupported book format", ignoreCase = true) == true ->
+                    return R.string.import_error_unsupported_format
                 // NB: ZipException extends IOException — check it first.
                 t is ZipException -> return R.string.import_error_not_valid_epub
                 t is SecurityException -> return R.string.import_error_access_denied
@@ -275,8 +358,8 @@ class Importer(private val context: Context, private val db: ReaderDb) {
     }
 }
 
-/** Zip-bomb guardrails for EPUB extraction (generous: real books are far smaller). */
+/** Zip-bomb guardrails for EPUB/DOCX extraction (generous: real books are far smaller). */
 private const val MAX_ZIP_ENTRIES = 10_000
 private const val MAX_ZIP_BYTES = 500L * 1024 * 1024
 /** Upper bound for the initial SAF copy, before unzip/parse get a say. */
-private const val MAX_EPUB_BYTES = 500L * 1024 * 1024
+private const val MAX_BOOK_BYTES = 500L * 1024 * 1024

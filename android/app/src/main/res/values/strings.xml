@@ -115,7 +115,6 @@
     <string name="collection_empty">Empty</string>
     <string name="collections_empty_hint">No collections yet. Tap \"+ New collection\".</string>
     <string name="collection_stats">%1$d vols · %2$d chapters · %3$d finished</string>
-    <string name="add_epub">Add EPUB</string>
     <string name="about_title">About Novelfa</string>
     <string name="about_body">Persian reader, fully offline with zero permissions. No data is collected or sent.</string>
     <string name="app_version">Version %1$s</string>
@@ -231,6 +230,9 @@
     <string name="platform_windows">Windows</string>
     <string name="import_error_too_large">The file is larger than the allowed size.</string>
     <string name="import_error_no_readable_sections">This file has no readable sections.</string>
+    <string name="import_error_unsupported_format">This file format is not supported. Novelfa opens EPUB, TXT, PDF, Markdown and Word (.docx) files.</string>
+    <string name="import_error_pdf_encrypted">This PDF is locked (encrypted) and cannot be opened.</string>
+    <string name="import_error_damaged">This file appears to be damaged and could not be opened.</string>
     <string name="collection_name_exists">A collection with this name already exists.</string>
     <string name="collection_create_failed">Couldn\'t create the collection.</string>
     <string name="collection_rename_failed">Couldn\'t rename the collection.</string>

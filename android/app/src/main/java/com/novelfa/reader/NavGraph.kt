@@ -26,8 +26,8 @@ import com.novelfa.reader.theme.PrefsStoreRankPrefs
 
 @Composable
 fun NavGraph(
-    openEpubUri: Uri? = null,
-    onEpubUriConsumed: () -> Unit = {}
+    openBookUri: Uri? = null,
+    onBookUriConsumed: () -> Unit = {}
 ) {
     val navController = rememberNavController()
     NavHost(navController = navController, startDestination = Routes.LIBRARY) {
@@ -50,8 +50,8 @@ fun NavGraph(
                 viewModel = viewModel,
                 onOpenCollections = { navController.navigate(Routes.COLLECTIONS) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                pendingImportUri = openEpubUri,
-                onImportUriConsumed = onEpubUriConsumed
+                pendingImportUri = openBookUri,
+                onImportUriConsumed = onBookUriConsumed
             )
         }
         composable(Routes.COLLECTIONS) {

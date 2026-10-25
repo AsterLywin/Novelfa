@@ -79,6 +79,9 @@ import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.PrefsStore
+import com.novelfa.reader.parser.BookConverter
+import com.novelfa.reader.parser.BookFormat
+import com.novelfa.reader.parser.ConvertedBook
 import com.novelfa.reader.parser.EpubParser
 import com.novelfa.reader.settings.SupportDialog
 import com.novelfa.reader.settings.SupportTracker
@@ -278,6 +281,13 @@ fun ReaderScreen(
                 onXpUnitFinished = xpCallback
             )
             v.readingMode = ReadingMode.fromKey(savedMode)
+            // Book direction from CONTENT, not from the UI language:
+            // `isEnglish` drives the paged strip geometry (which side the
+            // next page sits on) and the swipe/tap maps, and it used to
+            // stay false for every book — so an English book paginated
+            // right-to-left. Per-paragraph direction inside the page is
+            // stamped separately by prepareChapterBody either way.
+            v.isEnglish = detectBookIsLtr(parsed.chapters)
             val target = entity.lastChapterIndex.coerceIn(0, parsed.chapters.size - 1)
             if (!v.loadChapter(target)) {
                 throw IOException(v.lastError ?: "")
@@ -1190,25 +1200,47 @@ private fun SpacingDialog(
     )
 }
 
+/**
+ * Opens a stored book into its chapter files. EPUBs are extracted (once
+ * per source change, guarded by the stamp) and parsed from the tree;
+ * TXT / Markdown / PDF / DOCX are converted by [BookConverter] into
+ * chapter files in the same cache directory, and a valid stamp lets the
+ * next open rebuild the book from those files without re-converting.
+ * The stamp covers mtime AND length, so a replaced file with an
+ * unchanged mtime still re-converts.
+ */
 @Throws(IOException::class)
 private fun openParsed(
     context: Context,
-    epubPath: String,
+    bookPath: String,
     bookId: String
 ): com.novelfa.reader.model.ParsedBook {
-    val epub = File(epubPath)
-    if (!epub.exists()) {
-        throw IOException("epub missing: " + epub.absolutePath)
+    val book = File(bookPath)
+    if (!book.exists()) {
+        throw IOException("book missing: " + book.absolutePath)
     }
+    val format = BookFormat.detect(book)
+        ?: throw IOException("unsupported book format: " + book.name)
     val outDir = File(context.cacheDir, "epub_open/" + bookId)
     outDir.mkdirs()
-    // Re-extract when the epub changed since the last open.
+    val chapterFallback: (Int) -> String = { n ->
+        context.getString(R.string.chapter_fallback, n)
+    }
     val stamp = File(outDir, ".src_stamp")
-    val stampOk = stamp.exists() && stamp.readText() == epub.lastModified().toString()
-    if (!stampOk) {
-        outDir.deleteRecursively()
-        outDir.mkdirs()
-        ZipFile(epub).use { zf ->
+    val stampText = book.lastModified().toString() + "|" + book.length()
+    val stampOk = stamp.exists() && runCatching { stamp.readText() }.getOrNull() == stampText
+    if (stampOk) {
+        if (format == BookFormat.EPUB) {
+            return EpubParser.parse(outDir, book.name, chapterFallback)
+        }
+        ConvertedBook.read(outDir, book.name, chapterFallback)?.let { return it }
+        // Cache present but no chapter files (e.g. a crashed convert):
+        // fall through to a fresh conversion below.
+    }
+    outDir.deleteRecursively()
+    outDir.mkdirs()
+    val parsed = if (format == BookFormat.EPUB) {
+        ZipFile(book).use { zf ->
             val entries = zf.entries()
             var entryCount = 0
             var totalBytes = 0L
@@ -1241,11 +1273,35 @@ private fun openParsed(
                 }
             }
         }
-        stamp.writeText(epub.lastModified().toString())
+        EpubParser.parse(outDir, book.name, chapterFallback)
+    } else {
+        BookConverter.parse(book, outDir, chapterFallback)
     }
-    return EpubParser.parse(outDir, epub.name) { n ->
-        context.getString(R.string.chapter_fallback, n)
+    stamp.writeText(stampText)
+    return parsed
+}
+
+/**
+ * Book-level reading direction from content: the majority script of the
+ * first few chapters' plain text. Latin majority → LTR; anything else
+ * (Persian/Arabic majority, or no letters at all) → RTL, matching the
+ * app's Persian-first default. Only a sample is read (4 KB per chapter)
+ * so opening a long book stays cheap.
+ */
+private fun detectBookIsLtr(chapters: List<com.novelfa.reader.model.Chapter>): Boolean {
+    val sample = StringBuilder()
+    for (chapter in chapters.take(3)) {
+        val text = runCatching {
+            chapter.file.inputStream().bufferedReader(Charsets.UTF_8).use { reader ->
+                val buf = CharArray(4096)
+                val n = reader.read(buf)
+                if (n > 0) String(buf, 0, n) else ""
+            }
+        }.getOrNull() ?: continue
+        sample.append(HtmlText.htmlToPlainText(text)).append(' ')
+        if (sample.length >= 8192) break
     }
+    return HtmlText.detectDirection(sample.toString()) == 1
 }
 
 /** Zip-bomb guardrails for EPUB extraction (generous: real books are far smaller). */
