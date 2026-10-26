@@ -563,6 +563,40 @@ object HtmlBuilder {
     }
 
     // ------------------------------------------------------------------
+    // NPE-2.3 pause rule (see NOVELFA_PAGE_ARCHITECTURE.md §17): a page
+    // must never end mid-phrase. Pauses are tiered by what they close:
+    //   STRONG — a complete unit closes (sentence end or independent
+    //     clause/list item): . ؟ ! … ؛ (+ Latin . ? ! … ;)
+    //   WEAK — a phrase closes but the sentence still depends on what
+    //     follows (introductory phrase, announcement): ، : (+ Latin , :)
+    // The break is the latest STRONG pause that wastes at most 3 lines
+    // (the same "standard" as the tail exception); if the strong pause
+    // is farther back, the latest WEAK pause after it; if there is no
+    // weak pause after it, the strong pause anyway; if the page has no
+    // pause at all, the fill-point break (last resort). A pause that
+    // would leave a first fragment of a single line is skipped (orphan
+    // guard) — the leaf then starts fresh on the next page instead.
+    // ------------------------------------------------------------------
+    var PAUSE_STRONG = '.؟!…؛?;';
+    var PAUSE_WEAK = '،:,';
+    var PAUSE_CLOSERS = '»«“”‘’\'")]}';
+    var PAUSE_WASTE_STD = 3;
+    // Tier of the pause a word token ends with ('strong' / 'weak' / '').
+    // Trailing whitespace and trailing quote/bracket closers are stripped
+    // first, so «می‌سوزد.»» counts as a sentence end and «گفت:«» as a
+    // colon — Persian quotes otherwise hide the pause.
+    function pauseKind(tokText) {
+        var w = tokText, c;
+        while (w.length && /\s/.test(w.charAt(w.length - 1))) w = w.slice(0, -1);
+        while (w.length && PAUSE_CLOSERS.indexOf(w.charAt(w.length - 1)) >= 0) w = w.slice(0, -1);
+        if (!w.length) return '';
+        c = w.charAt(w.length - 1);
+        if (PAUSE_STRONG.indexOf(c) >= 0) return 'strong';
+        if (PAUSE_WEAK.indexOf(c) >= 0) return 'weak';
+        return '';
+    }
+
+    // ------------------------------------------------------------------
     // Page construction.
     // ------------------------------------------------------------------
     function newPageEl() {
@@ -741,10 +775,65 @@ object HtmlBuilder {
                     first = false;
                     continue;
                 }
+                // ---- NPE-2.3 pause rule: never end a page mid-phrase.
+                // The binary search above chose `best` (the fill point).
+                // Backtrack to a pause inside the fitted tokens instead:
+                // latest STRONG pause if it wastes <= PAUSE_WASTE_STD
+                // lines, else latest WEAK pause after it, else the strong
+                // pause anyway. If there is no pause and this is the first
+                // fragment on a non-empty page, the last pause on the page
+                // is at the end of an earlier block: finish the page and
+                // let the leaf start fresh (§17.5 fallback). Otherwise
+                // keep the fill-point break (last resort).
+                var chosenEnd = best;
+                if (best < tokens.length) {
+                    var sEnd = -1, wEnd = -1, ti, pk;
+                    for (ti = best - 1; ti >= from; ti--) {
+                        if (tokens[ti].t !== 'w') continue;
+                        pk = pauseKind(tokens[ti].text);
+                        if (pk === 'strong' && sEnd < 0) sEnd = ti + 1;
+                        else if (pk === 'weak' && wEnd < 0) wEnd = ti + 1;
+                        if (sEnd >= 0 && wEnd >= 0) break;
+                    }
+                    var cand = -1;
+                    if (sEnd >= 0) {
+                        var usedBest = usedH();
+                        measure(sEnd);
+                        var waste = Math.round((usedBest - usedH()) / (lineH || 24));
+                        if (waste <= PAUSE_WASTE_STD) cand = sEnd;
+                        else if (wEnd > sEnd) cand = wEnd;
+                        else cand = sEnd;
+                    } else if (wEnd >= 0) {
+                        cand = wEnd;
+                    }
+                    if (cand >= 0 && fragIndex === 0) {
+                        // Orphan guard: a first fragment of a single line
+                        // is not a break (approximation: fragment height
+                        // vs 1.5 line heights — leaf padding can blur it,
+                        // but the guard only ever skips a break, never
+                        // creates one, so a miss is harmless).
+                        if (cand !== best) measure(cand);
+                        var fh = trial ? trial.getBoundingClientRect().height : 0;
+                        if (fh <= (lineH || 24) * 1.5 + EPS) cand = -1;
+                    }
+                    if (cand >= 0) {
+                        chosenEnd = cand;
+                    } else if (fragIndex === 0 && cur1.frags.length > 0) {
+                        if (trial) { probe.removeChild(trial); trial = null; }
+                        finalizePage();
+                        first = false;
+                        continue;
+                    } else {
+                        chosenEnd = best;
+                    }
+                    // The trial in the probe must be exactly the chosen
+                    // fragment (measure() swaps the trial and re-tags it).
+                    measure(chosenEnd);
+                }
                 // The trial in the probe is exactly the chosen fragment.
                 cur1.frags.push(trial);
                 trial = null;
-                from = best;
+                from = chosenEnd;
                 fragIndex++;
                 first = false;
                 if (from < tokens.length) finalizePage();
