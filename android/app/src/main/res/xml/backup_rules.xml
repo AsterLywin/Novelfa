@@ -3,7 +3,9 @@
   Task 9 — Auto Backup rules (pre-Android-12 devices; API 31+ uses
   res/xml/data_extraction_rules.xml with identical semantics).
   Included: Room databases + app files except the exclusions below.
-  Excluded: files/books/ + files/covers/ (re-importable, heavy).
+  Excluded: files/books/ + files/covers/ (re-importable, heavy) +
+  files/epub_open/ (regenerable chapter cache, moved from cacheDir
+  so the system cannot evict it mid-use).
   Note: cache/ needs no rule — cache dirs are never backed up.
   Users re-import EPUBs after reinstall; progress DB is restored.
 -->
@@ -12,4 +14,5 @@
     <include domain="file" path="." />
     <exclude domain="file" path="books/" />
     <exclude domain="file" path="covers/" />
+    <exclude domain="file" path="epub_open/" />
 </full-backup-content>

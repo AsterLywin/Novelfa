@@ -42,6 +42,7 @@ fun NavGraph(
                     Importer(context, db),
                     PinManager(PrefsStorePinPrefs(prefs)),
                     cacheDir = context.cacheDir,
+                    filesDir = context.filesDir,
                     prefs = prefs
                 )
             }
@@ -64,6 +65,7 @@ fun NavGraph(
                     Importer(context, db),
                     PinManager(PrefsStorePinPrefs(prefs)),
                     cacheDir = context.cacheDir,
+                    filesDir = context.filesDir,
                     prefs = prefs
                 )
             }

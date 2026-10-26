@@ -144,6 +144,7 @@
     <string name="import_summary_duplicates">%1$d تکراری رد شد</string>
     <string name="import_summary_failed">%1$d ناموفق بود</string>
     <string name="import_summary_restored">پیشرفت %1$d کتاب بازیابی شد</string>
+    <string name="import_in_progress">در حال ایمپورت کتاب…</string>
     <string name="apply_custom_color">اعمال</string>
     <string name="invalid_hex">کد رنگ معتبر نیست</string>
     <string name="pick_this_color">انتخاب این رنگ</string>

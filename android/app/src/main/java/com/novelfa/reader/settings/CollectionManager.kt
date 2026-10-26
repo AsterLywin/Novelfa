@@ -33,6 +33,7 @@ interface ManualCollectionRegistry {
 class CollectionManager(
     private val dao: BookDao,
     private val cacheDir: File? = null,
+    private val filesDir: File? = null,
     private val manualRegistry: ManualCollectionRegistry? = null
 ) {
 
@@ -102,6 +103,14 @@ class CollectionManager(
         runCatching { File(book.filePath).takeIf { it.isFile }?.delete() }
         // Drop this book's extracted chapter cache (ReaderScreen re-extracts on
         // demand; the startup prune in NovelfaApplication is the backstop).
+        // The cache lives in filesDir now; the cacheDir path is the legacy
+        // location, still cleaned for books cached before the move.
+        filesDir?.let { dir ->
+            runCatching {
+                File(dir, "epub_open" + File.separatorChar + id)
+                    .takeIf { it.isDirectory }?.deleteRecursively()
+            }
+        }
         cacheDir?.let { dir ->
             runCatching {
                 File(dir, "epub_open" + File.separatorChar + id)

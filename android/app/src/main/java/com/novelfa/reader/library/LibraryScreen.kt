@@ -46,6 +46,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -317,6 +318,11 @@ fun LibraryScreen(
      */
     // State for duplicate-overwrite confirmation dialog
     var pendingDuplicates by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    // Import progress: a big DOCX parses for seconds with no other
+    // feedback, which reads as "the import does nothing". The dialog
+    // below stays up until importUris finishes (success or failure),
+    // and its scrim also blocks a second tap / tab switch mid-import.
+    var isImporting by remember { mutableStateOf(false) }
     var pendingDuplicateNames by remember { mutableStateOf<List<String>>(emptyList()) }
     // Encrypted-PDF password prompt (also covers the ACTION_VIEW path,
     // which funnels through importUris below).
@@ -325,6 +331,7 @@ fun LibraryScreen(
     suspend fun importUris(uris: List<Uri>) {
         // List separator follows the UI language — never a hardcoded «، ».
         val sep = if (java.util.Locale.getDefault().language.startsWith("en")) ", " else "، "
+        isImporting = true
         try {
             val summary = viewModel.importMultiple(uris, passwordProvider = pdfPasswordPrompt.provider)
             // If duplicates found, ask for confirmation instead of silently skipping
@@ -362,6 +369,8 @@ fun LibraryScreen(
             snackbar.showSnackbar(
                 context.getString(R.string.import_error_not_valid_epub) + "\n" + detail
             )
+        } finally {
+            isImporting = false
         }
     }
 
@@ -373,6 +382,20 @@ fun LibraryScreen(
         }
     }
     val launchImport = { picker.launch(SUPPORTED_BOOK_MIME_TYPES) }
+
+    if (isImporting) {
+        AlertDialog(
+            onDismissRequest = {},
+            confirmButton = {},
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.width(16.dp))
+                    Text(stringResource(R.string.import_in_progress))
+                }
+            }
+        )
+    }
 
     // Book handed in from a file manager (ACTION_VIEW). Imported once, then
     // the URI is consumed so rotation doesn't re-import it. Consume AFTER the

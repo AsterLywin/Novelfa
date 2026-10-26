@@ -1390,7 +1390,13 @@ private fun openParsed(
     }
     val format = BookFormat.detect(book)
         ?: throw IOException("unsupported book format: " + book.name)
-    val outDir = File(context.cacheDir, "epub_open/" + bookId)
+    // Converted/extracted chapters live in filesDir, NOT cacheDir:
+    // Android may evict cacheDir under storage pressure, and every
+    // eviction forced a full re-parse on the next open — for DOCX that
+    // is the "render takes forever" users see on every open. filesDir
+    // is never evicted by the system; removeBook + the startup prune
+    // delete a book's dir, and backup rules exclude it (regenerable).
+    val outDir = File(context.filesDir, "epub_open/" + bookId)
     outDir.mkdirs()
     val chapterFallback: (Int) -> String = { n ->
         context.getString(R.string.chapter_fallback, n)

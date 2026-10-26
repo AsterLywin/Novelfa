@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -90,6 +91,9 @@ fun CollectionsScreen(
 
     // WPF parity: import books straight into a collection (CollectionAdd).
     var importTarget by remember { mutableStateOf<String?>(null) }
+    // Import progress (same reason as LibraryScreen): a slow parse with
+    // no feedback reads as a broken import.
+    var isImporting by remember { mutableStateOf(false) }
     val pdfPasswordPrompt = rememberPdfPasswordPrompt()
     val importPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -97,7 +101,9 @@ fun CollectionsScreen(
         val target = importTarget
         importTarget = null
         if (uris.isNotEmpty() && target != null) {
+            isImporting = true
             scope.launch {
+                try {
                 val summary = viewModel.importMultiple(
                     uris, passwordProvider = pdfPasswordPrompt.provider
                 )
@@ -122,8 +128,25 @@ fun CollectionsScreen(
                         Toast.LENGTH_LONG
                     ).show()
                 }
+                } finally {
+                    isImporting = false
+                }
             }
         }
+    }
+
+    if (isImporting) {
+        AlertDialog(
+            onDismissRequest = {},
+            confirmButton = {},
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.width(16.dp))
+                    Text(stringResource(R.string.import_in_progress))
+                }
+            }
+        )
     }
 
     PdfPasswordDialog(pdfPasswordPrompt)

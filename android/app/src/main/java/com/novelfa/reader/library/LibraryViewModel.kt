@@ -127,6 +127,7 @@ class LibraryViewModel(
     private val importer: Importer? = null,
     val pinGate: PinGate = NoPinGate,
     cacheDir: File? = null,
+    filesDir: File? = null,
     prefs: PrefsStore? = null
 ) {
     val books: Flow<List<BookEntity>> = dao.allBooks()
@@ -145,6 +146,7 @@ class LibraryViewModel(
     val collections = CollectionManager(
         dao,
         cacheDir,
+        filesDir,
         prefs?.let { p ->
             object : ManualCollectionRegistry {
                 override suspend fun get() = p.getManualCollections()
