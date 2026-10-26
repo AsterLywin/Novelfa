@@ -159,7 +159,7 @@
     <string name="secret_theme_message">تم %1$s برات باز شد ✦\n\nهمین الان فعالش کنم؟</string>
     <string name="open_link">باز کردن</string>
     <string name="copy_link">کپی</string>
-    <string name="start_over_prompt">«%1$s» رو از فصل ۱ شروع کنم؟</string>
+    <string name="start_over_prompt">«%1$s» رو از بخش ۱ شروع کنم؟</string>
     <string name="reading_mode">حالت مطالعه</string>
     <string name="mode_horizontal">افقی</string>
     <string name="mode_vertical_continuous">عمودی پیوسته</string>
@@ -169,7 +169,7 @@
     <string name="yes_overwrite">بله، بازنویسی کن</string>
     <string name="delete">حذف</string>
     <string name="start_over_button">از اول</string>
-    <string name="reset_progress_message">پیشرفت صفر میشه و از فصل ۱ شروع می‌کنی.</string>
+    <string name="reset_progress_message">پیشرفت صفر میشه و از بخش ۱ شروع می‌کنی.</string>
     <string name="remove_book_confirm_message">\u00ab%1$s\u00bb از کتابخانه حذف بشه؟\nفایل EPUB و جلد هم پاک می‌شن.</string>
     <string name="collection_name_blank">اسم مجموعه نمی‌تونه خالی باشه.</string>
     <string name="collection_name_too_long">اسم مجموعه حداکثر ۶۰ کاراکتره.</string>
@@ -281,13 +281,13 @@
     <string name="theme_unlock_xp">%1$d از %2$d XP (عنوان «%3$s»)</string>
     <string name="font_size_min">کمترین سایز فونت مجاز %1$d است</string>
     <string name="font_size_max">بیشترین سایز فونت مجاز %1$d است</string>
-    <string name="pager_reload">در حال بارگذاری دوباره‌ی فصل…</string>
+    <string name="pager_reload">در حال بارگذاری دوباره‌ی بخش…</string>
     <string name="pager_building">در حال آماده‌سازی صفحه‌ها…</string>
     <string name="diag_title">تشخیص حالت افقی</string>
     <string name="diag_open_button">تشخیص حالت افقی</string>
     <string name="diag_mode">حالت</string>
-    <string name="diag_chapter">فصل</string>
-    <string name="diag_chapter_title">عنوان فصل</string>
+    <string name="diag_chapter">بخش</string>
+    <string name="diag_chapter_title">عنوان بخش</string>
     <string name="diag_doc_loaded">سند بارگذاری شده</string>
     <string name="diag_pager_state">وضعیت پیجر</string>
     <string name="diag_page_count">صفحه‌ها (پیجر)</string>
@@ -303,5 +303,5 @@
     <string name="diag_refresh">تازه‌سازی</string>
     <string name="diag_note_js_taps">ورق‌های لمسی داخل صفحه، عدد صفحه‌ی پیجر در بالا را عوض می‌کنند ولی به‌عنوان ورق بومی ثبت نمی‌شوند؛ فقط سوایپ‌ها، ضربه‌های لبه، لبه‌های صفحه و ورق‌های گیرکرده ثبت می‌شوند.</string>
     <string name="page_indicator">صفحه‌ی %1$d از %2$d</string>
-    <string name="pager_failed">صفحه‌بندی این فصل ساخته نشد؛ با کشیدن عمودی بخوانید یا از فهرست، فصل دیگری را باز کنید.</string>
+    <string name="pager_failed">صفحه‌بندی این بخش ساخته نشد؛ با کشیدن عمودی بخوانید یا از فهرست، بخش دیگری را باز کنید.</string>
 </resources>
