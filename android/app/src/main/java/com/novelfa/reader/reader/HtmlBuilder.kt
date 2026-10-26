@@ -350,7 +350,11 @@ object HtmlBuilder {
 // No vw units, no scrollWidth, no scrollLeft anywhere.
 //
 // Contract with native code (unchanged from the multicol version):
-//   rdrTurn(d)  -> 'page' | 'start' | 'end' | 'busy'
+//   rdrTurn(d)  -> 'page' | 'start' | 'end' | 'busy' | 'torn'
+//   ('torn' = the pager tore down: the document is a scrolling flow
+//   page now, so native code must NOT retry it as a busy pager —
+//   it must fall back to a viewport scroll / chapter move, or the
+//   reader goes silently dead after its one reload is spent.)
 //   rdrLast()   -> 'ok' | 'no'   (land on the last page)
 //   Android.onScroll(t,h,c,gen) is fed synthesized values
 //   (t = page*clientH, h = pages*clientH) so the bridge stays meaningful.
@@ -996,6 +1000,12 @@ object HtmlBuilder {
     // ------------------------------------------------------------------
     window.rdrTurn = function (d) {
         try {
+            // Torn down beats busy: a torn pager is NEVER going to
+            // become ready, and answering 'busy' made native code
+            // retry it, reload it, and then go silent (the "no turn
+            // at all" symptom). 'torn' lets native fall back to
+            // scrolling the restored flow document instead.
+            if (tornDown) return 'torn';
             if (!ready || building) return 'busy';
             if (Date.now() < lockUntil) return 'busy';
             var n = cur + d;

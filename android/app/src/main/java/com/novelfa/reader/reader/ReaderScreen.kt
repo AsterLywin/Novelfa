@@ -557,6 +557,49 @@ fun ReaderScreen(
     }
 
     /**
+     * Fallback turn for a document whose pager is gone (torn down, or
+     * built without one): the document is a scrolling flow page, so a
+     * turn becomes a one-viewport scroll, and a turn at the flow's top
+     * or bottom becomes a chapter move instead. This is what keeps a
+     * failed chapter readable instead of silently dead: without it, a
+     * turn on a torn document did nothing at all once its one reload
+     * was spent, and even the "scroll vertically" advice failed because
+     * the native listener had eaten the WebView's ACTION_DOWN.
+     * Only ever called for a pager-less document (see turnPage's
+     * 'torn' and missing-rdrTurn branches): on a live paged strip the
+     * scroll geometry is viewport-sized, so this edge logic would
+     * wrongly jump chapters there.
+     */
+    fun fallbackScrollPage(v: ReaderViewModel, forward: Boolean) {
+        val wv = webView ?: return
+        wv.evaluateJavascript(
+            "(function(){var d=document.documentElement,b=document.body;" +
+                "var h=Math.max(d.scrollHeight||0,b.scrollHeight||0);" +
+                "var t=Math.max(d.scrollTop||0,b.scrollTop||0);" +
+                "var vh=window.innerHeight||d.clientHeight||0;" +
+                "return t+'/'+h+'/'+vh;})();"
+        ) { result ->
+            val parts = (result?.trim()?.trim { it == '"' } ?: "").split("/")
+            val t = parts.getOrNull(0)?.toDoubleOrNull() ?: 0.0
+            val h = parts.getOrNull(1)?.toDoubleOrNull() ?: 0.0
+            val vh = parts.getOrNull(2)?.toDoubleOrNull() ?: 0.0
+            scope.launch {
+                val vv = vm ?: return@launch
+                if (forward && vh > 0 && t + vh >= h - 2 && vv.index + 1 < vv.chapters.size) {
+                    gotoChapter(vv, vv.index + 1)
+                } else if (!forward && t <= 2 && vv.index > 0) {
+                    pendingLastPage = true
+                    gotoChapter(vv, vv.index - 1)
+                } else if (vh > 0) {
+                    webView?.evaluateJavascript(
+                        "window.scrollBy(0, ${if (forward) vh.toInt() else -vh.toInt()})", null
+                    )
+                }
+            }
+        }
+    }
+
+    /**
      * Horizontal page turn (paged mode). Asks the page to turn via
      * `rdrTurn`; at the chapter edges it moves to the adjacent chapter
      * instead (like a manga reader).
@@ -578,6 +621,19 @@ fun ReaderScreen(
             // Diagnostic: one line per turn attempt (attempt>0 only on
             // busy retries, so a healthy turn logs exactly once).
             Log.d("NovelfaPager", "turnPage forward=$forward attempt=$attempt rdrTurn=$r")
+            if (r == "torn") {
+                // Pager tore down: retrying it is pointless (it will
+                // never become ready) and was exactly the path that
+                // ended in silence. Reload once if that hasn't been
+                // tried; otherwise scroll the restored flow document
+                // instead of doing nothing (recoverPagerTurn shows the
+                // failure notice once per chapter in the spent case).
+                Log.w("NovelfaPager", "turnPage rdrTurn torn forward=$forward")
+                val alreadyReloaded = pagerReloadTriedIndex == v.index
+                recoverPagerTurn()
+                if (alreadyReloaded) fallbackScrollPage(v, forward)
+                return@evaluateJavascript
+            }
             if (r == null) {
                 // rdrTurn itself is missing. While the document is
                 // still loading that is EXPECTED (its scripts have not
@@ -595,8 +651,13 @@ fun ReaderScreen(
                         if (vm === v) turnPage(v, forward, attempt + 1)
                     }
                 } else {
+                    // Same spent-reload rule as 'torn': a loaded
+                    // document without rdrTurn is a flow document, so
+                    // scroll it instead of going silent after reload.
                     Log.w("NovelfaPager", "turnPage rdrTurn missing -> recover")
+                    val alreadyReloaded = pagerReloadTriedIndex == v.index
                     recoverPagerTurn()
+                    if (alreadyReloaded) fallbackScrollPage(v, forward)
                 }
                 return@evaluateJavascript
             }
@@ -981,7 +1042,12 @@ fun ReaderScreen(
                             scope.launch { snackbar.showSnackbar(chapterErr + details) }
                         },
                         onWebView = { webView = it },
-                        paged = modeNow == ReadingMode.PAGED_HORIZONTAL,
+                        // Torn-down pager => the document is a scrolling
+                        // flow page: stop eating its touches (see
+                        // ReaderWebView's paged comment) so it scrolls
+                        // natively again. Reset by onPageStarted for the
+                        // next document, which gets a fresh pager.
+                        paged = modeNow == ReadingMode.PAGED_HORIZONTAL && !pagerTornDown,
                         onPageStarted = {
                             // A new document is loading: its pager does
                             // not exist yet, and any indicator numbers

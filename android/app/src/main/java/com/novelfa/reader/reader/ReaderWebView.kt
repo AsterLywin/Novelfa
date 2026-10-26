@@ -115,6 +115,13 @@ fun ReaderWebView(
     // Paged (horizontal) mode: the page turn is fully programmatic
     // (rdrTurn); the fling must be consumed so the WebView doesn't also
     // fling-scroll natively and fight the turn animation.
+    // The caller passes false here once the live document's pager has
+    // torn down (see ReaderScreen): the torn document is a scrolling
+    // flow page, and a listener that still eats ACTION_DOWN breaks the
+    // WebView's own scroll sequence (it never saw DOWN), so even the
+    // "scroll vertically to read" fallback was dead. With paged=false
+    // the WebView gets the full touch sequence again and scrolls, and
+    // its own tap/click synthesis (links) comes back too.
     paged: Boolean = false
 ) {
     val loaded = remember { mutableStateOf<String?>(null) }
@@ -183,7 +190,12 @@ fun ReaderWebView(
                             e1: MotionEvent?, e2: MotionEvent,
                             velocityX: Float, velocityY: Float
                         ): Boolean {
-                            if (e1 == null || turnedThisGesture) return false
+                            // No paged gate here before: a fling in
+                            // vertical mode — or in a torn-down paged
+                            // document that must scroll natively now —
+                            // still fired a turn callback, double-acting
+                            // with the WebView's own fling-scroll.
+                            if (e1 == null || turnedThisGesture || !pagedNow.value) return false
                             val dx = e2.x - e1.x
                             val dy = e2.y - e1.y
                             val qualified = abs(dx) > abs(dy) * 1.5f &&
