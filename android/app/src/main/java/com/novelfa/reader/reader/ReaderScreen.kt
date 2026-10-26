@@ -223,6 +223,7 @@ fun ReaderScreen(
     var diagPageCount by remember { mutableIntStateOf(-1) }
     var diagCurrentPage by remember { mutableIntStateOf(-1) }
     var diagAnchor by remember { mutableStateOf("") }
+    var diagJsError by remember { mutableStateOf("") }
     var diagJsAnswered by remember { mutableStateOf(false) }
     // Last native turn result and last native gesture, in raw
     // diagnostic codes (rdrTurn answers, not user prose): these are
@@ -421,22 +422,48 @@ fun ReaderScreen(
      */
     fun refreshPagedIndicator() {
         val wv = webView ?: return
+        // Also queries the pager state and the JS teardown reason:
+        // this is the bridge-independent torn detection. The
+        // onPagerError bridge is the primary path, but a torn pager
+        // whose bridge call never arrived used to leave native state
+        // desynced (live pill, paged gestures, building flag stuck)
+        // — a direct query here, run on page-finish and after every
+        // turn, catches that case and applies the same torn handling.
         wv.evaluateJavascript(
-            "(function(){try{if(window.rdrPageCount&&window.rdrCurrentPage)" +
-                "{var c=window.rdrPageCount();if(c>0)return (window.rdrCurrentPage()+1)+'/'+c;}" +
-                "return '';}catch(e){return '';}})();"
+            "(function(){try{var out='';" +
+                "if(window.rdrPageCount&&window.rdrCurrentPage)" +
+                "{var c=window.rdrPageCount();if(c>0)out=(window.rdrCurrentPage()+1)+'/'+c;}" +
+                "out+='|';if(window.rdrPagerState)out+=window.rdrPagerState();" +
+                "out+='|';if(window.__rdrPagerError)out+=window.__rdrPagerError;" +
+                "return out;}catch(e){return '';}})();"
         ) { result ->
             val clean = result?.trim()?.trim { it == '"' } ?: ""
-            val parts = clean.split("/")
-            if (parts.size == 2) {
-                val p = parts[0].toIntOrNull()
-                val total = parts[1].toIntOrNull()
-                if (p != null && total != null && total > 0 && p in 1..total) {
-                    pagedPage = p
-                    pagedPageCount = total
-                    // First real page count = pager ready: the
-                    // "preparing" pill gives way to the page pill.
+            val parts = clean.split("|")
+            if (parts.size == 3) {
+                val state = parts[1]
+                if (state == "torn") {
+                    // Same handling as onPagerError, without depending
+                    // on the bridge: torn document, no page numbers,
+                    // no building pill, reason kept for the dialog and
+                    // for the failure notice.
+                    pagerTornDown = true
+                    pagedPage = 0
+                    pagedPageCount = 0
                     pagerBuilding = false
+                    if (parts[2].isNotEmpty()) lastPagerError = parts[2]
+                    return@evaluateJavascript
+                }
+                val nums = parts[0].split("/")
+                if (nums.size == 2) {
+                    val p = nums[0].toIntOrNull()
+                    val total = nums[1].toIntOrNull()
+                    if (p != null && total != null && total > 0 && p in 1..total) {
+                        pagedPage = p
+                        pagedPageCount = total
+                        // First real page count = pager ready: the
+                        // "preparing" pill gives way to the page pill.
+                        pagerBuilding = false
+                    }
                 }
             }
         }
@@ -473,6 +500,19 @@ fun ReaderScreen(
                 diagPageCount = parts[1].toIntOrNull() ?: -1
                 diagCurrentPage = parts[2].toIntOrNull() ?: -1
                 diagAnchor = parts[3]
+                // Teardown reason straight from JS, as a second
+                // evaluateJavascript call (a '|' inside a reason would
+                // break the split above): the dialog shows it when
+                // the bridge error never arrived.
+                if (parts[0] == "torn") {
+                    wv.evaluateJavascript(
+                        "(function(){try{return window.__rdrPagerError||'';}catch(e){return '';}})();"
+                    ) { errResult ->
+                        diagJsError = errResult?.trim()?.trim { it == '"' } ?: ""
+                    }
+                } else {
+                    diagJsError = ""
+                }
             } else {
                 diagJsAnswered = false
             }
@@ -580,30 +620,34 @@ fun ReaderScreen(
                 val last = v.contLast
                 val first = v.contFirst
                 v.onScroll(t, h, c)
-                // Paged-mode indicator: the pager's report() synthesizes
-                // t = page*clientH, h = pages*clientH, so t/c and h/c
-                // ARE the page numbers here. The plain scroll reporter
-                // fires once early with 1/1 in a paged document, but it
-                // never fires again (nothing scrolls), so the pager's
-                // later report always wins and the count stays correct.
-                if (v.readingMode == ReadingMode.PAGED_HORIZONTAL && !pagerTornDown && c > 0 && h > 0 && t >= 0) {
-                    val total = h / c
-                    val page = t / c + 1
+                // NOTE: onScroll deliberately does NOT update the page
+                // pill anymore. It used to derive pill numbers from
+                // scroll geometry (t/c, h/c) on the assumption that
+                // only the pager calls onScroll in paged mode — but a
+                // torn-down pager restores a scrolling flow document
+                // whose scroll reporter then feeds its scroll screens
+                // (screens tall, screen at top) into the pill as if
+                // they were pages. Page numbers now come only from
+                // onPagerReport below, which a flow document can
+                // never fire.
+                applyIncrementalJs(v, last, first)
+                rev++
+            }
+            },
+            // Pager page report (see ScrollBridge): the sole source
+            // of page-pill numbers. A report also proves the pager
+            // is alive, so it clears the building flag.
+            onPagerReport = { page, total ->
+                scope.launch {
                     if (total > 0 && page in 1..total) {
-                        // Diagnostic: log only on change, so a healthy
-                        // pager logs one line per turn, and a pager that
-                        // never reports logs nothing at all — that
-                        // silence IS the diagnosis.
                         if (pagedPage != page || pagedPageCount != total) {
                             Log.d("NovelfaPager", "pager report page=$page/$total")
                         }
                         pagedPage = page
                         pagedPageCount = total
+                        pagerBuilding = false
                     }
                 }
-                applyIncrementalJs(v, last, first)
-                rev++
-            }
             },
             onLinkClick = { href, chap ->
                 val v = vm
@@ -737,6 +781,14 @@ fun ReaderScreen(
                 // instead of doing nothing (recoverPagerTurn shows the
                 // failure notice once per chapter in the spent case).
                 Log.w("NovelfaPager", "turnPage rdrTurn torn forward=$forward")
+                // The turn itself proves the document is torn, even
+                // if the onPagerError bridge never arrived (the
+                // desync that left a torn document with a live pill
+                // and paged gestures): mark it torn NOW, so gestures
+                // switch off for this document and the pill stops
+                // accepting scroll geometry. A reload (recover) resets
+                // the flag for the new document via onPageStarted.
+                pagerTornDown = true
                 val alreadyReloaded = pagerReloadTriedIndex == v.index
                 lastTurnDiag = if (alreadyReloaded) "torn -> fallback scroll (reload spent)"
                     else "torn -> recover (reload once)"
@@ -766,6 +818,10 @@ fun ReaderScreen(
                     // document without rdrTurn is a flow document, so
                     // scroll it instead of going silent after reload.
                     Log.w("NovelfaPager", "turnPage rdrTurn missing -> recover")
+                    // Same torn-document marking as the 'torn' branch:
+                    // a loaded document without rdrTurn is a flow
+                    // document, not a paged one.
+                    pagerTornDown = true
                     val alreadyReloaded = pagerReloadTriedIndex == v.index
                     lastTurnDiag = if (alreadyReloaded) "rdrTurn missing -> fallback scroll (reload spent)"
                         else "rdrTurn missing -> recover (reload once)"
@@ -1205,6 +1261,13 @@ fun ReaderScreen(
                             pagerTornDown = false
                             pagedPage = 0
                             pagedPageCount = 0
+                            // A new document's pager has no error yet:
+                            // the previous document's teardown reason
+                            // must not linger into the new document's
+                            // dialog. (Failure notices read the reason
+                            // before the reload, so clearing here loses
+                            // nothing.)
+                            lastPagerError = null
                             // Same-chapter reload (open, mode switch,
                             // settings reload): remember the saved
                             // text anchor for this chapter so
@@ -1561,7 +1624,8 @@ fun ReaderScreen(
                     )
                     DiagRow(
                         stringResource(R.string.diag_last_error),
-                        lastPagerError ?: diagNone
+                        lastPagerError
+                            ?: if (diagJsError.isNotEmpty()) diagJsError else diagNone
                     )
                     DiagRow(
                         stringResource(R.string.diag_torn),

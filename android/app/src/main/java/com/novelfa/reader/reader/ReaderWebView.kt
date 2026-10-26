@@ -32,7 +32,19 @@ class ScrollBridge(
     /** Paged-mode turn failed: pager torn down or missing (see recoverPagerTurn). */
     private val onPagerStuck: () -> Unit = {},
     /** Pager teardown reason from JS (see PAGER_JS teardown): surfaced to logcat. */
-    private val onPagerError: (String) -> Unit = {}
+    private val onPagerError: (String) -> Unit = {},
+    /**
+     * Pager page report (1-based page, total pages), fired by the
+     * pager's show() — the ONLY source of page-pill numbers. It
+     * replaces the old overloading of onScroll for pager geometry:
+     * onScroll carries real scroll geometry, and a torn-down pager
+     * restores a scrolling flow document whose scroll geometry
+     * (screens tall, screen at top) then masqueraded as page
+     * numbers in the pill. A flow document has no pager, so it can
+     * never fire onPagerReport, and the pill can never show scroll
+     * screens as pages again.
+     */
+    private val onPagerReport: (Int, Int) -> Unit = { _, _ -> }
 ) {
 
     @JavascriptInterface
@@ -63,6 +75,11 @@ class ScrollBridge(
     @JavascriptInterface
     fun onPagerError(msg: String) {
         onPagerError(msg)
+    }
+
+    @JavascriptInterface
+    fun onPagerReport(page: Long, total: Long) {
+        onPagerReport(page.toInt(), total.toInt())
     }
 }
 

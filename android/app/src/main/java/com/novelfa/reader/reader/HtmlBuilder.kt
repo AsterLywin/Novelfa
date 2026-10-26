@@ -795,9 +795,13 @@ object HtmlBuilder {
     // ------------------------------------------------------------------
     function report() {
         try {
-            if (window.Android && Android.onScroll) {
-                var h = stageH();
-                Android.onScroll(cur * h, pages.length * h, h, window.__rdrGen || 0);
+            // Dedicated page-report channel (see ScrollBridge):
+            // never onScroll. onScroll carries real scroll geometry,
+            // and a torn document's scroll geometry (screens tall)
+            // used to masquerade as page numbers in the native pill
+            // once the native torn flag was missed.
+            if (window.Android && Android.onPagerReport) {
+                Android.onPagerReport(cur + 1, pages.length);
             }
         } catch (e) { }
     }
