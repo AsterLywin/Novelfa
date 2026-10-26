@@ -33,11 +33,13 @@ object DocxParser {
     fun parseFile(
         docxFile: File,
         outDir: File,
-        chapterFallback: (Int) -> String
+        chapterFallback: (Int) -> String,
+        /** Original file name (see [BookConverter.parse]): the stored file is "$uuid.docx". */
+        titleFallback: String? = null
     ): ParsedBook {
         outDir.mkdirs()
         unzip(docxFile, outDir)
-        return parse(outDir, docxFile.name, outDir, chapterFallback)
+        return parse(outDir, titleFallback?.takeIf { it.isNotBlank() } ?: docxFile.name, outDir, chapterFallback)
     }
 
     private fun unzip(zip: File, outDir: File) {

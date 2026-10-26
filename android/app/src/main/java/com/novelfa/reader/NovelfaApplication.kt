@@ -5,9 +5,12 @@ import androidx.room.Room
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
+import com.novelfa.reader.data.CoverStore
+import com.novelfa.reader.data.GeneratedCover
 import com.novelfa.reader.data.MIGRATION_1_2
 import com.novelfa.reader.data.ReaderDb
 import com.novelfa.reader.data.RecommendedFonts
+import com.novelfa.reader.data.isUuidLikeTitle
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +63,47 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
         val dao = db.bookDao()
         val books = dao.allBooks().first()
         for (book in books) {
+            // Converted books (TXT/Markdown/DOCX/PDF) already HAVE an
+            // originalFileName — the old backfill skipped them — yet
+            // their stored title is still the storage UUID when the
+            // document carried no internal title (the parser fell back
+            // to the "$uuid.<ext>" file name). Repair those from the
+            // original file name they already carry, and regenerate
+            // their (UUID-titled) generated cover with the real title.
+            // Idempotent: once the title is no longer UUID-like, this
+            // branch never runs for that book again.
+            if (book.originalFileName != null && isUuidLikeTitle(book.title)) {
+                val clean = book.originalFileName.substringBeforeLast('.')
+                    .takeIf { it.isNotBlank() && !isUuidLikeTitle(it) } ?: continue
+                var coverPath = book.coverPath
+                val ext = File(book.filePath).extension.lowercase()
+                if (ext in setOf("txt", "md", "markdown", "pdf", "docx")) {
+                    // Converted books carry no embedded art, so their
+                    // cover is always the generated one — regenerate it
+                    // with the real title. Best effort: on any failure
+                    // the old cover path is kept, only the title fix
+                    // (the actual bug) is guaranteed.
+                    coverPath = runCatching {
+                        val tmp = GeneratedCover.generate(
+                            this@NovelfaApplication, clean, book.filePath
+                        ) ?: return@runCatching coverPath
+                        try {
+                            // CoverStore.saveCover never overwrites an
+                            // existing dest, so copy over it directly.
+                            val dest = File(
+                                File(filesDir, "covers"),
+                                CoverStore.coverFileName(book.filePath, ".png")
+                            ).apply { parentFile?.mkdirs() }
+                            tmp.copyTo(dest, overwrite = true)
+                            dest.absolutePath
+                        } finally {
+                            tmp.delete()
+                        }
+                    }.getOrNull() ?: coverPath
+                }
+                dao.update(book.copy(title = clean, coverPath = coverPath))
+                continue
+            }
             if (book.originalFileName != null) continue
             val epubFile = File(book.filePath)
             val epubTitle = readEpubDcTitle(epubFile) ?: continue
@@ -69,16 +113,10 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
                     originalFileName = "$clean.epub",
                     // If the stored title is itself the UUID (or blank), the
                     // EPUB title is strictly better.
-                    title = if (book.title.isBlank() || isUuidLike(book.title)) clean else book.title
+                    title = if (book.title.isBlank() || isUuidLikeTitle(book.title)) clean else book.title
                 )
             )
         }
-    }
-
-    private fun isUuidLike(s: String): Boolean {
-        val t = s.trim().lowercase()
-        if (t.length != 36) return false
-        return t.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))
     }
 
     /**

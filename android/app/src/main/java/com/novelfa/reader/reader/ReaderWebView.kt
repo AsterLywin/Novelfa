@@ -105,11 +105,13 @@ fun ReaderWebView(
     // Paged-mode native tap edges (language-agnostic: left/right quarter
     // of the view). The caller maps them to forward/back from the book
     // language, mirroring the JS tap zones. Native taps are PRIMARY in
-    // paged mode because the touch listener below consumes ACTION_DOWN,
-    // which breaks WebView's own JS-click synthesis (WebView needs its
-    // own DOWN+UP to fire a document click) — so the JS tap zones in
-    // PAGER_JS never fire on device. They stay as a fallback for
-    // environments without this native listener (e.g. headless tests).
+    // paged mode because native taps own ACTION_UP (the touch listener
+    // below consumes UP for a handled tap, so the WebView never fires
+    // its own document click for it) — so the JS tap zones in PAGER_JS
+    // never fire on device. They stay as a fallback for environments
+    // without this native listener (e.g. headless tests). ACTION_DOWN
+    // itself is deliberately NOT consumed (see the listener): the
+    // WebView needs it to start its own scroll sequence for tall pages.
     onTapLeftEdge: () -> Unit = {},
     onTapRightEdge: () -> Unit = {},
     // Paged (horizontal) mode: the page turn is fully programmatic
@@ -117,11 +119,8 @@ fun ReaderWebView(
     // fling-scroll natively and fight the turn animation.
     // The caller passes false here once the live document's pager has
     // torn down (see ReaderScreen): the torn document is a scrolling
-    // flow page, and a listener that still eats ACTION_DOWN breaks the
-    // WebView's own scroll sequence (it never saw DOWN), so even the
-    // "scroll vertically to read" fallback was dead. With paged=false
-    // the WebView gets the full touch sequence again and scrolls, and
-    // its own tap/click synthesis (links) comes back too.
+    // flow page, so turn gestures and paged WebView settings are
+    // switched off for it and it scrolls (and taps links) natively.
     paged: Boolean = false
 ) {
     val loaded = remember { mutableStateOf<String?>(null) }
@@ -232,9 +231,13 @@ fun ReaderWebView(
                          * Native paged-mode tap. Fires only in paged mode;
                          * in vertical mode it returns false so the WebView
                          * keeps its own tap/click handling (and LINK_JS).
-                         * In paged mode the WebView never sees DOWN (the
-                         * listener below consumes it), so a JS click is
-                         * never synthesized — this is the tap path.
+                         * In paged mode this consumes ACTION_UP, so the
+                         * WebView never fires its own document click for
+                         * the tap — this is the tap path. (ACTION_DOWN is
+                         * deliberately given to the WebView too, so its
+                         * tall-page scrolling can start; see the listener
+                         * below. That does not re-enable JS tap zones,
+                         * because UP is still consumed here.)
                          * Link safety: the tap point is hit-tested in JS
                          * first (CSS coords = view px / density, paged
                          * scale is 1). A link tap gets a synthetic
@@ -287,12 +290,29 @@ fun ReaderWebView(
                         }
                     })
                 setOnTouchListener { _, event ->
-                    if (event.action == MotionEvent.ACTION_DOWN) turnedThisGesture = false
-                    val handled = swipeDetector.onTouchEvent(event)
-                    // In paged mode the turn is fully programmatic; consume
-                    // the fling so the WebView can't fling-scroll natively
-                    // and fight rdrTurn's animation.
-                    handled && pagedNow.value
+                    if (event.action == MotionEvent.ACTION_DOWN) {
+                        turnedThisGesture = false
+                        // NEVER consume ACTION_DOWN, even in paged mode.
+                        // The detector still sees DOWN (so tap/drag/fling
+                        // turns keep working), but the WebView must ALSO
+                        // get DOWN to own the touch sequence: without it
+                        // its scrolling never starts, so a tall page's
+                        // internal .rdr-tallwrap scroll — the only way to
+                        // read the rest of an oversize page — was dead,
+                        // and so was every other in-document scroll.
+                        // Consuming only the events the detector actually
+                        // handles (a qualified drag/fling turn, a tap
+                        // turn on UP) keeps turns programmatic without
+                        // breaking the WebView's own scrolling.
+                        swipeDetector.onTouchEvent(event)
+                        false
+                    } else {
+                        val handled = swipeDetector.onTouchEvent(event)
+                        // In paged mode the turn is fully programmatic; consume
+                        // the fling so the WebView can't fling-scroll natively
+                        // and fight rdrTurn's animation.
+                        handled && pagedNow.value
+                    }
                 }
                 addJavascriptInterface(bridge, "Android")
                 webViewClient = object : WebViewClient() {

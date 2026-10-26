@@ -9,6 +9,7 @@ import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.SortFa
 import com.novelfa.reader.data.isCompleted
 import com.novelfa.reader.data.isInProgress
+import com.novelfa.reader.data.isUuidLikeTitle
 import com.novelfa.reader.data.progressPercent
 import com.novelfa.reader.settings.CollectionManager
 import com.novelfa.reader.settings.ManualCollectionRegistry
@@ -84,13 +85,19 @@ fun displayTitleMap(all: List<BookEntity>): Map<String, String> {
     return all.associate { book ->
         val t = book.title.trim()
         val duplicate = (titleCounts[t.lowercase()] ?: 0) > 1
-        val display = if (duplicate || isGenericTitle(t)) {
-            val original = book.originalFileName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() }
+        // A UUID title is never a real title (see isUuidLikeTitle):
+        // it must fall back to the original file name, exactly like a
+        // generic title does. The fallback chain also skips UUID-like
+        // names at every step, so a book whose original name is itself
+        // missing can never "fall back" to its own storage UUID.
+        val display = if (duplicate || isGenericTitle(t) || isUuidLikeTitle(t)) {
+            val original = book.originalFileName?.substringBeforeLast('.')
+                ?.takeIf { it.isNotBlank() && !isUuidLikeTitle(it) }
             if (original != null) {
                 original
             } else if (book.filePath.isNotEmpty()) {
                 val name = File(book.filePath).nameWithoutExtension
-                if (name.isNotBlank()) name else book.title
+                if (name.isNotBlank() && !isUuidLikeTitle(name)) name else book.title
             } else {
                 book.title
             }

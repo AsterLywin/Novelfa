@@ -16,17 +16,28 @@ object BookConverter {
     fun parse(
         source: File,
         outDir: File,
-        chapterFallback: (Int) -> String
+        chapterFallback: (Int) -> String,
+        /**
+         * Original file name from the import picker (e.g. "My Book.txt").
+         * Every parser below falls back to its file-name argument when
+         * the document carries no internal title — and the stored
+         * source file is named "$uuid.<ext>", so without this the book
+         * title becomes the UUID. Callers that know the original name
+         * (importer, reader open path) must pass it; the default keeps
+         * the old behaviour for callers that don't.
+         */
+        titleFallback: String? = null
     ): ParsedBook {
+        val fallbackName = titleFallback?.takeIf { it.isNotBlank() } ?: source.name
         return when (BookFormat.detect(source)) {
             BookFormat.TXT -> TextBookParser.parseText(
-                source.readBytes(), source.name, outDir, chapterFallback
+                source.readBytes(), fallbackName, outDir, chapterFallback
             )
             BookFormat.MARKDOWN -> TextBookParser.parseMarkdown(
-                source.readBytes(), source.name, outDir, chapterFallback
+                source.readBytes(), fallbackName, outDir, chapterFallback
             )
-            BookFormat.PDF -> parsePdf(source, outDir, chapterFallback)
-            BookFormat.DOCX -> DocxParser.parseFile(source, outDir, chapterFallback)
+            BookFormat.PDF -> parsePdf(source, outDir, chapterFallback, fallbackName)
+            BookFormat.DOCX -> DocxParser.parseFile(source, outDir, chapterFallback, fallbackName)
             else -> throw IllegalArgumentException(
                 "Unsupported book format: ${source.name}"
             )
@@ -48,10 +59,11 @@ object BookConverter {
     private fun parsePdf(
         source: File,
         outDir: File,
-        chapterFallback: (Int) -> String
+        chapterFallback: (Int) -> String,
+        fallbackName: String
     ): ParsedBook {
         val text = runCatching {
-            PdfParser.parse(source.readBytes(), source.name, outDir, chapterFallback)
+            PdfParser.parse(source.readBytes(), fallbackName, outDir, chapterFallback)
         }
         if (text.isSuccess) {
             val parsed = text.getOrThrow()
@@ -65,7 +77,7 @@ object BookConverter {
                 throw err
             }
         }
-        val title = text.getOrNull()?.title ?: source.nameWithoutExtension
+        val title = text.getOrNull()?.title ?: File(fallbackName).nameWithoutExtension
         try {
             return PdfImageBook.render(source, outDir, title)
         } catch (renderErr: Exception) {

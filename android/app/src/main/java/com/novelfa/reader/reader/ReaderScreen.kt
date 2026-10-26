@@ -262,7 +262,7 @@ fun ReaderScreen(
         try {
             val entity = withContext(Dispatchers.IO) { dao.getById(bookId) }
                 ?: throw IOException("book not found")
-            val parsed = withContext(Dispatchers.IO) { openParsed(context, entity.filePath, bookId) }
+            val parsed = withContext(Dispatchers.IO) { openParsed(context, entity.filePath, bookId, entity.originalFileName) }
             val store = FontStore(context)
             val files = withContext(Dispatchers.IO) {
                 store.list().filter {
@@ -1448,7 +1448,9 @@ private fun SpacingDialog(
 private fun openParsed(
     context: Context,
     bookPath: String,
-    bookId: String
+    bookId: String,
+    /** Original file name, when known: title fallback instead of the "$uuid.<ext>" storage name. */
+    titleFallback: String? = null
 ): com.novelfa.reader.model.ParsedBook {
     val book = File(bookPath)
     if (!book.exists()) {
@@ -1472,9 +1474,9 @@ private fun openParsed(
     val stampOk = stamp.exists() && runCatching { stamp.readText() }.getOrNull() == stampText
     if (stampOk) {
         if (format == BookFormat.EPUB) {
-            return EpubParser.parse(outDir, book.name, chapterFallback)
+            return EpubParser.parse(outDir, titleFallback ?: book.name, chapterFallback)
         }
-        ConvertedBook.read(outDir, book.name, chapterFallback)?.let { return it }
+        ConvertedBook.read(outDir, titleFallback ?: book.name, chapterFallback)?.let { return it }
         // Cache present but no chapter files (e.g. a crashed convert):
         // fall through to a fresh conversion below.
     }
@@ -1514,9 +1516,9 @@ private fun openParsed(
                 }
             }
         }
-        EpubParser.parse(outDir, book.name, chapterFallback)
+        EpubParser.parse(outDir, titleFallback ?: book.name, chapterFallback)
     } else {
-        BookConverter.parse(book, outDir, chapterFallback)
+        BookConverter.parse(book, outDir, chapterFallback, titleFallback)
     }
     stamp.writeText(stampText)
     return parsed

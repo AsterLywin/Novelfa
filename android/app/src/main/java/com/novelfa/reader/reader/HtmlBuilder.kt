@@ -167,6 +167,10 @@ object HtmlBuilder {
         val sb = StringBuilder()
         sb.append("html.rdr-paged,html.rdr-paged body{height:100%;}")
         sb.append("html.rdr-paged{overflow:hidden;}")
+        // The WebView now receives ACTION_DOWN in paged mode (so tall
+        // pages can scroll); without this, every tap flashes the
+        // WebView's default tap highlight over the page.
+        sb.append("html.rdr-paged body{-webkit-tap-highlight-color:transparent;}")
         sb.append("html.rdr-paged body{margin:0 !important;padding:0 !important;")
         // Windows parity: chapter fades in on load (rdrFade .3s).
         sb.append("animation:rdrFade .3s ease-out;}")

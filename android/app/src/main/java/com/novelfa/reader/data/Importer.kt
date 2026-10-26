@@ -186,7 +186,7 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 )
                 if (decrypted != null) destFile.writeBytes(decrypted)
                 try {
-                    BookConverter.parse(destFile, File(tmpDir, "chapters"), chapterFallback)
+                    BookConverter.parse(destFile, File(tmpDir, "chapters"), chapterFallback, displayName)
                 } catch (e: Exception) {
                     throw ImportException(
                         e.message ?: "parse failed",
@@ -198,7 +198,7 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 // Converted formats: parse errors get a format-aware
                 // user-facing message instead of the EPUB-only texts.
                 try {
-                    BookConverter.parse(destFile, File(tmpDir, "chapters"), chapterFallback)
+                    BookConverter.parse(destFile, File(tmpDir, "chapters"), chapterFallback, displayName)
                 } catch (e: Exception) {
                     throw ImportException(
                         e.message ?: "parse failed",
@@ -213,6 +213,16 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     messageFa = context.getString(R.string.import_error_no_readable_sections)
                 )
             }
+            // Belt and braces on top of the titleFallback above: a
+            // parser must never store the storage UUID as the book
+            // title when the original file name is known. The generated
+            // cover below uses the same corrected title, so it never
+            // renders a UUID either.
+            val bookTitle = if (isUuidLikeTitle(parsed.title)) {
+                File(displayName).nameWithoutExtension.takeIf { it.isNotBlank() } ?: parsed.title
+            } else {
+                parsed.title
+            }
             var coverPath = parsed.coverFile
                 ?.takeIf { it.exists() }
                 ?.let { CoverStore(context).saveCover(it, destFile.absolutePath).absolutePath }
@@ -224,7 +234,7 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 // stays coverless, exactly as before.
                 coverPath = runCatching {
                     val tmp = GeneratedCover.generate(
-                        context, parsed.title, destFile.absolutePath
+                        context, bookTitle, destFile.absolutePath
                     ) ?: return@runCatching null
                     try {
                         CoverStore(context).saveCover(tmp, destFile.absolutePath).absolutePath
@@ -236,7 +246,7 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             db.bookDao().insert(
                 BookEntity(
                     id = id,
-                    title = parsed.title,
+                    title = bookTitle,
                     filePath = destFile.absolutePath,
                     coverPath = coverPath,
                     totalChapters = parsed.chapters.size,
@@ -388,7 +398,17 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         )?.use { c ->
             if (c.moveToFirst()) c.getString(0)?.takeIf { it.isNotBlank() } else null
         }
-    }.getOrNull()
+    }.getOrNull() ?: run {
+        // file:// intents from a file manager carry no SAF display
+        // name: fall back to the path's last segment, which IS the
+        // original file name. (For content:// URIs the last segment
+        // is usually a numeric document id, so it is not used here —
+        // a missing name there still falls back to the UUID at the
+        // call site, as before.)
+        if (uri.scheme == "file") {
+            uri.path?.let { File(it).name }?.takeIf { it.isNotBlank() }
+        } else null
+    }
 
     /** Declared size of the SAF pick in bytes (null when unavailable). */
     private fun queryDisplaySize(uri: Uri): Long? = runCatching {

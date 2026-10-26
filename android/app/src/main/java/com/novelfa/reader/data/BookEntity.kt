@@ -27,6 +27,21 @@ data class BookEntity(
     val originalFileName: String? = null
 )
 
+/**
+ * True when a stored title is just the internal storage UUID
+ * (36-char hex-with-dashes). That happens when a converted book
+ * (TXT/Markdown/DOCX/PDF) had no internal title and its parser fell
+ * back to the stored file's name, which is "$uuid.<ext>" — the
+ * original file name lives in [BookEntity.originalFileName], not in
+ * the title. Callers must never show a UUID-like title when a real
+ * file name is available.
+ */
+fun isUuidLikeTitle(s: String): Boolean {
+    val t = s.trim().lowercase()
+    if (t.length != 36) return false
+    return t.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))
+}
+
 fun progressPercent(e: BookEntity): Double {
     if (e.totalChapters <= 0 || e.lastOpenedDate.isNullOrEmpty()) {
         return 0.0

@@ -129,6 +129,19 @@ class LibraryViewModelTest {
     }
 
     @Test
+    fun displayTitle_uuidTitleFallsBackToOriginalFileName() {
+        // Converted book with no internal title: the stored title is
+        // the storage UUID, but the original file name is known — the
+        // library must show the file name, never the UUID.
+        val uuid = book(
+            "u2",
+            "123e4567-e89b-12d3-a456-426614174000",
+            filePath = "/books/123e4567-e89b-12d3-a456-426614174000.txt"
+        ).copy(originalFileName = "My Book.txt")
+        assertEquals("My Book", displayTitle(uuid, listOf(uuid)))
+    }
+
+    @Test
     fun favoritesTab_returnsOnlyFavorites() = runBlocking {
         val v = vm(
             listOf(
