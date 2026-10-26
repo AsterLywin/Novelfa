@@ -390,6 +390,12 @@ object HtmlBuilder {
     var lockUntil = 0;
     var pendingLast = false;
     var pendingAnchor = null;
+    // Text-point restore queued by native code (rdrGoToAnchorFrag)
+    // while the pager is still building: applied by paginate() when
+    // its build finishes, then cleared, so a later repagination
+    // (late images, resize, spacing) never jumps back to it after
+    // the user has turned pages.
+    var pendingFrag = null;
     var autoRepag = 0;
     var repagTimer = 0;
     var building = false;
@@ -906,6 +912,17 @@ object HtmlBuilder {
         } else if (pendingLast) {
             pendingLast = false;
             show(pages.length - 1, true);
+        } else if (pendingFrag) {
+            // Queued text-point restore (native, e.g. reopen or a
+            // settings reload): an explicit link/last-page jump above
+            // wins over it, and it is consumed here so no later
+            // repagination re-applies it.
+            var pf = pendingFrag;
+            pendingFrag = null;
+            var pp = String(pf).split(':');
+            var pli = parseInt(pp[0], 10), ptok = parseInt(pp[1], 10);
+            if (!isNaN(pli) && !isNaN(ptok)) show(pageForAnchor({ li: pli, tok: ptok }), true);
+            else show(pageForAnchor(anchor), true);
         } else {
             show(pageForAnchor(anchor), true);
         }
@@ -1074,6 +1091,49 @@ object HtmlBuilder {
     };
     window.rdrPageCount = function () { return ready ? pages.length : 0; };
     window.rdrCurrentPage = function () { return ready ? cur : 0; };
+    // Readiness, distinct from rdrTurn's 'busy': native code must NOT
+    // reload a chapter that is merely still building (a slow chapter
+    // with late images can stay building past the turn-retry window),
+    // and the UI wants a "preparing" state instead of a blank pill.
+    // 'ready' | 'building' | 'torn' — never 'busy' (that conflates
+    // building with the short animation lock).
+    window.rdrPagerState = function () {
+        try {
+            if (tornDown) return 'torn';
+            if (!ready || building) return 'building';
+            return 'ready';
+        } catch (e) { return 'building'; }
+    };
+    // Text-point anchor of the current page, in the same li:tok units
+    // repagination already restores within a session (currentAnchor /
+    // pageForAnchor): the first fragment of the current page. Native
+    // code persists it per chapter, so reopening a book (or reloading
+    // the same chapter after a settings change) lands on the same
+    // text point instead of the chapter start — the ReadEra XPath
+    // idea, in the pager's own coordinates. Stable across
+    // repagination because tokenization does not depend on layout.
+    window.rdrCurrentAnchor = function () {
+        try {
+            if (!ready || !pages.length) return '';
+            var a = currentAnchor();
+            return a.li + ':' + a.tok;
+        } catch (e) { return ''; }
+    };
+    window.rdrGoToAnchorFrag = function (s) {
+        try {
+            if (!s) return false;
+            var parts = String(s).split(':');
+            var li = parseInt(parts[0], 10), tok = parseInt(parts[1], 10);
+            if (isNaN(li) || isNaN(tok)) return false;
+            // Not ready yet (the usual case at onPageFinished, when
+            // the pager is still waiting for fonts/images): queue it
+            // for paginate() instead of dropping it or jumping to a
+            // half-built strip.
+            if (!ready || building) { pendingFrag = String(s); return true; }
+            show(pageForAnchor({ li: li, tok: tok }), true);
+            return true;
+        } catch (e) { return false; }
+    };
     window.rdrPaginate = function () { scheduleRepaginate(); };
 
     // Tap zones (paged mode): tapping the outer quarters of the page
@@ -1106,8 +1166,13 @@ object HtmlBuilder {
                 try { if (window.Android && Android.onPagerStuck) Android.onPagerStuck(); } catch (e2) { }
                 return;
             }
-            if (r === 'busy' && n < 10) {
+            if (r === 'busy' && (n < 10 || (window.__rdrPagerBuilding && n < 30))) {
                 setTimeout(function () { tryTurn(n + 1); }, 300);
+            } else if (r === 'busy' && window.__rdrPagerBuilding) {
+                // Still building after ~9s: drop this tap, never reload
+                // a building pager — it may still become ready, and the
+                // user can tap again. Only a non-building 'busy' goes
+                // to native recovery.
             } else if (r === 'busy') {
                 // Pagination never became ready (torn down): retries
                 // alone can never turn it — hand it to native recovery.

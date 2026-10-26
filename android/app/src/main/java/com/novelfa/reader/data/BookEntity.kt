@@ -24,7 +24,15 @@ data class BookEntity(
     val isFavorite: Boolean = false,
     val collectionName: String? = null,
     /** Original file name from the import picker (for display disambiguation). */
-    val originalFileName: String? = null
+    val originalFileName: String? = null,
+    /**
+     * Paged-mode text-point anchor ("li:tok", see rdrCurrentAnchor)
+     * within [lastChapterIndex]; null = chapter start. Saved on
+     * paged turns (throttled) and restored on reopen / same-chapter
+     * reload, so the reader lands on the same sentence even after
+     * repagination changes every page boundary.
+     */
+    val lastAnchor: String? = null
 )
 
 /**

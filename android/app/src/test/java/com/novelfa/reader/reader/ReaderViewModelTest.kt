@@ -249,6 +249,31 @@ class ReaderViewModelTest {
     }
 
     @Test
+    fun pagedAnchor_savedWithChapterAndClearedOnChapterChange() = runBlocking {
+        val dao = FakeReaderDao(listOf(book()))
+        val v = vm(dao, twoChapters())
+        assertTrue(v.loadChapter(0))
+        v.notePagedAnchor("3:12")
+        assertEquals("3:12", v.pagedAnchor)
+        assertEquals(0, v.pagedAnchorChapter)
+        // Throttled save may skip the immediate write (loadChapter
+        // just saved); a forced save must persist the anchor.
+        v.saveProgress(0, force = true)
+        assertEquals("3:12", dao.getById("b1")!!.lastAnchor)
+        assertEquals(0, dao.getById("b1")!!.lastChapterIndex)
+        // Moving to another chapter must not carry the old chapter's
+        // anchor with it.
+        assertTrue(v.loadChapter(1))
+        assertEquals(null, dao.getById("b1")!!.lastAnchor)
+        assertEquals(1, dao.getById("b1")!!.lastChapterIndex)
+        v.notePagedAnchor("bad-anchor")
+        assertEquals("3:12", v.pagedAnchor)
+        v.clearPagedAnchor()
+        assertEquals(null, v.pagedAnchor)
+        assertEquals(-1, v.pagedAnchorChapter)
+    }
+
+    @Test
     fun applyTheme_rebuildsWithNewColors() = runBlocking {
         val dao = FakeReaderDao(listOf(book()))
         val v = vm(dao, twoChapters())

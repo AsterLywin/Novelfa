@@ -201,7 +201,10 @@ fun applyRecordTo(book: BookEntity, record: ReadingRecord): BookEntity? {
             else -> record.chapterIndex
         }.coerceIn(0, total - 1)
         if (target > b.lastChapterIndex) {
-            b = b.copy(lastChapterIndex = target)
+            // A restored chapter has no text anchor (records store
+            // chapter + percent, not li:tok): clear any stale anchor
+            // from the previous chapter instead of landing in it.
+            b = b.copy(lastChapterIndex = target, lastAnchor = null)
         }
         val needsOpened = record.finished || b.lastChapterIndex > book.lastChapterIndex
         if (needsOpened && b.lastOpenedDate.isNullOrEmpty() && record.updatedAt > 0) {

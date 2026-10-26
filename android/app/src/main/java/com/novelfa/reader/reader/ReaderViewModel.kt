@@ -143,6 +143,20 @@ class ReaderViewModel(
 
     var index: Int = initialBook.lastChapterIndex
         private set
+    /**
+     * Paged-mode text-point anchor ("li:tok", see rdrCurrentAnchor)
+     * for the chapter in [pagedAnchorChapter]. Together with
+     * [BookEntity.lastAnchor] this is the ReadEra-XPath idea in the
+     * pager's own coordinates: a stable text point, not a page
+     * number, so reopening, a settings reload or a mode switch
+     * lands on the same sentence even after repagination changes
+     * every page boundary. Seeded from the entity at open; cleared
+     * by [clearPagedAnchor] on a chapter change. Vertical mode does
+     * not use it (its position is a scroll offset in a stitched
+     * window, not a paged fragment).
+     */
+    var pagedAnchor: String? = null
+    var pagedAnchorChapter: Int = -1
     /** Current reading layout (replaces the old continuous on/off flag). */
     var readingMode: ReadingMode = ReadingMode.PAGED_HORIZONTAL
 
@@ -509,8 +523,40 @@ class ReaderViewModel(
         }
         lastSaveMs = now
         val target = if (i in chapters.indices) i else book.lastChapterIndex
-        book = book.copy(lastChapterIndex = target, lastOpenedDate = Instant.now().toString())
+        // The anchor belongs to exactly one chapter: it is saved
+        // only with that chapter's index, and cleared on any other
+        // chapter — otherwise a stale anchor would land the reader
+        // in the wrong chapter's text point.
+        val anchor = if (target == pagedAnchorChapter) pagedAnchor else null
+        book = book.copy(
+            lastChapterIndex = target,
+            lastOpenedDate = Instant.now().toString(),
+            lastAnchor = anchor
+        )
         dao.update(book)
+    }
+
+    /**
+     * Records the current paged page's text anchor, throttled through
+     * [saveProgress] (500ms): rapid turns save the first anchor and
+     * the next one after the window, so the DB is never more than a
+     * few pages stale, and a turn never costs a DB write each time.
+     * Only meaningful in paged mode; vertical callers must not call
+     * it (their chapter changes go through saveProgress, which
+     * clears the anchor for the new chapter).
+     */
+    suspend fun notePagedAnchor(anchor: String) {
+        if (readingMode != ReadingMode.PAGED_HORIZONTAL) return
+        if (!anchor.matches(Regex("^\\d+:\\d+$"))) return
+        pagedAnchor = anchor
+        pagedAnchorChapter = index
+        saveProgress(index)
+    }
+
+    /** Clears the in-memory anchor (chapter change): the next save writes null. */
+    fun clearPagedAnchor() {
+        pagedAnchor = null
+        pagedAnchorChapter = -1
     }
 
     suspend fun applySpacing(lh: Double, margin: Int, para: Double) {

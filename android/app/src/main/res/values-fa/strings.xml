@@ -282,6 +282,7 @@
     <string name="font_size_min">کمترین سایز فونت مجاز %1$d است</string>
     <string name="font_size_max">بیشترین سایز فونت مجاز %1$d است</string>
     <string name="pager_reload">در حال بارگذاری دوباره‌ی فصل…</string>
+    <string name="pager_building">در حال آماده‌سازی صفحه‌ها…</string>
     <string name="page_indicator">صفحه‌ی %1$d از %2$d</string>
     <string name="pager_failed">صفحه‌بندی این فصل ساخته نشد؛ با کشیدن عمودی بخوانید یا از فهرست، فصل دیگری را باز کنید.</string>
 </resources>

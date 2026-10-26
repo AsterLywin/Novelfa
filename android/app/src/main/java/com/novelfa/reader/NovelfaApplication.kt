@@ -8,6 +8,7 @@ import coil.disk.DiskCache
 import com.novelfa.reader.data.CoverStore
 import com.novelfa.reader.data.GeneratedCover
 import com.novelfa.reader.data.MIGRATION_1_2
+import com.novelfa.reader.data.MIGRATION_2_3
 import com.novelfa.reader.data.ReaderDb
 import com.novelfa.reader.data.RecommendedFonts
 import com.novelfa.reader.data.isUuidLikeTitle
@@ -34,7 +35,7 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
     /** Single Room instance for the whole app. */
     val db: ReaderDb by lazy {
         Room.databaseBuilder(this, ReaderDb::class.java, "reader.db")
-            .addMigrations(MIGRATION_1_2)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .build()
     }
 

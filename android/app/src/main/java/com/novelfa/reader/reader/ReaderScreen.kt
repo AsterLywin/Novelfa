@@ -198,6 +198,19 @@ fun ReaderScreen(
     // Fragment to land on after a cross-chapter in-book link opens its
     // chapter; applied (and cleared) by the onPageFinished hook.
     var pendingAnchor by remember { mutableStateOf<String?>(null) }
+    // Text-point anchor ("li:tok") to restore after a same-chapter
+    // reload (open, mode switch, settings reload): set by
+    // onPageStarted from the ViewModel's saved anchor for this
+    // chapter, applied (and cleared) by onPageFinished. A chapter
+    // change clears the ViewModel anchor first, so a new chapter
+    // never inherits the previous chapter's anchor.
+    var pendingAnchorFrag by remember { mutableStateOf<String?>(null) }
+    // Paged-mode "pages are being built" state: true from onPageStarted
+    // until the pager first reports a page count (or tears down).
+    // While true the page pill is replaced by a "preparing" pill, so
+    // a building chapter never looks like a blank, dead reader —
+    // ReadEra's EventPagesReady idea, in native form.
+    var pagerBuilding by remember { mutableStateOf(false) }
     var pageBase by remember { mutableStateOf<String?>(null) }
     var rev by remember { mutableIntStateOf(0) }
     var webView by remember { mutableStateOf<android.webkit.WebView?>(null) }
@@ -313,6 +326,12 @@ fun ReaderScreen(
             // stamped separately by prepareChapterBody either way.
             v.isEnglish = detectBookIsLtr(parsed.chapters)
             v.readingMode = ReadingMode.fromKey(savedMode)
+            // Seed the text-point anchor BEFORE loadChapter: its
+            // forced saveProgress must preserve the saved anchor for
+            // the target chapter (not clear it), and onPageStarted
+            // restores it after the reload.
+            v.pagedAnchor = entity.lastAnchor
+            v.pagedAnchorChapter = entity.lastChapterIndex
             val target = entity.lastChapterIndex.coerceIn(0, parsed.chapters.size - 1)
             if (!v.loadChapter(target)) {
                 throw IOException(v.lastError ?: "")
@@ -356,6 +375,12 @@ fun ReaderScreen(
             pagerFailedShownIndex = -1
             lastPagerError = null
             pagerTornDown = false
+            // A new chapter has no text anchor yet: clear it before
+            // the load, so onPageStarted cannot restore the previous
+            // chapter's anchor into this chapter, and the saved
+            // position for the new chapter starts clean.
+            v.clearPagedAnchor()
+            pendingAnchorFrag = null
         }
         if (v.loadChapter(i)) {
             pageHtml = v.html
@@ -391,7 +416,32 @@ fun ReaderScreen(
                 if (p != null && total != null && total > 0 && p in 1..total) {
                     pagedPage = p
                     pagedPageCount = total
+                    // First real page count = pager ready: the
+                    // "preparing" pill gives way to the page pill.
+                    pagerBuilding = false
                 }
+            }
+        }
+    }
+
+    /**
+     * Reads the current paged page's text-point anchor ("li:tok") from
+     * the pager and hands it to the ViewModel for (throttled) saving.
+     * Called after every successful paged turn and on page-finish, so
+     * the saved anchor is never more than a few pages stale. A torn
+     * or not-yet-built pager returns '' and is ignored.
+     */
+    fun refreshPagedAnchor() {
+        val wv = webView ?: return
+        val v = vm ?: return
+        if (v.readingMode != ReadingMode.PAGED_HORIZONTAL) return
+        wv.evaluateJavascript(
+            "(function(){try{return window.rdrCurrentAnchor ? window.rdrCurrentAnchor() : '';}catch(e){return '';}})();"
+        ) { result ->
+            val anchor = result?.trim()?.trim { it == '"' } ?: ""
+            if (anchor.matches(Regex("^\\d+:\\d+$"))) {
+                val vv = vm ?: return@evaluateJavascript
+                scope.launch { vv.notePagedAnchor(anchor) }
             }
         }
     }
@@ -551,6 +601,7 @@ fun ReaderScreen(
                     pagerTornDown = true
                     pagedPage = 0
                     pagedPageCount = 0
+                    pagerBuilding = false
                 }
             }
         )
@@ -667,12 +718,36 @@ fun ReaderScreen(
                         delay(300)
                         if (vm === v) turnPage(v, forward, attempt + 1)
                     }
+                } else if (attempt < 30) {
+                    // Past the first window, ask the pager what it is
+                    // doing before deciding: a chapter that is merely
+                    // still BUILDING (slow chapter, late images) must
+                    // never be reloaded — reloading restarts the build
+                    // and shows a bogus failure. Keep waiting for it
+                    // (the "preparing" pill is visible meanwhile); only
+                    // a non-building pager earns recovery.
+                    wv.evaluateJavascript(
+                        "(function(){try{return window.rdrPagerState ? window.rdrPagerState() : '';}catch(e){return '';}})();"
+                    ) { stateResult ->
+                        val state = stateResult?.trim()?.trim { it == '"' } ?: ""
+                        scope.launch {
+                            delay(300)
+                            if (vm === v) {
+                                if (state == "building") {
+                                    turnPage(v, forward, attempt + 1)
+                                } else {
+                                    Log.w("NovelfaPager", "turnPage rdrTurn busy exhausted state=$state -> recover")
+                                    recoverPagerTurn()
+                                }
+                            }
+                        }
+                    }
                 } else {
-                    // Pagination never became ready (torn down) — the
-                    // old code just stopped here and the reader sat
-                    // dead with no signal at all.
-                    Log.w("NovelfaPager", "turnPage rdrTurn busy exhausted -> recover")
-                    recoverPagerTurn()
+                    // Still building after ~9s: drop this turn without
+                    // reloading or failing — the pager may still become
+                    // ready, and the user can tap again. A reload here
+                    // would only restart a slow build.
+                    Log.w("NovelfaPager", "turnPage rdrTurn busy exhausted after long build -> drop")
                 }
                 return@evaluateJavascript
             }
@@ -680,6 +755,7 @@ fun ReaderScreen(
                 val vv = vm ?: return@launch
                 if (r == "page") {
                     refreshPagedIndicator()
+                    refreshPagedAnchor()
                 } else if (r == "end" && forward && vv.index + 1 < vv.chapters.size) {
                     gotoChapter(vv, vv.index + 1)
                 } else if (r == "start" && !forward && vv.index > 0) {
@@ -1056,6 +1132,22 @@ fun ReaderScreen(
                             pagerTornDown = false
                             pagedPage = 0
                             pagedPageCount = 0
+                            // Same-chapter reload (open, mode switch,
+                            // settings reload): remember the saved
+                            // text anchor for this chapter so
+                            // onPageFinished can restore it. A chapter
+                            // change clears the ViewModel anchor in
+                            // gotoChapter, so this never fires for a
+                            // new chapter.
+                            val vv = vm
+                            if (modeNow == ReadingMode.PAGED_HORIZONTAL && vv != null &&
+                                vv.pagedAnchorChapter == vv.index && vv.pagedAnchor != null
+                            ) {
+                                pendingAnchorFrag = vv.pagedAnchor
+                                pagerBuilding = true
+                            } else if (modeNow == ReadingMode.PAGED_HORIZONTAL) {
+                                pagerBuilding = true
+                            }
                         },
                         onPageFinished = {
                             pageLoaded = true
@@ -1075,12 +1167,33 @@ fun ReaderScreen(
                                 pendingAnchor = null
                                 vm?.let { jumpToAnchor(it, frag) }
                             }
+                            // Text-point restore for a same-chapter
+                            // reload: hand the saved anchor to the
+                            // pager. At onPageFinished the pager is
+                            // usually still building (it waits for
+                            // fonts/images), so rdrGoToAnchorFrag
+                            // QUEUES it and paginate() applies it
+                            // when its first build finishes — the
+                            // call must not wait for readiness here.
+                            // A torn pager ignores it (its document
+                            // is a flow page, not a strip).
+                            if (modeNow == ReadingMode.PAGED_HORIZONTAL && !pagerTornDown) {
+                                val frag = pendingAnchorFrag
+                                if (frag != null) {
+                                    pendingAnchorFrag = null
+                                    webView?.evaluateJavascript(
+                                        "window.rdrGoToAnchorFrag ? window.rdrGoToAnchorFrag('$frag') : false",
+                                        null
+                                    )
+                                }
+                            }
                             // Fallback refresh: the pager's report()
                             // (via onScroll above) is the primary source,
                             // but a turn that landed via rdrLast() or an
                             // anchor jump also needs the indicator updated.
                             if (modeNow == ReadingMode.PAGED_HORIZONTAL) {
                                 refreshPagedIndicator()
+                                refreshPagedAnchor()
                             }
                         },
                         onSwipeLeft = {
@@ -1135,6 +1248,26 @@ fun ReaderScreen(
                 ) {
                     Text(
                         text = stringResource(R.string.page_indicator, pagedPage, pagedPageCount),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 8.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                            )
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+                // Paged mode, pager still building: the page pill
+                // above is hidden (0/0), so show a "preparing" pill
+                // in the same spot instead of a blank reader.
+                if (modeNow == ReadingMode.PAGED_HORIZONTAL && !fullscreenUi &&
+                    pagerBuilding && pagedPageCount == 0
+                ) {
+                    Text(
+                        text = stringResource(R.string.pager_building),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier

@@ -88,7 +88,10 @@ class CollectionManager(
      */
     suspend fun resetProgress(id: String) {
         val book = dao.getById(id) ?: return
-        dao.update(book.copy(lastChapterIndex = 0, lastOpenedDate = null))
+        // Reset also clears the text-point anchor: it belongs to the
+        // old chapter, and reopening at chapter 0 must start at its
+        // top, not at a stale li:tok from another chapter.
+        dao.update(book.copy(lastChapterIndex = 0, lastOpenedDate = null, lastAnchor = null))
     }
 
     /**
