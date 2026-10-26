@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -211,6 +213,22 @@ fun ReaderScreen(
     // a building chapter never looks like a blank, dead reader —
     // ReadEra's EventPagesReady idea, in native form.
     var pagerBuilding by remember { mutableStateOf(false) }
+    // In-app diagnostic (phone-only testing: no logcat exists here, so
+    // the reader must be able to report its own pager/gesture state
+    // on screen). Opened from the reading-mode dialog in paged mode.
+    // Live JS values, refreshed when the dialog opens and on Refresh:
+    // diagJsAnswered=false means the WebView did not answer at all.
+    var diagOpen by remember { mutableStateOf(false) }
+    var diagPagerState by remember { mutableStateOf("") }
+    var diagPageCount by remember { mutableIntStateOf(-1) }
+    var diagCurrentPage by remember { mutableIntStateOf(-1) }
+    var diagAnchor by remember { mutableStateOf("") }
+    var diagJsAnswered by remember { mutableStateOf(false) }
+    // Last native turn result and last native gesture, in raw
+    // diagnostic codes (rdrTurn answers, not user prose): these are
+    // the logcat lines, surfaced on screen instead.
+    var lastTurnDiag by remember { mutableStateOf("") }
+    var lastGestureDiag by remember { mutableStateOf("") }
     var pageBase by remember { mutableStateOf<String?>(null) }
     var rev by remember { mutableIntStateOf(0) }
     var webView by remember { mutableStateOf<android.webkit.WebView?>(null) }
@@ -425,6 +443,43 @@ fun ReaderScreen(
     }
 
     /**
+     * Queries the live pager once for the diagnostic dialog: state,
+     * page count, current page (0-based, as rdrCurrentPage returns
+     * it) and text anchor, joined by '|'. A missing function means
+     * the pager script never ran in this document ('missing'); an
+     * unanswered WebView leaves diagJsAnswered=false. Called when
+     * the dialog opens and on its Refresh button — never on a timer,
+     * so it cannot spam the WebView while reading.
+     */
+    fun refreshDiag() {
+        val wv = webView
+        if (wv == null) {
+            diagJsAnswered = false
+            return
+        }
+        wv.evaluateJavascript(
+            "(function(){try{var s='';" +
+                "s+=(window.rdrPagerState?window.rdrPagerState():'missing');s+='|';" +
+                "s+=(window.rdrPageCount?window.rdrPageCount():-1);s+='|';" +
+                "s+=(window.rdrCurrentPage?window.rdrCurrentPage():-1);s+='|';" +
+                "s+=(window.rdrCurrentAnchor?window.rdrCurrentAnchor():'');" +
+                "return s;}catch(e){return 'error|-1|-1|';}})();"
+        ) { result ->
+            val clean = result?.trim()?.trim { it == '"' } ?: ""
+            val parts = clean.split("|")
+            if (parts.size == 4) {
+                diagJsAnswered = true
+                diagPagerState = parts[0]
+                diagPageCount = parts[1].toIntOrNull() ?: -1
+                diagCurrentPage = parts[2].toIntOrNull() ?: -1
+                diagAnchor = parts[3]
+            } else {
+                diagJsAnswered = false
+            }
+        }
+    }
+
+    /**
      * Reads the current paged page's text-point anchor ("li:tok") from
      * the pager and hands it to the ViewModel for (throttled) saving.
      * Called after every successful paged turn and on page-finish, so
@@ -569,6 +624,7 @@ fun ReaderScreen(
             // call rdrTurn directly, so edges need native handling just
             // like swipe turns get in turnPage).
             onPageEdge = { dir ->
+                lastGestureDiag = "JS tap, page edge $dir"
                 scope.launch {
                     val v = vm ?: return@launch
                     if (dir > 0 && v.index + 1 < v.chapters.size) {
@@ -584,6 +640,7 @@ fun ReaderScreen(
             // turnPage (one reload per chapter, guarded there).
             onPagerStuck = {
                 Log.w("NovelfaPager", "onPagerStuck from JS -> recover")
+                lastGestureDiag = "JS tap stuck -> recover"
                 scope.launch { recoverPagerTurn() }
             },
             // JS teardown reason: logged and kept for the recovery
@@ -681,6 +738,8 @@ fun ReaderScreen(
                 // failure notice once per chapter in the spent case).
                 Log.w("NovelfaPager", "turnPage rdrTurn torn forward=$forward")
                 val alreadyReloaded = pagerReloadTriedIndex == v.index
+                lastTurnDiag = if (alreadyReloaded) "torn -> fallback scroll (reload spent)"
+                    else "torn -> recover (reload once)"
                 recoverPagerTurn()
                 if (alreadyReloaded) fallbackScrollPage(v, forward)
                 return@evaluateJavascript
@@ -697,6 +756,7 @@ fun ReaderScreen(
                 // (a mode/desync), which no retry can ever turn.
                 if (!pageLoaded && attempt < 10) {
                     Log.d("NovelfaPager", "turnPage rdrTurn missing while loading -> wait attempt=$attempt")
+                    lastTurnDiag = "rdrTurn missing, waiting (attempt $attempt)"
                     scope.launch {
                         delay(300)
                         if (vm === v) turnPage(v, forward, attempt + 1)
@@ -707,6 +767,8 @@ fun ReaderScreen(
                     // scroll it instead of going silent after reload.
                     Log.w("NovelfaPager", "turnPage rdrTurn missing -> recover")
                     val alreadyReloaded = pagerReloadTriedIndex == v.index
+                    lastTurnDiag = if (alreadyReloaded) "rdrTurn missing -> fallback scroll (reload spent)"
+                        else "rdrTurn missing -> recover (reload once)"
                     recoverPagerTurn()
                     if (alreadyReloaded) fallbackScrollPage(v, forward)
                 }
@@ -714,6 +776,7 @@ fun ReaderScreen(
             }
             if (r == "busy") {
                 if (attempt < 10) {
+                    lastTurnDiag = "busy, retry (attempt $attempt)"
                     scope.launch {
                         delay(300)
                         if (vm === v) turnPage(v, forward, attempt + 1)
@@ -734,9 +797,11 @@ fun ReaderScreen(
                             delay(300)
                             if (vm === v) {
                                 if (state == "building") {
+                                    lastTurnDiag = "busy, building, retry (attempt ${attempt + 1})"
                                     turnPage(v, forward, attempt + 1)
                                 } else {
                                     Log.w("NovelfaPager", "turnPage rdrTurn busy exhausted state=$state -> recover")
+                                    lastTurnDiag = "busy exhausted, state=$state -> recover"
                                     recoverPagerTurn()
                                 }
                             }
@@ -748,21 +813,29 @@ fun ReaderScreen(
                     // ready, and the user can tap again. A reload here
                     // would only restart a slow build.
                     Log.w("NovelfaPager", "turnPage rdrTurn busy exhausted after long build -> drop")
+                    lastTurnDiag = "busy, building, dropped after ~9s"
                 }
                 return@evaluateJavascript
             }
             scope.launch {
                 val vv = vm ?: return@launch
                 if (r == "page") {
+                    lastTurnDiag = "page"
                     refreshPagedIndicator()
                     refreshPagedAnchor()
                 } else if (r == "end" && forward && vv.index + 1 < vv.chapters.size) {
+                    lastTurnDiag = "end -> next chapter"
                     gotoChapter(vv, vv.index + 1)
                 } else if (r == "start" && !forward && vv.index > 0) {
                     // Land on the previous chapter's last page; the
                     // onPageFinished hook fires rdrLast() once loaded.
+                    lastTurnDiag = "start -> prev chapter (last page)"
                     pendingLastPage = true
                     gotoChapter(vv, vv.index - 1)
+                } else if (r == "end" || r == "start") {
+                    // At the book's edge: no chapter to move to, so
+                    // the turn correctly does nothing.
+                    lastTurnDiag = "$r (book edge, no chapter)"
                 }
             }
         }
@@ -1197,6 +1270,7 @@ fun ReaderScreen(
                             }
                         },
                         onSwipeLeft = {
+                            lastGestureDiag = "swipe left"
                             val v = vm
                             if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
                                 // Paged mode, strip math (show() uses
@@ -1211,6 +1285,7 @@ fun ReaderScreen(
                             }
                         },
                         onSwipeRight = {
+                            lastGestureDiag = "swipe right"
                             val v = vm
                             if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
                                 // Mirror of the above: RTL next pages sit
@@ -1225,12 +1300,14 @@ fun ReaderScreen(
                         // page sits on turns to it. RTL: left = forward,
                         // right = back. LTR: the mirror.
                         onTapLeftEdge = {
+                            lastGestureDiag = "tap left edge"
                             val v = vm
                             if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
                                 turnPage(v, forward = !v.isEnglish)
                             }
                         },
                         onTapRightEdge = {
+                            lastGestureDiag = "tap right edge"
                             val v = vm
                             if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
                                 turnPage(v, forward = v.isEnglish)
@@ -1397,6 +1474,125 @@ fun ReaderScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
+                    // Phone-only testing: the paged diagnostic dialog
+                    // (pager state, page numbers, last turn/gesture) is
+                    // the on-screen replacement for logcat. Only in
+                    // paged mode — it reports paged state, which does
+                    // not exist in vertical mode.
+                    if (modeNow == ReadingMode.PAGED_HORIZONTAL) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        TextButton(onClick = {
+                            modeOpen = false
+                            diagOpen = true
+                            refreshDiag()
+                        }) { Text(stringResource(R.string.diag_open_button)) }
+                    }
+                }
+            }
+        }
+    }
+
+    // Diagnostic dialog: live pager values (queried on open and on
+    // Refresh) plus native state. The user reads it off the phone
+    // and reports the rows — no computer needed. Values are raw
+    // diagnostic codes (pager states, rdrTurn answers); only the
+    // row labels are localized.
+    if (diagOpen) {
+        val v = vm
+        val diagNone = stringResource(R.string.diag_none)
+        val diagYes = stringResource(R.string.yes)
+        val diagNo = stringResource(R.string.no)
+        Dialog(onDismissRequest = { diagOpen = false }) {
+            Card(modifier = Modifier.padding(8.dp)) {
+                Column(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = stringResource(R.string.diag_title),
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_mode),
+                        if (modeNow == ReadingMode.PAGED_HORIZONTAL)
+                            stringResource(R.string.mode_horizontal)
+                        else stringResource(R.string.mode_vertical_continuous)
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_chapter),
+                        if (v != null) "${v.index + 1} / ${v.chapters.size}" else diagNone
+                    )
+                    if (v != null && v.index in v.chapters.indices) {
+                        DiagRow(
+                            stringResource(R.string.diag_chapter_title),
+                            v.chapters[v.index].title
+                        )
+                    }
+                    DiagRow(
+                        stringResource(R.string.diag_doc_loaded),
+                        if (pageLoaded) diagYes else diagNo
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_pager_state),
+                        if (diagJsAnswered) diagPagerState else diagNone
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_page_count),
+                        if (diagJsAnswered && diagPageCount >= 0) "$diagPageCount" else diagNone
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_current_page),
+                        if (diagJsAnswered && diagPageCount > 0 && diagCurrentPage >= 0)
+                            "${diagCurrentPage + 1}" else diagNone
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_pill),
+                        if (pagedPageCount > 0) "$pagedPage / $pagedPageCount" else diagNone
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_anchor),
+                        if (diagAnchor.isNotEmpty()) diagAnchor else diagNone
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_last_turn),
+                        if (lastTurnDiag.isNotEmpty()) lastTurnDiag else diagNone
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_last_error),
+                        lastPagerError ?: diagNone
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_torn),
+                        if (pagerTornDown) diagYes else diagNo
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_building),
+                        if (pagerBuilding) diagYes else diagNo
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_last_gesture),
+                        if (lastGestureDiag.isNotEmpty()) lastGestureDiag else diagNone
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.diag_note_js_taps),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        TextButton(onClick = { refreshDiag() }) {
+                            Text(stringResource(R.string.diag_refresh))
+                        }
+                        TextButton(onClick = { diagOpen = false }) {
+                            Text(stringResource(R.string.close))
+                        }
+                    }
                 }
             }
         }
@@ -1683,6 +1879,33 @@ private fun detectBookIsLtr(chapters: List<com.novelfa.reader.model.Chapter>): B
 /** Zip-bomb guardrails for EPUB extraction (generous: real books are far smaller). */
 private const val MAX_ZIP_ENTRIES = 10_000
 private const val MAX_ZIP_BYTES = 500L * 1024 * 1024
+
+/**
+ * One row of the diagnostic dialog: a localized label on one side
+ * and the raw diagnostic value on the other. Values are codes and
+ * numbers, never prose, so they need no translation; labels are
+ * all in strings.xml.
+ */
+@Composable
+private fun DiagRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
 
 /**
  * One reading-mode option in the mode picker popup: the mode's drawn

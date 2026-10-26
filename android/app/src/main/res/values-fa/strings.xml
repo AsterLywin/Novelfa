@@ -283,6 +283,25 @@
     <string name="font_size_max">بیشترین سایز فونت مجاز %1$d است</string>
     <string name="pager_reload">در حال بارگذاری دوباره‌ی فصل…</string>
     <string name="pager_building">در حال آماده‌سازی صفحه‌ها…</string>
+    <string name="diag_title">تشخیص حالت افقی</string>
+    <string name="diag_open_button">تشخیص حالت افقی</string>
+    <string name="diag_mode">حالت</string>
+    <string name="diag_chapter">فصل</string>
+    <string name="diag_chapter_title">عنوان فصل</string>
+    <string name="diag_doc_loaded">سند بارگذاری شده</string>
+    <string name="diag_pager_state">وضعیت پیجر</string>
+    <string name="diag_page_count">صفحه‌ها (پیجر)</string>
+    <string name="diag_current_page">صفحه‌ی جاری (پیجر)</string>
+    <string name="diag_pill">قرص صفحه (بومی)</string>
+    <string name="diag_anchor">لنگر متن</string>
+    <string name="diag_last_turn">آخرین ورق بومی</string>
+    <string name="diag_last_error">آخرین خطای پیجر</string>
+    <string name="diag_torn">پیجر خراب شده</string>
+    <string name="diag_building">پیجر در حال ساخت</string>
+    <string name="diag_last_gesture">آخرین ژست</string>
+    <string name="diag_none">هیچ‌کدام</string>
+    <string name="diag_refresh">تازه‌سازی</string>
+    <string name="diag_note_js_taps">ورق‌های لمسی داخل صفحه، عدد صفحه‌ی پیجر در بالا را عوض می‌کنند ولی به‌عنوان ورق بومی ثبت نمی‌شوند؛ فقط سوایپ‌ها، ضربه‌های لبه، لبه‌های صفحه و ورق‌های گیرکرده ثبت می‌شوند.</string>
     <string name="page_indicator">صفحه‌ی %1$d از %2$d</string>
     <string name="pager_failed">صفحه‌بندی این فصل ساخته نشد؛ با کشیدن عمودی بخوانید یا از فهرست، فصل دیگری را باز کنید.</string>
 </resources>

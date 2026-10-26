@@ -283,6 +283,25 @@
     <string name="font_size_max">Maximum allowed font size is %1$d</string>
     <string name="pager_reload">Reloading the chapter…</string>
     <string name="pager_building">Preparing the pages…</string>
+    <string name="diag_title">Horizontal mode diagnostic</string>
+    <string name="diag_open_button">Horizontal diagnostic</string>
+    <string name="diag_mode">Mode</string>
+    <string name="diag_chapter">Chapter</string>
+    <string name="diag_chapter_title">Chapter title</string>
+    <string name="diag_doc_loaded">Document loaded</string>
+    <string name="diag_pager_state">Pager state</string>
+    <string name="diag_page_count">Pages (pager)</string>
+    <string name="diag_current_page">Current page (pager)</string>
+    <string name="diag_pill">Page pill (native)</string>
+    <string name="diag_anchor">Text anchor</string>
+    <string name="diag_last_turn">Last native turn</string>
+    <string name="diag_last_error">Last pager error</string>
+    <string name="diag_torn">Pager torn down</string>
+    <string name="diag_building">Pager building</string>
+    <string name="diag_last_gesture">Last gesture</string>
+    <string name="diag_none">None</string>
+    <string name="diag_refresh">Refresh</string>
+    <string name="diag_note_js_taps">Tap turns inside the page change the pager page above but do not appear as a native turn; only swipes, edge taps, page edges and stuck taps do.</string>
     <string name="page_indicator">Page %1$d of %2$d</string>
     <string name="pager_failed">This chapter’s pagination failed; scroll vertically to read, or open another chapter from the list.</string>
 </resources>
