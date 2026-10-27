@@ -610,13 +610,15 @@ object HtmlBuilder {
     // instead of another round of guessing. stageDbg() returns a short
     // string with no '|' (the native dialog splits on it); the native
     // side reads it via window.__rdrStageDbg().
-    var stageRefused = '', stageResizes = 0, stageLast = '', stagePolls = 0;
+    var stageRefused = '', stageResizes = 0, stageLast = '', stagePolls = 0, stageCollapse = '';
     var stageSrcW = '', stageSrcH = '';
     function stageNote() {
         stageLast = stageW() + 'x' + stageH() + ' (' + stageSrcW + '/' + stageSrcH + ')';
     }
     function stageDbg() {
-        return 'refused ' + (stageRefused || '-') + ', resizes ' + stageResizes + ', last ' + (stageLast || '-') + ', polls ' + stagePolls;
+        var d = 'refused ' + (stageRefused || '-') + ', resizes ' + stageResizes + ', last ' + (stageLast || '-') + ', polls ' + stagePolls;
+        if (stageCollapse) d += ', collapse ' + stageCollapse;
+        return d;
     }
     window.__rdrStageDbg = stageDbg;
     // Collapsed-stage wait, v2: when a build is refused because the
@@ -1233,8 +1235,21 @@ object HtmlBuilder {
                     // A transient stage glitch must not kill the chapter
                     // outright: rebuild once with fresh geometry, and
                     // only tear down if it repeats.
+                    // The collapse error carries the whole geometry
+                    // chain, because CSS theory says it cannot happen
+                    // with the shipped stylesheet: the next diagnostic
+                    // must name the broken link (page? strip? chap?
+                    // window?) instead of another round of guessing.
                     var pr = pages[0].el.getBoundingClientRect();
-                    if (pr && pr.height < stageH() * 0.5) throw new Error('page height collapse');
+                    if (pr && pr.height < stageH() * 0.5) {
+                        stageCollapse = 'pageH ' + Math.round(pr.height) +
+                            ', pageOff ' + pages[0].el.offsetHeight +
+                            ', stripH ' + (strip ? strip.clientHeight : -1) +
+                            ', chapH ' + (chap ? chap.clientHeight : -1) +
+                            ', winH ' + (window.innerHeight || 0) +
+                            ', stageH ' + stageH();
+                        throw new Error('page height collapse (' + stageCollapse + ')');
+                    }
                 }
                 window.__rdrPagerError = null;
             } catch (e) {
