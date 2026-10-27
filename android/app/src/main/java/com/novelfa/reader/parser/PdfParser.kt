@@ -41,6 +41,101 @@ object PdfParser {
     ): ParsedBook = parseDetailed(bytes, fileName, outDir, chapterFallback, password).first
 
     /**
+     * Conservative encryption probe, for the importer's fast path.
+     * Returns true when any trailer in the startxref chain declares
+     * /Encrypt, OR when the trailers cannot be read at all (the caller
+     * then runs the full [PdfDoc] probe, exactly as before). Returns
+     * false only when every trailer in the chain was read successfully
+     * and none mentions /Encrypt — the common unencrypted case, where
+     * constructing a whole [PdfDoc] (full xref scan over the file)
+     * just to learn "nothing to decrypt" was pure import overhead.
+     * The check reads only the trailer dicts (a few KB near the
+     * startxref offsets), never the whole file as a string, and it
+     * can only err towards true (full probe), never towards skipping
+     * a decryption the file actually needs: encryption is declared
+     * in a trailer dict by definition, and the walk follows /Prev
+     * through incremental updates and hybrid xref/stream chains.
+     */
+    fun maybeEncrypted(bytes: ByteArray): Boolean {
+        // startxref lives in the tail (%%EOF trailer).
+        val tailStart = maxOf(0, bytes.size - 2048)
+        val tail = String(bytes, tailStart, bytes.size - tailStart, Charsets.ISO_8859_1)
+        val sx = tail.lastIndexOf("startxref")
+        if (sx < 0) return true
+        var offset = tail.substring(sx + "startxref".length)
+            .trimStart().takeWhile { it.isDigit() }.toIntOrNull() ?: return true
+        val seen = mutableSetOf<Int>()
+        var guard = 0
+        while (guard++ < 25) {
+            if (offset < 0 || offset >= bytes.size || !seen.add(offset)) return true
+            // Trailer dicts are small; a bounded window is enough, and
+            // a dict that does not close inside it means "uncertain".
+            val winEnd = minOf(bytes.size, offset + 65536)
+            val win = String(bytes, offset, winEnd - offset, Charsets.ISO_8859_1)
+            val body = win.trimStart()
+            val dictStart = if (body.startsWith("xref")) {
+                val tr = body.indexOf("trailer")
+                if (tr < 0) return true
+                body.indexOf("<<", tr)
+            } else {
+                body.indexOf("<<")
+            }
+            if (dictStart < 0) return true
+            val dict = balancedTrailerDict(body, dictStart) ?: return true
+            if (dict.contains("/Encrypt")) return true
+            val prev = Regex("/Prev\\s+(\\d+)").find(dict)
+                ?.groupValues?.get(1)?.toIntOrNull() ?: return false
+            offset = prev
+        }
+        return true
+    }
+
+    /** Balanced `<<...>>` dict starting at [start], or null if it does not close. */
+    private fun balancedTrailerDict(text: String, start: Int): String? {
+        var depth = 0
+        var i = start
+        while (i < text.length) {
+            when {
+                text.startsWith("<<", i) -> {
+                    depth++
+                    i += 2
+                }
+                text.startsWith(">>", i) -> {
+                    depth--
+                    i += 2
+                    if (depth == 0) return text.substring(start, i)
+                }
+                text[i] == '(' -> {
+                    // Literal string: skip balanced parens with escapes.
+                    var d = 1
+                    i++
+                    while (i < text.length && d > 0) {
+                        when {
+                            text[i] == '\\' && i + 1 < text.length -> i += 2
+                            text[i] == '(' -> {
+                                d++
+                                i++
+                            }
+                            text[i] == ')' -> {
+                                d--
+                                i++
+                            }
+                            else -> i++
+                        }
+                    }
+                }
+                text[i] == '<' -> {
+                    val end = text.indexOf('>', i)
+                    if (end < 0) return null
+                    i = end + 1
+                }
+                else -> i++
+            }
+        }
+        return null
+    }
+
+    /**
      * Like [parse], plus the per-page text the caller needs to build a
      * MIXED book (text pages + image pages in page order): the parsed
      * book, one flag per page (true = that page yielded text), and the
@@ -896,7 +991,13 @@ object PdfParser {
             } ?: objStm[num]?.let { (stmNum, index) ->
                 objStmObjects(stmNum)[index]
             }
-            if (result != null) rawCache[num] = result
+            // Bounded memoization: raw object bodies include stream
+            // bytes, so caching every object retains the whole file a
+            // second time (as substrings) for the entire parse — GC
+            // pressure that grows with the book. Small dicts (pages,
+            // fonts, outlines) stay cached; large bodies are re-read
+            // from the file view on the rare second access instead.
+            if (result != null && result.length <= 131072) rawCache[num] = result
             return result
         }
 
@@ -934,7 +1035,11 @@ object PdfParser {
         fun streamOf(num: Int): ByteArray? {
             if (streamCache.containsKey(num)) return streamCache[num]
             val result = computeStream(num)
-            streamCache[num] = result
+            // Same bound as rawCache: decoded content streams are the
+            // biggest retained objects in a parse, and each is normally
+            // read once per page anyway (font CMaps are small and stay
+            // cached, so font lookups keep their fast path).
+            if (result == null || result.size <= 131072) streamCache[num] = result
             return result
         }
 
@@ -1405,7 +1510,28 @@ object PdfParser {
             }
             val tokens = tokenize(content)
             var i = 0
-            val stack = mutableListOf<Token>()
+            // Operand tracking WITHOUT a stack list: the old code ran
+            // filterIsInstance over the whole operand stack on EVERY
+            // operator (Tf/Td/Tm/Tj/TJ), allocating a filtered list per
+            // operator — for text-heavy pages, thousands of throwaway
+            // lists per page. The stack is cleared after each operator,
+            // so only the latest operand of each kind (and the count of
+            // numbers, for Tm's >= 6 check) can ever be read; tracking
+            // those directly is exactly equivalent.
+            var lastName: String? = null
+            var lastNum: Double? = null
+            var prevNum: Double? = null
+            var numCount = 0
+            var lastStr: Token.Str? = null
+            var lastArr: Token.Arr? = null
+            fun clearOperands() {
+                lastName = null
+                lastNum = null
+                prevNum = null
+                numCount = 0
+                lastStr = null
+                lastArr = null
+            }
             while (i < tokens.size) {
                 val tok = tokens[i++]
                 when (tok) {
@@ -1418,18 +1544,17 @@ object PdfParser {
                             }
                             "ET" -> flush(0.0)
                             "Tf" -> {
-                                val name = stack.filterIsInstance<Token.Name>().lastOrNull()?.value
-                                val size = stack.filterIsInstance<Token.Number>().lastOrNull()?.value
+                                val name = lastName
+                                val size = lastNum
                                 if (name != null) {
                                     font = fontInfo(resources, name)
                                     if (size != null) fontSize = size
                                 }
                             }
                             "Td", "TD" -> {
-                                val nums = stack.filterIsInstance<Token.Number>()
-                                if (nums.size >= 2) {
-                                    val tx = nums[nums.size - 2].value
-                                    val ty = nums[nums.size - 1].value
+                                if (numCount >= 2) {
+                                    val tx = prevNum!!
+                                    val ty = lastNum!!
                                     if (ty != 0.0) {
                                         flush(kotlin.math.abs(ty))
                                         lastY = null
@@ -1440,10 +1565,9 @@ object PdfParser {
                                 }
                             }
                             "Tm" -> {
-                                val nums = stack.filterIsInstance<Token.Number>()
-                                if (nums.size >= 6) {
-                                    val e = nums[nums.size - 2].value
-                                    val f = nums[nums.size - 1].value
+                                if (numCount >= 6) {
+                                    val e = prevNum!!
+                                    val f = lastNum!!
                                     if (lastY != null && f != lastY) {
                                         flush(kotlin.math.abs(f - lastY!!))
                                     } else if (lastX != null && e != lastX) {
@@ -1455,11 +1579,11 @@ object PdfParser {
                             }
                             "T*" -> flush(fontSize)
                             "Tj" -> {
-                                val s = stack.filterIsInstance<Token.Str>().lastOrNull()
+                                val s = lastStr
                                 if (s != null) appendShow(decodeShow(font, s.bytes))
                             }
                             "TJ" -> {
-                                val arr = stack.filterIsInstance<Token.Arr>().lastOrNull()
+                                val arr = lastArr
                                 if (arr != null) {
                                     for (el in arr.items) {
                                         when (el) {
@@ -1473,13 +1597,23 @@ object PdfParser {
                             "'", "\"" -> {
                                 // Both are T* + show: next line, then text.
                                 flush(fontSize)
-                                val s = stack.filterIsInstance<Token.Str>().lastOrNull()
+                                val s = lastStr
                                 if (s != null) appendShow(decodeShow(font, s.bytes))
                             }
                         }
-                        stack.clear()
+                        clearOperands()
                     }
-                    else -> stack += tok
+                    else -> when (tok) {
+                        is Token.Name -> lastName = tok.value
+                        is Token.Number -> {
+                            prevNum = lastNum
+                            lastNum = tok.value
+                            numCount++
+                        }
+                        is Token.Str -> lastStr = tok
+                        is Token.Arr -> lastArr = tok
+                        else -> Unit
+                    }
                 }
             }
             flush(0.0)
@@ -1586,7 +1720,11 @@ object PdfParser {
         private fun decodeShow(font: FontInfo?, bytes: ByteArray): String {
             if (font == null) {
                 // No font context: Latin-1 passthrough for plain ASCII text.
-                return bytes.map { (it.toInt() and 0xFF).toChar() }.joinToString("")
+                // (StringBuilder loop, not bytes.map{}.joinToString: the
+                // old form allocated a boxed Char per byte plus the list.)
+                val sb = StringBuilder(bytes.size)
+                for (b in bytes) sb.append((b.toInt() and 0xFF).toChar())
+                return sb.toString()
             }
             val sb = StringBuilder()
             var i = 0
@@ -1714,7 +1852,12 @@ object PdfParser {
                         while (i < content.length && content[i] != '\n') i++
                     }
                     c == '(' -> {
-                        val bytes = mutableListOf<Byte>()
+                        // ByteArrayOutputStream, NOT MutableList<Byte>:
+                        // the old list boxed EVERY content byte (one
+                        // Byte object per byte of every page stream),
+                        // which was the single biggest allocation churn
+                        // in a text-PDF import.
+                        val bytes = ByteArrayOutputStream()
                         var depth = 1
                         i++
                         while (i < content.length && depth > 0) {
@@ -1722,12 +1865,12 @@ object PdfParser {
                             if (ch == '\\' && i + 1 < content.length) {
                                 val e = content[i + 1]
                                 when (e) {
-                                    'n' -> bytes += '\n'.code.toByte()
-                                    'r' -> bytes += '\r'.code.toByte()
-                                    't' -> bytes += '\t'.code.toByte()
-                                    'b' -> bytes += '\b'.code.toByte()
-                                    'f' -> bytes += 0x0C.toByte()
-                                    '(', ')', '\\' -> bytes += e.code.toByte()
+                                    'n' -> bytes.write('\n'.code)
+                                    'r' -> bytes.write('\r'.code)
+                                    't' -> bytes.write('\t'.code)
+                                    'b' -> bytes.write('\b'.code)
+                                    'f' -> bytes.write(0x0C)
+                                    '(', ')', '\\' -> bytes.write(e.code)
                                     '\n' -> Unit
                                     '\r' -> {
                                         if (content.getOrNull(i + 2) == '\n') i++
@@ -1742,22 +1885,22 @@ object PdfParser {
                                                 oct += content[j]
                                                 j++
                                             }
-                                            bytes += (oct.toIntOrNull(8) ?: 0).toByte()
+                                            bytes.write(oct.toIntOrNull(8) ?: 0)
                                             i = j - 1
-                                        } else bytes += e.code.toByte()
+                                        } else bytes.write(e.code)
                                     }
                                 }
                                 i += 2
                             } else if (ch == '(') {
                                 depth++
-                                bytes += ch.code.toByte()
+                                bytes.write(ch.code)
                                 i++
                             } else if (ch == ')') {
                                 depth--
-                                if (depth > 0) bytes += ch.code.toByte()
+                                if (depth > 0) bytes.write(ch.code)
                                 i++
                             } else {
-                                bytes += ch.code.toByte()
+                                bytes.write(ch.code)
                                 i++
                             }
                         }
@@ -1841,7 +1984,7 @@ object PdfParser {
 
         private fun readStringToken(content: String, start: Int): Pair<Token.Str?, Int> {
             if (content[start] == '(') {
-                val bytes = mutableListOf<Byte>()
+                val bytes = ByteArrayOutputStream()
                 var depth = 1
                 var i = start + 1
                 while (i < content.length && depth > 0) {
@@ -1849,10 +1992,10 @@ object PdfParser {
                     if (ch == '\\' && i + 1 < content.length) {
                         val e = content[i + 1]
                         when (e) {
-                            'n' -> bytes += '\n'.code.toByte()
-                            'r' -> bytes += '\r'.code.toByte()
-                            't' -> bytes += '\t'.code.toByte()
-                            '(', ')', '\\' -> bytes += e.code.toByte()
+                            'n' -> bytes.write('\n'.code)
+                            'r' -> bytes.write('\r'.code)
+                            't' -> bytes.write('\t'.code)
+                            '(', ')', '\\' -> bytes.write(e.code)
                             else -> {
                                 if (e.isDigit()) {
                                     var oct = ""
@@ -1861,22 +2004,22 @@ object PdfParser {
                                         oct += content[j]
                                         j++
                                     }
-                                    bytes += (oct.toIntOrNull(8) ?: 0).toByte()
+                                    bytes.write(oct.toIntOrNull(8) ?: 0)
                                     i = j - 1
-                                } else bytes += e.code.toByte()
+                                } else bytes.write(e.code)
                             }
                         }
                         i += 2
                     } else if (ch == '(') {
                         depth++
-                        bytes += ch.code.toByte()
+                        bytes.write(ch.code)
                         i++
                     } else if (ch == ')') {
                         depth--
-                        if (depth > 0) bytes += ch.code.toByte()
+                        if (depth > 0) bytes.write(ch.code)
                         i++
                     } else {
-                        bytes += ch.code.toByte()
+                        bytes.write(ch.code)
                         i++
                     }
                 }

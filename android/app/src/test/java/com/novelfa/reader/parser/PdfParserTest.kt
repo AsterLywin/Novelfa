@@ -183,4 +183,76 @@ class PdfParserTest {
         assertTrue(book.chapters.size > 1)
         assertTrue(book.chapters.all { it.title.startsWith("Section") })
     }
+
+    // -- maybeEncrypted: the import fast path must never skip a real
+    // decryption, and must say false for ordinary unencrypted files. --
+
+    @Test
+    fun maybeEncrypted_plainPdf_isFalse() {
+        val pdf = twoPagePdf(
+            "BT /F1 12 Tf (Plain) Tj ET".toByteArray(Charsets.ISO_8859_1),
+            outline = false
+        )
+        assertEquals(false, PdfParser.maybeEncrypted(pdf))
+    }
+
+    @Test
+    fun maybeEncrypted_encryptTrailer_isTrue() {
+        val pdf = buildPdf(
+            mapOf(
+                1 to "<< /Type /Catalog /Pages 2 0 R >>".toByteArray(Charsets.ISO_8859_1),
+                2 to "<< /Type /Pages /Kids [] /Count 0 >>".toByteArray(Charsets.ISO_8859_1)
+            ),
+            trailerExtra = "/Encrypt 9 0 R"
+        )
+        assertEquals(true, PdfParser.maybeEncrypted(pdf))
+    }
+
+    @Test
+    fun maybeEncrypted_noStartxref_isTrue() {
+        // Unreadable trailers must keep the full probe (old behaviour),
+        // never a skipped decryption.
+        assertEquals(true, PdfParser.maybeEncrypted("not a pdf at all".toByteArray()))
+        assertEquals(true, PdfParser.maybeEncrypted(ByteArray(0)))
+    }
+
+    @Test
+    fun maybeEncrypted_prevChain_followsToEncrypt() {
+        // Appends a second (newest) trailer with /Prev pointing at the
+        // first trailer: the probe must walk the chain, not stop at
+        // the newest trailer alone.
+        val first = twoPagePdf(
+            "BT /F1 12 Tf (Plain) Tj ET".toByteArray(Charsets.ISO_8859_1),
+            outline = false
+        )
+        val firstText = String(first, Charsets.ISO_8859_1)
+        val firstXref = firstText.substringAfter("startxref\n")
+            .substringBefore("\n").trim().toInt()
+        val secondXref = first.size
+        val second = (
+            "xref\n0 1\n0000000000 65535 f \n" +
+                "trailer\n<< /Size 3 /Root 1 0 R /Prev $firstXref >>\n" +
+                "startxref\n$secondXref\n%%EOF\n"
+            ).toByteArray(Charsets.ISO_8859_1)
+        assertEquals(false, PdfParser.maybeEncrypted(first + second))
+        // Same chain, but the OLD trailer declares /Encrypt: the walk
+        // must still find it through /Prev.
+        val firstEnc = buildPdf(
+            mapOf(
+                1 to "<< /Type /Catalog /Pages 2 0 R >>".toByteArray(Charsets.ISO_8859_1),
+                2 to "<< /Type /Pages /Kids [] /Count 0 >>".toByteArray(Charsets.ISO_8859_1)
+            ),
+            trailerExtra = "/Encrypt 9 0 R"
+        )
+        val firstEncText = String(firstEnc, Charsets.ISO_8859_1)
+        val firstEncXref = firstEncText.substringAfter("startxref\n")
+            .substringBefore("\n").trim().toInt()
+        val secondXref2 = firstEnc.size
+        val second2 = (
+            "xref\n0 1\n0000000000 65535 f \n" +
+                "trailer\n<< /Size 3 /Root 1 0 R /Prev $firstEncXref >>\n" +
+                "startxref\n$secondXref2\n%%EOF\n"
+            ).toByteArray(Charsets.ISO_8859_1)
+        assertEquals(true, PdfParser.maybeEncrypted(firstEnc + second2))
+    }
 }

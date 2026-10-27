@@ -64,51 +64,109 @@ object PdfImageBook {
      * path, which renders only the image pages instead of the whole
      * book. The per-page cap still applies to a full render; a mixed
      * render is capped by its caller on the image-page count.
+     *
+     * Rendering used to be strictly sequential — one page at a time
+     * through one PdfRenderer — so a scanned book's import time was
+     * the sum of every page's native render, and that sum dominated
+     * the whole import. Pages are independent (each writes its own
+     * file), so larger renders now split across a few worker
+     * renderers: every worker opens its OWN PdfRenderer on its own
+     * file descriptor (a renderer instance is single-threaded, but
+     * separate instances are independent), renders its own
+     * contiguous chunk, and recycles each bitmap as before. Three
+     * workers is the cap: more would multiply the peak transient
+     * bitmap memory (one per worker) for little extra gain on a
+     * phone, and small renders stay sequential to avoid thread
+     * overhead. Validation and output files are unchanged.
      */
     fun renderPages(pdfFile: File, outDir: File, indices: List<Int>?): Int {
-        ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-            PdfRenderer(pfd).use { renderer ->
-                val count = renderer.pageCount
-                if (count <= 0) throw IllegalArgumentException("PDF has no pages")
-                if (indices == null && count > MAX_IMAGE_PAGES) {
-                    throw IllegalArgumentException("PDF has too many pages for image rendering")
+        val count = ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+            PdfRenderer(pfd).use { it.pageCount }
+        }
+        if (count <= 0) throw IllegalArgumentException("PDF has no pages")
+        if (indices == null && count > MAX_IMAGE_PAGES) {
+            throw IllegalArgumentException("PDF has too many pages for image rendering")
+        }
+        val wanted = indices ?: (0 until count).toList()
+        if (wanted.any { it < 0 || it >= count }) {
+            throw IllegalArgumentException("PDF page index out of range")
+        }
+        val mediaDir = File(outDir, "media").apply { mkdirs() }
+        val workers = minOf(3, Runtime.getRuntime().availableProcessors(), wanted.size)
+        if (workers <= 1) {
+            ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                PdfRenderer(pfd).use { renderer ->
+                    for (i in wanted) renderOne(renderer, i, mediaDir)
                 }
-                val wanted = indices ?: (0 until count).toList()
-                if (wanted.any { it < 0 || it >= count }) {
-                    throw IllegalArgumentException("PDF page index out of range")
-                }
-                val mediaDir = File(outDir, "media").apply { mkdirs() }
-                for (i in wanted) {
-                    renderer.openPage(i).use { page ->
-                        var width = RENDER_WIDTH
-                        var height = (page.height * (width.toFloat() / page.width.toFloat()))
-                            .toInt().coerceAtLeast(1)
-                        if (height > MAX_RENDER_HEIGHT) {
-                            // Absurdly tall page: shrink to the cap,
-                            // width following, aspect preserved.
-                            val shrink = MAX_RENDER_HEIGHT.toFloat() / height.toFloat()
-                            height = MAX_RENDER_HEIGHT
-                            width = (width * shrink).toInt().coerceAtLeast(1)
-                        }
-                        val bitmap = Bitmap.createBitmap(
-                            width, height, Bitmap.Config.ARGB_8888
-                        )
-                        try {
-                            page.render(
-                                bitmap, null, null,
-                                PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
-                            )
-                            File(mediaDir, fileNameFor(i)).outputStream().use { stream ->
-                                bitmap.compress(
-                                    Bitmap.CompressFormat.JPEG, JPEG_QUALITY, stream
-                                )
-                            }
-                        } finally {
-                            bitmap.recycle()
+            }
+            return count
+        }
+        // Contiguous chunks: each worker's pages are adjacent, which
+        // keeps its renderer's page cache warm across its own chunk.
+        val chunk = (wanted.size + workers - 1) / workers
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(workers)
+        try {
+            val futures = (0 until workers).map { w ->
+                val part = wanted.subList(
+                    minOf(w * chunk, wanted.size),
+                    minOf((w + 1) * chunk, wanted.size)
+                )
+                // Explicit Callable: a bare lambda here is ambiguous
+                // between submit(Runnable) and submit(Callable).
+                pool.submit(java.util.concurrent.Callable {
+                    ParcelFileDescriptor.open(
+                        pdfFile, ParcelFileDescriptor.MODE_READ_ONLY
+                    ).use { pfd ->
+                        PdfRenderer(pfd).use { renderer ->
+                            for (i in part) renderOne(renderer, i, mediaDir)
                         }
                     }
+                })
+            }
+            for (f in futures) {
+                try {
+                    f.get()
+                } catch (e: java.util.concurrent.ExecutionException) {
+                    // Surface the worker's own failure (a bad page),
+                    // not the wrapper, so the caller's error reporting
+                    // stays exactly what the sequential path produced.
+                    throw (e.cause as? Exception) ?: e
                 }
-                return count
+            }
+        } finally {
+            pool.shutdownNow()
+        }
+        return count
+    }
+
+    /** Renders one page to `media/<page file>`; bitmap recycled on every path. */
+    private fun renderOne(renderer: PdfRenderer, index: Int, mediaDir: File) {
+        renderer.openPage(index).use { page ->
+            var width = RENDER_WIDTH
+            var height = (page.height * (width.toFloat() / page.width.toFloat()))
+                .toInt().coerceAtLeast(1)
+            if (height > MAX_RENDER_HEIGHT) {
+                // Absurdly tall page: shrink to the cap,
+                // width following, aspect preserved.
+                val shrink = MAX_RENDER_HEIGHT.toFloat() / height.toFloat()
+                height = MAX_RENDER_HEIGHT
+                width = (width * shrink).toInt().coerceAtLeast(1)
+            }
+            val bitmap = Bitmap.createBitmap(
+                width, height, Bitmap.Config.ARGB_8888
+            )
+            try {
+                page.render(
+                    bitmap, null, null,
+                    PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
+                )
+                File(mediaDir, fileNameFor(index)).outputStream().use { stream ->
+                    bitmap.compress(
+                        Bitmap.CompressFormat.JPEG, JPEG_QUALITY, stream
+                    )
+                }
+            } finally {
+                bitmap.recycle()
             }
         }
     }

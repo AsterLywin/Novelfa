@@ -627,11 +627,23 @@ object HtmlBuilder {
         return h || ih;
     }
 
-    function buildPages() {
+    // onDone(earlyRestored) runs when the build finishes. progressive
+    // is true for the FIRST build of a document (pages appear as they
+    // are built); a repagination rebuilds for a new size/font, and
+    // showing half-built pages there would flicker and then jump back
+    // to the restored page — so repaginations keep the strip hidden
+    // until the build finishes, exactly like the old synchronous build.
+    function buildPages(onDone, progressive) {
         var Wpx = stageW(), Hpx = stageH();
         strip.innerHTML = '';
         pages = [];
-        strip.style.visibility = 'hidden';
+        // Progressive display: on the first build the strip stays
+        // visible from the first slice, so the reader shows real pages
+        // as they are built instead of a blank "preparing" screen for
+        // the whole chapter. Only the page under construction (the
+        // probe) is hidden until it is finalized; finished pages are
+        // revealed by finalizePage as soon as they are complete.
+        strip.style.visibility = progressive ? '' : 'hidden';
 
         // Pages MUST carry their final width from the start: an
         // absolutely-positioned page without a width shrink-wraps, and
@@ -644,6 +656,10 @@ object HtmlBuilder {
         }
 
         var probe = mkPage();
+        // visibility:hidden (never display:none): the probe still has
+        // layout, so every measurement taken inside it is identical
+        // to the old hidden-strip build — only its pixels are hidden.
+        probe.style.visibility = 'hidden';
         strip.appendChild(probe);
         var pcs = window.getComputedStyle(probe);
         var padT = parseFloat(pcs.paddingTop) || 0;
@@ -652,6 +668,9 @@ object HtmlBuilder {
 
         var leaves = flatten(source, [], []);
         var cur1 = { el: probe, frags: [] };
+        var li = 0;
+        var splitState = null;
+        var earlyRestored = false;
 
         function probeTop() { return probe.getBoundingClientRect().top + padT; }
         function usedH() {
@@ -667,6 +686,9 @@ object HtmlBuilder {
         function finalizePage() {
             if (cur1.frags.length) {
                 pages.push(cur1);
+                // The page is complete: reveal it now, not at the end
+                // of the whole chapter.
+                cur1.el.style.visibility = '';
             } else if (probe.parentNode === strip) {
                 // Empty construction page (e.g. finalize called twice in a
                 // row around a tall page): discard it — a stray .rdr-page
@@ -674,6 +696,7 @@ object HtmlBuilder {
                 strip.removeChild(probe);
             }
             probe = mkPage();
+            probe.style.visibility = 'hidden';
             strip.appendChild(probe);
             cur1 = { el: probe, frags: [] };
         }
@@ -709,72 +732,80 @@ object HtmlBuilder {
             return false;
         }
 
-        // Split a text leaf across pages. The first fragment may use the
-        // current page's remaining space; later fragments get full pages.
-        // A fragment fits iff the probe's used height (which includes the
-        // fragment, appended after the items already on the page) stays
-        // within contentH — the same measure the packer uses for whole
-        // blocks, so a kept fragment can never overflow its real page.
-        // Consumes the leaf completely.
-        function splitLeaf(chain, leaf, li, availH) {
-            var tokens = tokenize(leaf);
-            if (!tokens.length) return;
-            var from = 0, first = true, fragIndex = 0;
+        // --- Splittable-leaf pagination, one fragment per step. ---
+        // splitLeaf used to run its whole while loop synchronously:
+        // one binary search per page-fragment, each step a forced
+        // layout — for a long leaf, the whole chapter's layout work
+        // in a single JS task, i.e. seconds of frozen UI on a phone,
+        // during which native polls queue up and the pager looks
+        // stuck. The step form below performs exactly the same
+        // fragment decisions in the same order (geometry-identical
+        // output); the slice driver just yields to the event loop
+        // between steps.
+        function startSplit(chain, leaf, li, availH) {
             var lineH = 0;
-            try {
-                lineH = parseFloat(window.getComputedStyle(leaf).lineHeight) || 0;
-            } catch (e) { }
+            try { lineH = parseFloat(window.getComputedStyle(leaf).lineHeight) || 0; } catch (e) { }
             if (!lineH) lineH = 24;
-            while (from < tokens.length) {
-                var avail = first ? availH : contentH;
-                if (avail < lineH) { finalizePage(); avail = contentH; }
-                var hi = tokens.length, best = from, trial = null;
-                function measure(end) {
-                    if (trial) { probe.removeChild(trial); trial = null; }
-                    var f = buildFragment(leaf, tokens, from, end);
-                    if (fragIndex > 0) f.style.marginTop = '0px';
-                    if (end < tokens.length) f.style.marginBottom = '0px';
-                    var w = wrapFragment(chain, f);
-                    tagFrag(w, li, from, end);
-                    probe.appendChild(w);
-                    trial = w;
-                    return usedH() <= contentH + EPS;
+            return {
+                chain: chain, leaf: leaf, li: li, availH: availH,
+                tokens: tokenize(leaf), from: 0, first: true,
+                fragIndex: 0, lineH: lineH
+            };
+        }
+        // One iteration of the old splitLeaf while loop. Returns true
+        // when the leaf is fully consumed.
+        function stepSplit(st) {
+            var tokens = st.tokens, chain = st.chain, leaf = st.leaf, li = st.li;
+            var lineH = st.lineH;
+            var avail = st.first ? st.availH : contentH;
+            if (avail < lineH) { finalizePage(); avail = contentH; }
+            var hi = tokens.length, best = st.from, trial = null;
+            function measure(end) {
+                if (trial) { probe.removeChild(trial); trial = null; }
+                var f = buildFragment(leaf, tokens, st.from, end);
+                if (st.fragIndex > 0) f.style.marginTop = '0px';
+                if (end < tokens.length) f.style.marginBottom = '0px';
+                var w = wrapFragment(chain, f);
+                tagFrag(w, li, st.from, end);
+                probe.appendChild(w);
+                trial = w;
+                return usedH() <= contentH + EPS;
+            }
+            if (measure(hi)) {
+                best = hi;
+            } else {
+                var a = st.from, b = hi;
+                while (a < b) {
+                    var mid = (a + b + 1) >> 1;
+                    if (measure(mid)) a = mid; else b = mid - 1;
                 }
-                if (measure(hi)) {
-                    best = hi;
-                } else {
-                    var a = from, b = hi;
-                    while (a < b) {
-                        var mid = (a + b + 1) >> 1;
-                        if (measure(mid)) a = mid; else b = mid - 1;
-                    }
-                    best = a;
-                    if (best > from) measure(best); // leave the best trial in the probe
+                best = a;
+                if (best > st.from) measure(best); // leave the best trial in the probe
+            }
+            if (best === st.from) {
+                if (trial) { probe.removeChild(trial); trial = null; }
+                if (usedH() > 0) {
+                    // Not even one token fits in THIS page's remaining
+                    // space (margin collapsing can eat more room than
+                    // the line-height estimate suggested) — that is
+                    // normal: finish the page and retry on a fresh one
+                    // before concluding the token is oversize.
+                    finalizePage();
+                    st.first = false;
+                    return false;
                 }
-                if (best === from) {
-                    if (trial) { probe.removeChild(trial); trial = null; }
-                    if (usedH() > 0) {
-                        // Not even one token fits in THIS page's remaining
-                        // space (margin collapsing can eat more room than
-                        // the line-height estimate suggested) — that is
-                        // normal: finish the page and retry on a fresh one
-                        // before concluding the token is oversize.
-                        finalizePage();
-                        first = false;
-                        continue;
-                    }
-                    // Even on an empty page one token does not fit: force
-                    // it onto its own tall page rather than losing it or
-                    // looping forever.
-                    var one = buildFragment(leaf, tokens, from, from + 1);
-                    if (fragIndex > 0) one.style.marginTop = '0px';
-                    if (from + 1 < tokens.length) one.style.marginBottom = '0px';
-                    emitTallPage(chain, one, li, from, from + 1);
-                    from += 1;
-                    fragIndex++;
-                    first = false;
-                    continue;
-                }
+                // Even on an empty page one token does not fit: force
+                // it onto its own tall page rather than losing it or
+                // looping forever.
+                var one = buildFragment(leaf, tokens, st.from, st.from + 1);
+                if (st.fragIndex > 0) one.style.marginTop = '0px';
+                if (st.from + 1 < tokens.length) one.style.marginBottom = '0px';
+                emitTallPage(chain, one, li, st.from, st.from + 1);
+                st.from += 1;
+                st.fragIndex++;
+                st.first = false;
+                return st.from >= tokens.length;
+            }
                 // ---- NPE-2.3 pause rule: never end a page mid-phrase.
                 // The binary search above chose `best` (the fill point).
                 // Backtrack to a pause inside the fitted tokens instead:
@@ -788,7 +819,7 @@ object HtmlBuilder {
                 var chosenEnd = best;
                 if (best < tokens.length) {
                     var sEnd = -1, wEnd = -1, ti, pk;
-                    for (ti = best - 1; ti >= from; ti--) {
+                    for (ti = best - 1; ti >= st.from; ti--) {
                         if (tokens[ti].t !== 'w') continue;
                         pk = pauseKind(tokens[ti].text);
                         if (pk === 'strong' && sEnd < 0) sEnd = ti + 1;
@@ -806,7 +837,7 @@ object HtmlBuilder {
                     } else if (wEnd >= 0) {
                         cand = wEnd;
                     }
-                    if (cand >= 0 && fragIndex === 0) {
+                    if (cand >= 0 && st.fragIndex === 0) {
                         // Orphan guard: a first fragment of a single line
                         // is not a break (approximation: fragment height
                         // vs 1.5 line heights — leaf padding can blur it,
@@ -818,11 +849,11 @@ object HtmlBuilder {
                     }
                     if (cand >= 0) {
                         chosenEnd = cand;
-                    } else if (fragIndex === 0 && cur1.frags.length > 0) {
+                    } else if (st.fragIndex === 0 && cur1.frags.length > 0) {
                         if (trial) { probe.removeChild(trial); trial = null; }
                         finalizePage();
-                        first = false;
-                        continue;
+                        st.first = false;
+                        return false;
                     } else {
                         chosenEnd = best;
                     }
@@ -830,53 +861,151 @@ object HtmlBuilder {
                     // fragment (measure() swaps the trial and re-tags it).
                     measure(chosenEnd);
                 }
-                // The trial in the probe is exactly the chosen fragment.
-                cur1.frags.push(trial);
-                trial = null;
-                from = chosenEnd;
-                fragIndex++;
-                first = false;
-                if (from < tokens.length) finalizePage();
-            }
+            // The trial in the probe is exactly the chosen fragment.
+            cur1.frags.push(trial);
+            trial = null;
+            st.from = chosenEnd;
+            st.fragIndex++;
+            st.first = false;
+            if (st.from < tokens.length) finalizePage();
+            return st.from >= tokens.length;
         }
 
-        var li;
-        for (li = 0; li < leaves.length; li++) {
+        // One unit of leaf work. Returns true when every leaf is done.
+        function stepWork() {
+            if (splitState) {
+                if (stepSplit(splitState)) { splitState = null; li++; }
+                return splitState === null && li >= leaves.length;
+            }
+            if (li >= leaves.length) return true;
             var chain = leaves[li].chain, leaf = leaves[li].leaf;
-            if (tryWhole(chain, leaf, li)) continue;
+            if (tryWhole(chain, leaf, li)) { li++; return li >= leaves.length; }
             var avail = contentH - usedH();
             var lineH = 0;
             try { lineH = parseFloat(window.getComputedStyle(leaf).lineHeight) || 0; } catch (e) { }
             if (isSplittable(leaf) && (cur1.frags.length === 0 || avail >= (lineH || 24))) {
-                splitLeaf(chain, leaf, li, avail);
+                splitState = startSplit(chain, leaf, li, avail);
+                return false;
             } else if (cur1.frags.length) {
                 finalizePage();
                 if (!tryWhole(chain, leaf, li)) {
-                    if (isSplittable(leaf)) splitLeaf(chain, leaf, li, contentH);
-                    else emitTallPage(chain, leaf, li);
+                    if (isSplittable(leaf)) {
+                        splitState = startSplit(chain, leaf, li, contentH);
+                        return false;
+                    } else emitTallPage(chain, leaf, li);
                 }
+                li++;
+                return li >= leaves.length;
             } else {
                 emitTallPage(chain, leaf, li);
+                li++;
+                return li >= leaves.length;
             }
         }
-        finalizePage();
-        // Drop the trailing empty construction page finalizePage created.
-        if (probe.parentNode === strip && !probe.childNodes.length) {
-            strip.removeChild(probe);
+
+        function refreshBuiltGeometry() {
+            var i;
+            for (i = 0; i < pages.length; i++) {
+                pages[i].el.style.left = physLeft(i, pages.length, Wpx) + 'px';
+                pages[i].el.style.width = Wpx + 'px';
+            }
+            strip.style.width = (pages.length * Wpx) + 'px';
+            // Keep the page the user is looking at in view as the
+            // strip grows (RTL: a page's offset depends on the total
+            // count, so it shifts with every appended page).
+            if (pages.length) show(cur, true);
         }
-        if (!pages.length) {
-            var only = newPageEl();
-            strip.appendChild(only);
-            pages.push({ el: only, frags: [] });
+
+        // Has the pager built far enough that a queued text-point
+        // restore (li:tok) can land on its final page? True once a
+        // built fragment starts strictly after the target while an
+        // earlier built fragment starts at or before it: the fragment
+        // covering the target is then built, and its page is already
+        // finalized (a page only ever gains fragments before it is
+        // finalized, never after).
+        function builtCoversFrag(tli, ttok) {
+            var seenAt = false, seenAfter = false, i, j, f, fli, ftok;
+            function scan(frags) {
+                for (j = 0; j < frags.length; j++) {
+                    f = frags[j];
+                    fli = parseInt(f.getAttribute('data-rdr-li'), 10) || 0;
+                    ftok = parseInt(f.getAttribute('data-rdr-tok'), 10) || 0;
+                    if (fli < tli || (fli === tli && ftok <= ttok)) seenAt = true;
+                    else seenAfter = true;
+                    if (seenAt && seenAfter) return true;
+                }
+                return false;
+            }
+            for (i = 0; i < pages.length; i++) {
+                if (scan(pages[i].frags)) return true;
+            }
+            if (scan(cur1.frags)) return true;
+            return false;
         }
-        // Geometry: explicit px positions, direction-aware.
-        var i;
-        for (i = 0; i < pages.length; i++) {
-            pages[i].el.style.left = physLeft(i, pages.length, Wpx) + 'px';
-            pages[i].el.style.width = Wpx + 'px';
+
+        function maybeEarlyRestore() {
+            if (pendingFrag) {
+                var pp = String(pendingFrag).split(':');
+                var pli = parseInt(pp[0], 10), ptok = parseInt(pp[1], 10);
+                if (!isNaN(pli) && !isNaN(ptok) && builtCoversFrag(pli, ptok)) {
+                    pendingFrag = null;
+                    earlyRestored = true;
+                    show(pageForAnchor({ li: pli, tok: ptok }), true);
+                }
+            } else if (pendingAnchor) {
+                if (findAnchor(pendingAnchor)) {
+                    var id = pendingAnchor;
+                    pendingAnchor = null;
+                    earlyRestored = true;
+                    goToAnchorNow(id);
+                }
+            }
         }
-        strip.style.width = (pages.length * Wpx) + 'px';
-        strip.style.visibility = '';
+
+        function finishBuild() {
+            finalizePage();
+            // Drop the trailing empty construction page finalizePage created.
+            if (probe.parentNode === strip && !probe.childNodes.length) {
+                strip.removeChild(probe);
+            }
+            if (!pages.length) {
+                var only = newPageEl();
+                strip.appendChild(only);
+                pages.push({ el: only, frags: [] });
+            }
+            // Geometry: explicit px positions, direction-aware.
+            var i;
+            for (i = 0; i < pages.length; i++) {
+                pages[i].el.style.left = physLeft(i, pages.length, Wpx) + 'px';
+                pages[i].el.style.width = Wpx + 'px';
+            }
+            strip.style.width = (pages.length * Wpx) + 'px';
+            strip.style.visibility = '';
+            onDone(earlyRestored);
+        }
+
+        // Time-sliced driver: at most ~30ms of layout work per slice,
+        // then yield so the page stays responsive (scrolling, taps,
+        // the native "preparing" poll) while a long chapter builds.
+        function runSlice() {
+            var t0 = Date.now(), done = false;
+            try {
+                while (!done && Date.now() - t0 < 30) done = stepWork();
+            } catch (e) {
+                teardown(e);
+                return;
+            }
+            if (done) {
+                finishBuild();
+                return;
+            }
+            if (progressive) {
+                refreshBuiltGeometry();
+                maybeEarlyRestore();
+            }
+            setTimeout(runSlice, 0);
+        }
+        runSlice();
     }
 
     // ------------------------------------------------------------------
@@ -971,59 +1100,83 @@ object HtmlBuilder {
     function paginate() {
         if (!chap || building || tornDown) return;
         var anchor = ready ? currentAnchor() : { li: 0, tok: 0 };
+        var progressive = !ready;
         building = true;
         window.__rdrPagerBuilding = true;
+        // A resize that arrives mid-build is dropped by the guards
+        // above (building / !ready); remember the build size so the
+        // completion can rebuild once for the current size instead
+        // of leaving pages built for a stale viewport.
+        var buildW = stageW(), buildH = stageH();
         try {
             if (window.__rdrPagerTestFail) throw new Error('test-forced failure');
-            buildPages();
-            if (stageW() <= 0 || stageH() <= 0) throw new Error('zero-size stage');
-            if (!pages.length && source && source.childNodes.length) {
-                throw new Error('no pages from non-empty source');
-            }
-            if (pages.length && stageH() > 0) {
-                // A collapsed stage (old WebView dropping the stage
-                // offsets) can leave JS geometry "valid" while the pages
-                // render a few px tall: garbage that throws nothing.
-                // Detect it visually and tear down to the readable flow.
-                var pr = pages[0].el.getBoundingClientRect();
-                if (pr && pr.height < stageH() * 0.5) throw new Error('page height collapse');
-            }
-            window.__rdrPagerError = null;
+            buildPages(function (earlyRestored) {
+                try {
+                    if (stageW() <= 0 || stageH() <= 0) throw new Error('zero-size stage');
+                    if (!pages.length && source && source.childNodes.length) {
+                        throw new Error('no pages from non-empty source');
+                    }
+                    if (pages.length && stageH() > 0) {
+                        // A collapsed stage (old WebView dropping the stage
+                        // offsets) can leave JS geometry "valid" while the pages
+                        // render a few px tall: garbage that throws nothing.
+                        // Detect it visually and tear down to the readable flow.
+                        var pr = pages[0].el.getBoundingClientRect();
+                        if (pr && pr.height < stageH() * 0.5) throw new Error('page height collapse');
+                    }
+                    window.__rdrPagerError = null;
+                } catch (e) {
+                    teardown(e);
+                    return;
+                }
+                building = false;
+                window.__rdrPagerBuilding = false;
+                ready = true;
+                window.__rdrPagerReady = true;
+                if (earlyRestored) {
+                    // The restore already landed on its final page
+                    // during the build; just refresh the transform for
+                    // the final page count, never jump back to page 0.
+                    show(cur, true);
+                } else if (pendingAnchor) {
+                    var pa = pendingAnchor;
+                    pendingAnchor = null;
+                    pendingLast = false;
+                    if (!goToAnchorNow(pa)) show(pageForAnchor(anchor), true);
+                } else if (pendingLast) {
+                    pendingAnchor = null;
+                    pendingLast = false;
+                    show(pages.length - 1, true);
+                } else if (pendingFrag) {
+                    // Queued text-point restore (native, e.g. reopen or a
+                    // settings reload): an explicit link/last-page jump above
+                    // wins over it, and it is consumed here so no later
+                    // repagination re-applies it.
+                    var pf = pendingFrag;
+                    pendingFrag = null;
+                    var pp = String(pf).split(':');
+                    var pli = parseInt(pp[0], 10), ptok = parseInt(pp[1], 10);
+                    if (!isNaN(pli) && !isNaN(ptok)) show(pageForAnchor({ li: pli, tok: ptok }), true);
+                    else show(pageForAnchor(anchor), true);
+                } else {
+                    show(pageForAnchor(anchor), true);
+                }
+                watchLateImages();
+                // After the watch: backdrops must never be watched as late
+                // images (they load from cache and would only cause extra
+                // repagination cycles), so marking runs last.
+                markImagePages();
+                if (Math.abs(stageW() - buildW) >= 2 || Math.abs(stageH() - buildH) >= 2) {
+                    scheduleRepaginate();
+                }
+            }, progressive);
         } catch (e) {
             teardown(e);
             return;
         }
-        building = false;
-        window.__rdrPagerBuilding = false;
-        ready = true;
-        window.__rdrPagerReady = true;
-        if (pendingAnchor) {
-            var pa = pendingAnchor;
-            pendingAnchor = null;
-            pendingLast = false;
-            if (!goToAnchorNow(pa)) show(pageForAnchor(anchor), true);
-        } else if (pendingLast) {
-            pendingLast = false;
-            show(pages.length - 1, true);
-        } else if (pendingFrag) {
-            // Queued text-point restore (native, e.g. reopen or a
-            // settings reload): an explicit link/last-page jump above
-            // wins over it, and it is consumed here so no later
-            // repagination re-applies it.
-            var pf = pendingFrag;
-            pendingFrag = null;
-            var pp = String(pf).split(':');
-            var pli = parseInt(pp[0], 10), ptok = parseInt(pp[1], 10);
-            if (!isNaN(pli) && !isNaN(ptok)) show(pageForAnchor({ li: pli, tok: ptok }), true);
-            else show(pageForAnchor(anchor), true);
-        } else {
-            show(pageForAnchor(anchor), true);
-        }
-        watchLateImages();
-        // After the watch: backdrops must never be watched as late
-        // images (they load from cache and would only cause extra
-        // repagination cycles), so marking runs last.
-        markImagePages();
+        // NOTE: building stays true until the sliced build completes
+        // (the callback above); the old code set building=false here,
+        // which was only correct because buildPages was synchronous.
     }
 
     // Full-bleed image pages: a page whose only visual content is one
@@ -1120,7 +1273,23 @@ object HtmlBuilder {
             // at all" symptom). 'torn' lets native fall back to
             // scrolling the restored flow document instead.
             if (tornDown) return 'torn';
-            if (!ready || building) return 'busy';
+            if (building) {
+                // Progressive build: pages already built are real and
+                // turnable; only a turn past the built frontier waits
+                // (native retries it while building, as before). A
+                // hidden-strip (repagination) build is not turnable:
+                // its pages are not on screen, and a turn there would
+                // just be overridden by the completion restore.
+                if (!pages.length) return 'busy';
+                if (strip && strip.style.visibility === 'hidden') return 'busy';
+                if (Date.now() < lockUntil) return 'busy';
+                var nb = cur + d;
+                if (nb < 0) return 'start';
+                if (nb >= pages.length) return 'busy';
+                show(nb, false);
+                return 'page';
+            }
+            if (!ready) return 'busy';
             if (Date.now() < lockUntil) return 'busy';
             var n = cur + d;
             if (n < 0) return 'start';
@@ -1137,6 +1306,11 @@ object HtmlBuilder {
         } catch (e) { return 'no'; }
     };
     window.rdrGoToPage = function (i) {
+        if (building) {
+            if (i < 0 || i >= pages.length) return -1;
+            show(i, true);
+            return cur;
+        }
         if (!ready) return -1;
         show(i, true);
         return cur;
@@ -1182,8 +1356,8 @@ object HtmlBuilder {
             return goToAnchorNow(String(id));
         } catch (e) { return false; }
     };
-    window.rdrPageCount = function () { return ready ? pages.length : 0; };
-    window.rdrCurrentPage = function () { return ready ? cur : 0; };
+    window.rdrPageCount = function () { return pages.length; };
+    window.rdrCurrentPage = function () { return cur; };
     // Readiness, distinct from rdrTurn's 'busy': native code must NOT
     // reload a chapter that is merely still building (a slow chapter
     // with late images can stay building past the turn-retry window),

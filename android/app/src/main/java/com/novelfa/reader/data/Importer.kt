@@ -313,6 +313,12 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         displayName: String,
         provider: PdfPasswordProvider?
     ): ByteArray? {
+        // Fast path: most PDFs are unencrypted, and the old code paid
+        // for a whole PdfDoc construction (full xref scan) on every
+        // import just to learn that. The trailer probe below is
+        // conservative — any doubt keeps the full probe — so skipping
+        // it can never skip a decryption the file actually needs.
+        if (!PdfParser.maybeEncrypted(data)) return null
         try {
             return PdfParser.decryptToPlainPdf(data, null)
         } catch (e: PdfUnsupportedEncryptionException) {
