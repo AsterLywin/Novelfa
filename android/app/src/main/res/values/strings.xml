@@ -299,6 +299,7 @@
     <string name="diag_anchor">Text anchor</string>
     <string name="diag_last_turn">Last native turn</string>
     <string name="diag_last_error">Last pager error</string>
+    <string name="diag_stage">Stage size</string>
     <string name="diag_torn">Pager torn down</string>
     <string name="diag_building">Pager building</string>
     <string name="diag_last_gesture">Last gesture</string>

@@ -605,22 +605,62 @@ object HtmlBuilder {
     // silently — they must never call onDone or tear the document down
     // after a newer build has taken over.
     var buildSeq = 0;
-    // Collapsed-stage wait: when a build is refused because the stage
-    // is implausibly small (the WebView still settling during reader
-    // open), this timer bounds the wait. A resize that makes the stage
-    // sane starts the build and clears it; if the stage never recovers,
-    // teardown leaves a readable flow document instead of a "preparing"
-    // pill forever. Cleared the moment a real build starts.
-    var stageWaitTimer = 0;
+    // Stage telemetry: what the device actually measured, so a
+    // diagnostic screenshot settles "transient vs permanently broken"
+    // instead of another round of guessing. stageDbg() returns a short
+    // string with no '|' (the native dialog splits on it); the native
+    // side reads it via window.__rdrStageDbg().
+    var stageRefused = '', stageResizes = 0, stageLast = '', stagePolls = 0;
+    var stageSrcW = '', stageSrcH = '';
+    function stageNote() {
+        stageLast = stageW() + 'x' + stageH() + ' (' + stageSrcW + '/' + stageSrcH + ')';
+    }
+    function stageDbg() {
+        return 'refused ' + (stageRefused || '-') + ', resizes ' + stageResizes + ', last ' + (stageLast || '-') + ', polls ' + stagePolls;
+    }
+    window.__rdrStageDbg = stageDbg;
+    // Collapsed-stage wait, v2: when a build is refused because the
+    // stage is implausibly small, DO NOT depend on a resize event to
+    // heal it — on the reporting phone the stage stayed insane for the
+    // whole 3s with no healing resize (the resize fired before the
+    // listener attached, or the WebView grew without one). Poll the
+    // stage every 250ms and restart the build the moment it is sane,
+    // whatever woke it up; the resize handler stays as the fast path.
+    // If the stage never becomes sane within 6s, tear down with the
+    // measured values in the error so the diagnostic names the actual
+    // numbers instead of a bare guess. Cleared the moment a real
+    // build starts.
+    var stageWaitTimer = 0, stageWaitDeadline = 0;
     function clearStageWait() {
         if (stageWaitTimer) { clearTimeout(stageWaitTimer); stageWaitTimer = 0; }
+        stageWaitDeadline = 0;
+    }
+    function stageWaitTick() {
+        stageWaitTimer = 0;
+        if (tornDown || !building || ready) return;
+        stagePolls++;
+        var Wpx = stageW(), Hpx = stageH();
+        stageNote();
+        if (Wpx >= 50 && Hpx >= 120) {
+            // Healed without a resize event: restart exactly like the
+            // resize handler does (abort the waiting build first).
+            buildSeq++;
+            building = false;
+            window.__rdrPagerBuilding = false;
+            clearStageWait();
+            paginate();
+            return;
+        }
+        if (Date.now() >= stageWaitDeadline) {
+            teardown(new Error('stage never reached usable size (last ' + stageLast + ', resizes ' + stageResizes + ')'));
+            return;
+        }
+        stageWaitTimer = setTimeout(stageWaitTick, 250);
     }
     function armStageWait() {
         if (stageWaitTimer) return;
-        stageWaitTimer = setTimeout(function () {
-            stageWaitTimer = 0;
-            if (!tornDown && building && !ready) teardown(new Error('stage never reached usable size'));
-        }, 3000);
+        stageWaitDeadline = Date.now() + 6000;
+        stageWaitTimer = setTimeout(stageWaitTick, 250);
     }
     function newPageEl() {
         var p = document.createElement('div');
@@ -640,14 +680,24 @@ object HtmlBuilder {
     function stageW() {
         var w = chap ? chap.clientWidth : 0;
         var iw = window.innerWidth || 0;
-        if (iw && (!w || Math.abs(w - iw) > 2)) return iw;
-        return w || iw;
+        if (iw && (!w || Math.abs(w - iw) > 2)) { stageSrcW = 'win'; return iw; }
+        if (w || iw) { stageSrcW = w ? 'chap' : 'win'; return w || iw; }
+        // Both window and stage read 0 (a WebView whose window object
+        // lags its layout): the document element's client size is the
+        // same viewport by another measurement — use it rather than
+        // refusing a build on a stage that is really there.
+        var dw = document.documentElement ? document.documentElement.clientWidth : 0;
+        stageSrcW = dw ? 'doc' : 'none';
+        return dw;
     }
     function stageH() {
         var h = chap ? chap.clientHeight : 0;
         var ih = window.innerHeight || 0;
-        if (ih && (!h || Math.abs(h - ih) > 2)) return ih;
-        return h || ih;
+        if (ih && (!h || Math.abs(h - ih) > 2)) { stageSrcH = 'win'; return ih; }
+        if (h || ih) { stageSrcH = h ? 'chap' : 'win'; return h || ih; }
+        var dh = document.documentElement ? document.documentElement.clientHeight : 0;
+        stageSrcH = dh ? 'doc' : 'none';
+        return dh;
     }
 
     // onDone(earlyRestored) runs when the build finishes. progressive
@@ -669,7 +719,7 @@ object HtmlBuilder {
         // resize handler restarts it once the stage is sane, and the
         // wait timer above bounds the wait. Nothing is reported, no
         // pages are built, the document is not torn down.
-        if (Wpx < 50 || Hpx < 120) { armStageWait(); return; }
+        if (Wpx < 50 || Hpx < 120) { stageRefused = Wpx + 'x' + Hpx; stageNote(); armStageWait(); return; }
 
         // Pages MUST carry their final width from the start: an
         // absolutely-positioned page without a width shrink-wraps, and
@@ -692,7 +742,7 @@ object HtmlBuilder {
         var padB = parseFloat(pcs.paddingBottom) || 0;
         chap.removeChild(padProbe);
         var contentH = Hpx - padT - padB;
-        if (contentH < 48) { armStageWait(); return; }
+        if (contentH < 48) { stageRefused = Wpx + 'x' + Hpx + ' (contentH ' + Math.round(contentH) + ')'; stageNote(); armStageWait(); return; }
         clearStageWait();
 
         strip.innerHTML = '';
@@ -1589,6 +1639,8 @@ object HtmlBuilder {
         resizeTimer = setTimeout(function () {
             resizeTimer = 0;
             if (!chap || tornDown) return;
+            stageResizes++;
+            stageNote();
             if (Math.abs(stageW() - lastW) >= 2 || Math.abs(stageH() - lastH) >= 2) {
                 lastW = stageW(); lastH = stageH();
                 if (building) {

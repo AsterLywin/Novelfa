@@ -234,6 +234,7 @@ fun ReaderScreen(
     var diagCurrentPage by remember { mutableIntStateOf(-1) }
     var diagAnchor by remember { mutableStateOf("") }
     var diagJsError by remember { mutableStateOf("") }
+    var diagStage by remember { mutableStateOf("") }
     var diagJsAnswered by remember { mutableStateOf(false) }
     // Last native turn result and last native gesture, in raw
     // diagnostic codes (rdrTurn answers, not user prose): these are
@@ -517,17 +518,19 @@ fun ReaderScreen(
                 "s+=(window.rdrPagerState?window.rdrPagerState():'missing');s+='|';" +
                 "s+=(window.rdrPageCount?window.rdrPageCount():-1);s+='|';" +
                 "s+=(window.rdrCurrentPage?window.rdrCurrentPage():-1);s+='|';" +
-                "s+=(window.rdrCurrentAnchor?window.rdrCurrentAnchor():'');" +
-                "return s;}catch(e){return 'error|-1|-1|';}})();"
+                "s+=(window.rdrCurrentAnchor?window.rdrCurrentAnchor():'');s+='|';" +
+                "s+=(window.__rdrStageDbg?window.__rdrStageDbg():'');" +
+                "return s;}catch(e){return 'error|-1|-1||';}})();"
         ) { result ->
             val clean = result?.trim()?.trim { it == '"' } ?: ""
             val parts = clean.split("|")
-            if (parts.size == 4) {
+            if (parts.size == 5) {
                 diagJsAnswered = true
                 diagPagerState = parts[0]
                 diagPageCount = parts[1].toIntOrNull() ?: -1
                 diagCurrentPage = parts[2].toIntOrNull() ?: -1
                 diagAnchor = parts[3]
+                diagStage = parts[4]
                 // Teardown reason straight from JS, as a second
                 // evaluateJavascript call (a '|' inside a reason would
                 // break the split above): the dialog shows it when
@@ -1680,6 +1683,10 @@ fun ReaderScreen(
                         stringResource(R.string.diag_last_error),
                         lastPagerError
                             ?: if (diagJsError.isNotEmpty()) diagJsError else diagNone
+                    )
+                    DiagRow(
+                        stringResource(R.string.diag_stage),
+                        if (diagJsAnswered && diagStage.isNotEmpty()) diagStage else diagNone
                     )
                     DiagRow(
                         stringResource(R.string.diag_torn),
