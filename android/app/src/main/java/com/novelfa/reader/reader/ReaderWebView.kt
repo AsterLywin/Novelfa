@@ -13,6 +13,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
@@ -149,7 +151,18 @@ fun ReaderWebView(
     // rebuild the chapter HTML, but this guards the case where they
     // wouldn't).
     val lastPagedSettings = remember { mutableStateOf<Boolean?>(null) }
+    // fillMaxSize is load-bearing, not cosmetic: without a modifier
+    // AndroidView sizes the WebView to its CONTENT height. In paged
+    // mode boot hides all chapter content (display:none source, empty
+    // strip), so the content height collapses to 0, the viewport
+    // becomes 393x0, the pager measures a zero stage, refuses every
+    // build, and tears down to flow — which restores visible content,
+    // grows the WebView back to full height, and looks exactly like
+    // "horizontal mode showing the whole page like vertical mode".
+    // A fixed full-size WebView breaks that loop: the viewport stays
+    // real whatever the document hides inside it.
     AndroidView(
+        modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
             WebView(ctx).apply {
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
