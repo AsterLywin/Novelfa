@@ -533,6 +533,14 @@ fun ReaderScreen(
                 // break the split above): the dialog shows it when
                 // the bridge error never arrived.
                 if (parts[0] == "torn") {
+                    // JS truth wins when the bridge never arrived: a
+                    // torn pager must not keep a stale page pill over
+                    // the restored flow document, nor a false "not
+                    // torn" flag. Same assignments as onPagerError.
+                    pagerTornDown = true
+                    pagedPage = 0
+                    pagedPageCount = 0
+                    pagerBuilding = false
                     wv.evaluateJavascript(
                         "(function(){try{return window.__rdrPagerError||'';}catch(e){return '';}})();"
                     ) { errResult ->
@@ -822,6 +830,13 @@ fun ReaderScreen(
                 // accepting scroll geometry. A reload (recover) resets
                 // the flag for the new document via onPageStarted.
                 pagerTornDown = true
+                // Same pill clearing as onPagerError: the pill UI is
+                // not gated on pagerTornDown, so without this the last
+                // good number (e.g. "1/11" from progressive reports)
+                // stays on screen over the restored flow document.
+                pagedPage = 0
+                pagedPageCount = 0
+                pagerBuilding = false
                 val alreadyReloaded = pagerReloadTriedIndex == v.index
                 lastTurnDiag = if (alreadyReloaded) "torn -> fallback scroll (reload spent)"
                     else "torn -> recover (reload once)"
@@ -855,6 +870,12 @@ fun ReaderScreen(
                     // a loaded document without rdrTurn is a flow
                     // document, not a paged one.
                     pagerTornDown = true
+                    // Same pill clearing as the torn branch: a loaded
+                    // document without rdrTurn is a flow document, and
+                    // its pill must not keep the previous build's number.
+                    pagedPage = 0
+                    pagedPageCount = 0
+                    pagerBuilding = false
                     val alreadyReloaded = pagerReloadTriedIndex == v.index
                     lastTurnDiag = if (alreadyReloaded) "rdrTurn missing -> fallback scroll (reload spent)"
                         else "rdrTurn missing -> recover (reload once)"

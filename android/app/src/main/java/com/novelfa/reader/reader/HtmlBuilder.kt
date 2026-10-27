@@ -1169,7 +1169,7 @@ object HtmlBuilder {
         // outright via the resize handler below; this is the belt
         // to its braces for changes that arrive between slices).
         var buildW = stageW(), buildH = stageH();
-        var collapseRetried = false;
+        var buildRetried = false;
         function onBuilt(earlyRestored) {
             try {
                 if (stageW() <= 0 || stageH() <= 0) throw new Error('zero-size stage');
@@ -1182,14 +1182,22 @@ object HtmlBuilder {
                     // render a few px tall: garbage that throws nothing.
                     // A transient stage glitch must not kill the chapter
                     // outright: rebuild once with fresh geometry, and
-                    // only tear down if the collapse repeats.
+                    // only tear down if it repeats.
                     var pr = pages[0].el.getBoundingClientRect();
                     if (pr && pr.height < stageH() * 0.5) throw new Error('page height collapse');
                 }
                 window.__rdrPagerError = null;
             } catch (e) {
-                if (String(e && e.message || e) === 'page height collapse' && !collapseRetried) {
-                    collapseRetried = true;
+                // Zero-size stage at completion is the same family: the
+                // build measured a sane stage while slicing, but the
+                // window reads zero now (a resize racing the debounced
+                // abort, a detached WebView finishing a build). Tearing
+                // down on a transient zero is wrong: rebuild once, and
+                // let the stage guard refuse (then wait, then tear
+                // down honestly) if the stage is really gone.
+                var emsg = String(e && e.message || e);
+                if ((emsg === 'page height collapse' || emsg === 'zero-size stage') && !buildRetried) {
+                    buildRetried = true;
                     buildPages(onBuilt, false);
                     return;
                 }
