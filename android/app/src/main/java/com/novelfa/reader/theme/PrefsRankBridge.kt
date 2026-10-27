@@ -23,18 +23,38 @@ class PrefsStoreRankPrefs(
     private val store: PrefsStore,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 ) : RankPrefs {
-    private val cache = ConcurrentHashMap<String, String>()
+    companion object {
+        /**
+         * ONE cache shared by every bridge instance in the process. The
+         * app used to build a bridge per screen (library, reader,
+         * settings, nav graph), each with its own cache preloaded once:
+         * XP credited by the reader's bridge never reached the library
+         * bridge's cache, so home XP and celebrations stayed stale until
+         * a cold start, and a secret unlocked through one bridge could be
+         * overwritten by another bridge's stale read-modify-write.
+         * All rank writes in the app go through this cache, so it is the
+         * source of truth once loaded; the preload below only fills keys
+         * that are not already cached, never overwriting a newer write
+         * with a stale DataStore read that raced it.
+         */
+        private val sharedCache = ConcurrentHashMap<String, String>()
+    }
+
+    private val cache: ConcurrentHashMap<String, String> get() = sharedCache
     private val loaded = CompletableDeferred<Unit>()
 
     init {
         scope.launch {
             try {
-                cache[RankService.MAX_RANK_KEY] = store.getString(PrefsStore.MAX_RANK, "-1")
-                cache[RankService.SECRET_KEY] = store.getString(PrefsStore.SECRET_THEMES, "")
-                cache[XpStore.TOTAL_XP_KEY] = store.getString(PrefsStore.TOTAL_XP, "0")
-                cache[XpStore.LEDGER_KEY] = store.getString(PrefsStore.XP_LEDGER, "")
-                cache[XpStore.MIGRATED_KEY] = store.getString(PrefsStore.XP_MIGRATED, "0")
-                cache[XpStore.CELEBRATED_XP_KEY] = store.getString(PrefsStore.XP_CELEBRATED, "0")
+                val fresh = mapOf(
+                    RankService.MAX_RANK_KEY to store.getString(PrefsStore.MAX_RANK, "-1"),
+                    RankService.SECRET_KEY to store.getString(PrefsStore.SECRET_THEMES, ""),
+                    XpStore.TOTAL_XP_KEY to store.getString(PrefsStore.TOTAL_XP, "0"),
+                    XpStore.LEDGER_KEY to store.getString(PrefsStore.XP_LEDGER, ""),
+                    XpStore.MIGRATED_KEY to store.getString(PrefsStore.XP_MIGRATED, "0"),
+                    XpStore.CELEBRATED_XP_KEY to store.getString(PrefsStore.XP_CELEBRATED, "0")
+                )
+                for ((key, value) in fresh) cache.putIfAbsent(key, value)
             } finally {
                 // Always release waiters: a failed preload (e.g. corrupted
                 // DataStore) must not hang awaitLoaded() forever.
@@ -64,6 +84,29 @@ class PrefsStoreRankPrefs(
                 XpStore.MIGRATED_KEY -> store.setString(PrefsStore.XP_MIGRATED, value)
                 XpStore.CELEBRATED_XP_KEY -> store.setString(PrefsStore.XP_CELEBRATED, value)
             }
+        }
+    }
+
+    /**
+     * Persists an XP credit (ledger + total) in ONE DataStore
+     * transaction. Two separate setString calls could persist only half
+     * of a credit if the process died between them, leaving the ledger
+     * saying "credited" while the total missed the XP — unrecoverable,
+     * because the unit can never be credited again.
+     */
+    fun setXpState(ledgerValue: String, totalValue: String) {
+        cache[XpStore.LEDGER_KEY] = ledgerValue
+        cache[XpStore.TOTAL_XP_KEY] = totalValue
+        scope.launch {
+            // Explicit Pair: the `to` infix here would otherwise resolve
+            // to DataStore's Key.to(value) (a Preferences.Pair), not a
+            // kotlin.Pair, and mapOf would reject it.
+            store.setStrings(
+                mapOf(
+                    kotlin.Pair(PrefsStore.XP_LEDGER, ledgerValue),
+                    kotlin.Pair(PrefsStore.TOTAL_XP, totalValue)
+                )
+            )
         }
     }
 }

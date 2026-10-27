@@ -203,13 +203,26 @@ private fun importFont(
     if (ext != "ttf" && ext != "otf") {
         // Content URIs often lack extensions; accept and re-check below.
     }
+    // Early returns used to leak the temp file on every failed import
+    // (unreadable file, too small, invalid magic, duplicate name, copy
+    // failure): every exit path below deletes it.
+    val tmp = try {
+        File.createTempFile("font-import", ".$ext")
+    } catch (e: Exception) {
+        return context.getString(R.string.font_copy_failed)
+    }
     return try {
-        val tmp = File.createTempFile("font-import", ".$ext")
         resolver.openInputStream(uri)?.use { input ->
             tmp.outputStream().use { input.copyTo(it) }
-        } ?: return context.getString(R.string.font_file_not_found)
+        } ?: run {
+            tmp.delete()
+            return context.getString(R.string.font_file_not_found)
+        }
         val bytes = tmp.length()
-        if (bytes < 4) return context.getString(R.string.font_not_valid)
+        if (bytes < 4) {
+            tmp.delete()
+            return context.getString(R.string.font_not_valid)
+        }
         val header = ByteArray(4)
         tmp.inputStream().use { it.read(header) }
         // Strict magic-byte check: 0x00010000 / 'true' / 'typ1' (TrueType),
@@ -219,16 +232,19 @@ private fun importFont(
         val isTtf = (header[0] == 0x00.toByte() && header[1] == 0x01.toByte()) ||
             headerStr == "OTTO" || headerStr == "true" || headerStr == "typ1"
         if (!isTtf) {
+            tmp.delete()
             return context.getString(R.string.font_only_ttf_otf)
         }
         val destName = "$name.${if (ext == "otf") "otf" else "ttf"}"
         if (fontStore.list().any { it.name.equals(destName, ignoreCase = true) }) {
+            tmp.delete()
             return context.getString(R.string.font_already_added)
         }
         fontStore.addFont(destName, tmp)
         tmp.delete()
         null
     } catch (e: Exception) {
+        tmp.delete()
         context.getString(R.string.font_copy_failed)
     }
 }

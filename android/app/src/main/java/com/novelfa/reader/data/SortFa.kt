@@ -19,17 +19,22 @@ object SortFa {
                 aNum && bNum -> compareNumeric(ca, cb)
                 aNum -> -1
                 bNum -> 1
-                else -> collator.compare(ca, cb)
+                // Collator is not thread-safe; library and collections
+                // sorts can run concurrently on different dispatchers.
+                else -> synchronized(collator) { collator.compare(ca, cb) }
             }
             if (r != 0) return r
         }
         if (aChunks.size != bChunks.size) return aChunks.size - bChunks.size
-        return collator.compare(a, b)
+        return synchronized(collator) { collator.compare(a, b) }
     }
 
     private fun compareNumeric(a: String, b: String): Int {
-        val ta = a.trimStart('0')
-        val tb = b.trimStart('0')
+        // Latin '0', Persian '۰' (U+06F0) and Arabic-Indic '٠' (U+0660):
+        // trimming only ASCII '0' used to rank zero-padded Persian
+        // numbers ("۰۵") above their plain form ("۵").
+        val ta = a.trimStart('0', '۰', '٠')
+        val tb = b.trimStart('0', '۰', '٠')
         if (ta.length != tb.length) return ta.length - tb.length
         val r = ta.compareTo(tb)
         if (r != 0) return r

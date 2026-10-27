@@ -168,16 +168,27 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatching {
                 val ids = db.bookDao().allBooks().first().map { it.id }.toSet()
+                // Grace period: the importer creates epub_open/<id> BEFORE
+                // inserting the book row, so a fast import right after
+                // launch used to look like an orphan and get deleted
+                // mid-parse (the stamp written afterwards then trusted a
+                // partial cache). Only delete dirs untouched for over a
+                // minute: an actively written cache keeps its directory
+                // mtime fresh, and a genuinely orphaned dir is still
+                // cleaned on a later launch.
+                val cutoff = System.currentTimeMillis() - 60_000L
+                fun isStaleOrphan(dir: File): Boolean =
+                    dir.isDirectory && dir.name !in ids && dir.lastModified() < cutoff
                 File(filesDir, "epub_open").listFiles()
-                    ?.filter { it.isDirectory && it.name !in ids }
+                    ?.filter { isStaleOrphan(it) }
                     ?.forEach { it.deleteRecursively() }
                 File(cacheDir, "epub_open").listFiles()
-                    ?.filter { it.isDirectory && it.name !in ids }
+                    ?.filter { isStaleOrphan(it) }
                     ?.forEach { it.deleteRecursively() }
                 // Importer deletes epub_tmp on success/cancel/failure, but a
                 // process kill in the middle orphans it permanently.
                 File(cacheDir, "epub_tmp").listFiles()
-                    ?.filter { it.isDirectory }
+                    ?.filter { it.isDirectory && it.lastModified() < cutoff }
                     ?.forEach { it.deleteRecursively() }
             }
         }

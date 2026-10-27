@@ -759,13 +759,18 @@ class BackupService(
             }
 
             // --- avatar (replace) ---
+            // Best effort, never fatal: an avatar copy failure used to
+            // abort the whole restore AFTER fonts were already applied,
+            // while the UI reported a generic "unreadable" error.
             var avatarApplied = false
             if (preview.avatar != null) {
-                val dir = File(context.filesDir, "avatars").apply { mkdirs() }
-                val dest = File(dir, "avatar.jpg")
-                preview.avatar.copyTo(dest, overwrite = true)
-                prefs.setAvatarPath(dest.absolutePath)
-                avatarApplied = true
+                avatarApplied = runCatching {
+                    val dir = File(context.filesDir, "avatars").apply { mkdirs() }
+                    val dest = File(dir, "avatar.jpg")
+                    preview.avatar.copyTo(dest, overwrite = true)
+                    prefs.setAvatarPath(dest.absolutePath)
+                    true
+                }.getOrDefault(false)
             }
 
             // --- profile + rank merge ---

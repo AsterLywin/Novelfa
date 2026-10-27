@@ -2,6 +2,7 @@ package com.novelfa.reader.settings
 
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
+import com.novelfa.reader.data.SortFa
 import java.io.File
 import kotlinx.coroutines.flow.first
 
@@ -77,7 +78,9 @@ class CollectionManager(
         val fromBooks = dao.allBooks().first()
             .mapNotNull { it.collectionName?.takeIf { n -> n.isNotBlank() } }
         val manual = manualRegistry?.get() ?: emptySet()
-        return (fromBooks + manual).distinct().sorted()
+        // Persian natural order like the book list (the default sort used
+        // to order Persian names by code point, unlike every book sort).
+        return (fromBooks + manual).distinct().sortedWith { a, b -> SortFa.compare(a, b) }
     }
 
     /**

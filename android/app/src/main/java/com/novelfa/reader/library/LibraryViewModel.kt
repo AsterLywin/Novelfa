@@ -136,7 +136,10 @@ class LibraryViewModel(
     val pinGate: PinGate = NoPinGate,
     cacheDir: File? = null,
     filesDir: File? = null,
-    prefs: PrefsStore? = null
+    // Stored as a property (it was a bare constructor parameter, usable
+    // only in initializers): removeBook needs it to clear the deleted
+    // book's per-book reader theme.
+    private val prefs: PrefsStore? = null
 ) {
     val books: Flow<List<BookEntity>> = dao.allBooks()
 
@@ -393,6 +396,10 @@ class LibraryViewModel(
         // restores its place; capture must run before the file goes.
         importer?.captureReadingRecord(book.id)
         collections.removeBook(book.id)
+        // Per-book reader theme lived in prefs under readerTheme_<id> and
+        // used to survive deletion forever (one orphaned key per book).
+        // Blank = default theme, so clearing is just resetting it.
+        runCatching { prefs?.setReaderTheme(book.id, "") }
     }
 
     /**

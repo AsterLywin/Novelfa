@@ -23,14 +23,23 @@ class PinException(val resId: Int) : IllegalArgumentException()
 interface PinPrefs {
     suspend fun pinHash(): String?
     suspend fun setPinHash(hash: String?)
+
+    /** Brute-force throttle state (failures, locked-until epoch ms). */
+    suspend fun throttleState(): Pair<Int, Long> = 0 to 0L
+    suspend fun setThrottleState(failures: Int, lockedUntilMs: Long) {}
 }
 
 /** In-memory PinPrefs for tests and previews. */
 class InMemoryPinPrefs : PinPrefs {
     private var hash: String? = null
+    private var throttle: Pair<Int, Long> = 0 to 0L
     override suspend fun pinHash(): String? = hash
     override suspend fun setPinHash(hash: String?) {
         this.hash = hash
+    }
+    override suspend fun throttleState(): Pair<Int, Long> = throttle
+    override suspend fun setThrottleState(failures: Int, lockedUntilMs: Long) {
+        throttle = failures to lockedUntilMs
     }
 }
 
@@ -41,6 +50,15 @@ class PrefsStorePinPrefs(private val store: PrefsStore) : PinPrefs {
 
     override suspend fun setPinHash(hash: String?) {
         store.setString(PrefsStore.PIN_HASH, hash ?: "")
+    }
+
+    override suspend fun throttleState(): Pair<Int, Long> =
+        store.getInt(PrefsStore.PIN_FAILURES, 0) to
+            store.getLong(PrefsStore.PIN_LOCKED_UNTIL, 0L)
+
+    override suspend fun setThrottleState(failures: Int, lockedUntilMs: Long) {
+        store.setInt(PrefsStore.PIN_FAILURES, failures)
+        store.setLong(PrefsStore.PIN_LOCKED_UNTIL, lockedUntilMs)
     }
 }
 
@@ -92,6 +110,13 @@ class PinManager(private val prefs: PinPrefs) : PinGate {
 
     suspend fun clearPin() {
         prefs.setPinHash(null)
+    }
+
+    /** Persisted throttle state (see PinThrottle). */
+    suspend fun throttleState(): Pair<Int, Long> = prefs.throttleState()
+
+    suspend fun setThrottleState(failures: Int, lockedUntilMs: Long) {
+        prefs.setThrottleState(failures, lockedUntilMs)
     }
 
     companion object {

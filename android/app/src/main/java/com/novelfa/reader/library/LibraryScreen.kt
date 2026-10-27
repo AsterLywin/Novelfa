@@ -1,6 +1,8 @@
 package com.novelfa.reader.library
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Log
 import android.net.Uri
 import android.widget.Toast
@@ -482,6 +484,15 @@ fun LibraryScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) gateTick++
+            // Auto-relock the private shelf when the app leaves the
+            // foreground: an in-memory-only unlock used to stay unlocked
+            // indefinitely after the user switched to another app.
+            // (Opening a system picker also stops the activity, so the
+            // shelf relocks then too — secure, and one tap reopens it.)
+            if (event == Lifecycle.Event.ON_STOP) {
+                PinSession.unlocked = false
+                unlocked = false
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -517,12 +528,39 @@ fun LibraryScreen(
             scope.launch {
                 val result = withContext(Dispatchers.IO) {
                     runCatching {
-                        val dir = File(context.filesDir, "avatars").apply { mkdirs() }
-                        val dest = File(dir, "avatar.jpg")
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            dest.outputStream().use { output -> input.copyTo(output) }
+                        // Validate + downscale instead of copying raw: a
+                        // picked photo used to land undecoded and uncapped
+                        // (multi-MB, any format) as "avatar.jpg", and an
+                        // undecodable file then showed a blank circle.
+                        val resolver = context.contentResolver
+                        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        resolver.openInputStream(uri)?.use {
+                            BitmapFactory.decodeStream(it, null, bounds)
                         } ?: throw IOException("cannot open image")
-                        dest.absolutePath
+                        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                            throw IOException("not an image")
+                        }
+                        var sample = 1
+                        while (bounds.outWidth / sample > 1024 ||
+                            bounds.outHeight / sample > 1024
+                        ) sample *= 2
+                        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                        val bitmap = resolver.openInputStream(uri)?.use {
+                            BitmapFactory.decodeStream(it, null, opts)
+                        } ?: throw IOException("cannot decode image")
+                        try {
+                            val dir = File(context.filesDir, "avatars").apply { mkdirs() }
+                            val dest = File(dir, "avatar.jpg")
+                            dest.outputStream().use { out ->
+                                if (!bitmap.compress(
+                                        Bitmap.CompressFormat.JPEG, 90, out
+                                    )
+                                ) throw IOException("cannot encode avatar")
+                            }
+                            dest.absolutePath
+                        } finally {
+                            bitmap.recycle()
+                        }
                     }
                 }
                 result.onSuccess { path -> prefs.setAvatarPath(path) }
@@ -927,6 +965,9 @@ fun LibraryScreen(
                         viewModel.deleteAllPrivateBooks()
                         pinManager.clearPin()
                         PinThrottle.reset()
+                        // The persisted throttle must reset with it, or
+                        // the next PIN would inherit the old lockout.
+                        pinManager.setThrottleState(0, 0L)
                         PinSession.unlocked = true
                         unlocked = true
                         forgotConfirm = false
@@ -1733,6 +1774,9 @@ private fun ProfileHeader(
                 if (avatarFile != null && avatarFile.isFile) {
                     AsyncImage(
                         model = avatarFile,
+                        // An undecodable file used to render a blank
+                        // circle; fall back to the default logo instead.
+                        error = painterResource(id = R.drawable.app_logo),
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize()
                     )

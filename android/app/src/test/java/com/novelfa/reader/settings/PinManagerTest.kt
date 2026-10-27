@@ -124,6 +124,16 @@ class PinManagerTest {
     }
 
     @Test
+    fun throttleState_roundTrips_throughManager() = runBlocking {
+        val m = PinManager(InMemoryPinPrefs())
+        assertEquals(0 to 0L, m.throttleState())
+        m.setThrottleState(3, 123456789L)
+        assertEquals(3 to 123456789L, m.throttleState())
+        m.setThrottleState(0, 0L)
+        assertEquals(0 to 0L, m.throttleState())
+    }
+
+    @Test
     fun legacyHash_verifiesAndUpgradesToV2() = runBlocking {
         val prefs = FakePinPrefs()
         // Simulate a hash written by an older install (unsalted C# parity).

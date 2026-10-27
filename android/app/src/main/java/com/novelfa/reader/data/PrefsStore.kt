@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -35,6 +36,10 @@ class PrefsStore(private val context: Context) {
 
         // Task 8 additive keys (PIN hash, support counter, locale, reader defaults).
         val PIN_HASH = stringPreferencesKey("pinHash")
+        // PIN brute-force throttle, persisted (an in-memory-only throttle
+        // was reset by force-stopping the app, defeating the lockout).
+        val PIN_FAILURES = intPreferencesKey("pinFailures")
+        val PIN_LOCKED_UNTIL = longPreferencesKey("pinLockedUntil")
         val SUPPORT_SECONDS = intPreferencesKey("supportSeconds")
         val LANG = stringPreferencesKey("Lang")
         val FONT_FAMILY = stringPreferencesKey("fontFamily")
@@ -224,11 +229,29 @@ class PrefsStore(private val context: Context) {
         context.dataStore.edit { it[key] = value }
     }
 
+    /**
+     * Writes several string keys in ONE DataStore transaction, so a pair
+     * that must move together (XP ledger + total) can never persist
+     * half-written when the process dies between two separate edits.
+     */
+    suspend fun setStrings(entries: Map<Preferences.Key<String>, String>) {
+        context.dataStore.edit { prefs ->
+            for ((key, value) in entries) prefs[key] = value
+        }
+    }
+
     // Task 8 additive generic int access (used by the SupportTracker wiring).
     suspend fun getInt(key: Preferences.Key<Int>, default: Int): Int =
         context.dataStore.data.map { it[key] ?: default }.first()
 
     suspend fun setInt(key: Preferences.Key<Int>, value: Int) {
+        context.dataStore.edit { it[key] = value }
+    }
+
+    suspend fun getLong(key: Preferences.Key<Long>, default: Long): Long =
+        context.dataStore.data.map { it[key] ?: default }.first()
+
+    suspend fun setLong(key: Preferences.Key<Long>, value: Long) {
         context.dataStore.edit { it[key] = value }
     }
 

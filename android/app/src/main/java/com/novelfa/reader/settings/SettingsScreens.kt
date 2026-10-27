@@ -1027,6 +1027,10 @@ private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit
                         try {
                             result = service.applyBackup(p)
                         } catch (e: Exception) {
+                            // The preview payload must not linger in the
+                            // cache after a failed apply (success already
+                            // discards it inside applyBackup).
+                            service.discard(p)
                             notify(errUnreadable)
                         } finally {
                             busy = false

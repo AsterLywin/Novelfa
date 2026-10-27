@@ -433,8 +433,16 @@ class XpStore(private val prefs: RankPrefs) {
             bonus = XpRank.bookBonus(led.bookXp(bookId))
             led.markBonusAwarded(bookId)
         }
-        ledger = led
-        totalXp = totalXp + unitXp + bonus
-        return XpCreditResult(unitXp, bonus, totalXp, credited)
+        val newTotal = totalXp + unitXp + bonus
+        // Atomic pair write on the production bridge (single DataStore
+        // transaction); other RankPrefs implementations keep the two
+        // sequential writes they already had.
+        if (prefs is PrefsStoreRankPrefs) {
+            prefs.setXpState(led.serialize(), newTotal.toString())
+        } else {
+            ledger = led
+            totalXp = newTotal
+        }
+        return XpCreditResult(unitXp, bonus, newTotal, credited)
     }
 }

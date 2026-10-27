@@ -66,7 +66,7 @@ object GeneratedCover {
      * when the title is blank or rendering fails for any reason.
      */
     fun generate(context: Context, title: String, bookPath: String): File? {
-        val display = title.trim().replace('_', ' ')
+        var display = title.trim().replace('_', ' ')
             .split("\\s+".toRegex()).joinToString(" ")
         if (display.isBlank()) return null
         return runCatching {
@@ -109,21 +109,37 @@ object GeneratedCover {
             }.getOrNull() ?: Typeface.DEFAULT_BOLD
             val textWidth = COVER_WIDTH - 2 * 72
             var textSize = 76f
-            var layout: StaticLayout
-            while (true) {
+            fun buildLayout(text: String, size: Float): StaticLayout {
                 val paint = TextPaint().apply {
                     typeface = face
-                    this.textSize = textSize
+                    this.textSize = size
                     color = Color.rgb(247, 241, 222)
                     isAntiAlias = true
                 }
-                layout = StaticLayout.Builder.obtain(display, 0, display.length, paint, textWidth)
+                return StaticLayout.Builder.obtain(text, 0, text.length, paint, textWidth)
                     .setAlignment(Layout.Alignment.ALIGN_CENTER)
                     .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR)
                     .setLineSpacing(0f, 1.25f)
                     .build()
-                if ((layout.lineCount <= 6 && layout.height <= 560) || textSize <= 34f) break
+            }
+            var layout = buildLayout(display, textSize)
+            while ((layout.lineCount > 6 || layout.height > 560) && textSize > 34f) {
                 textSize -= 4f
+                layout = buildLayout(display, textSize)
+            }
+            // Extremely long titles still overflowed at the 34sp floor
+            // (the old loop just stopped shrinking and drew past the
+            // frame). Trim whole words with an ellipsis until it fits,
+            // and hard-truncate a single unbreakable word as a last resort.
+            while ((layout.lineCount > 6 || layout.height > 560) &&
+                display.contains(' ')
+            ) {
+                display = display.substringBeforeLast(' ') + "…"
+                layout = buildLayout(display, textSize)
+            }
+            if ((layout.lineCount > 6 || layout.height > 560) && display.length > 10) {
+                display = display.take(150) + "…"
+                layout = buildLayout(display, textSize)
             }
 
             // Title block + ornament, vertically centered as one unit.

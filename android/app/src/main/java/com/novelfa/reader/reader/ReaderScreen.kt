@@ -68,6 +68,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -388,10 +390,17 @@ fun ReaderScreen(
 
     // Task 8 support reminder: 10s foreground ticks while the reader route is
     // composed (WPF additionally required active + unminimized window).
+    // Ticks count only while the activity is actually resumed: the loop
+    // used to keep counting while the app sat in the background, so the
+    // prompt could fire well before 30 minutes of real reading.
+    val readerLifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(bookId, support) {
         val tracker = support ?: return@LaunchedEffect
         while (true) {
             delay(10_000)
+            if (!readerLifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                continue
+            }
             // DataStore read+write every tick: keep it off the UI thread.
             val prompt = withContext(Dispatchers.IO) {
                 tracker.addForegroundSeconds(10)

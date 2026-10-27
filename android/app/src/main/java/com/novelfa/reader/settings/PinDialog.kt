@@ -12,6 +12,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,8 +30,11 @@ import kotlinx.coroutines.launch
 enum class PinMode { SETUP, VERIFY, CHANGE }
 
 /**
- * Brute-force throttle for PIN verify attempts (process-lifetime): after 5
- * consecutive failures the dialog refuses further attempts for 30 seconds.
+ * Brute-force throttle for PIN verify attempts: after 5 consecutive
+ * failures the dialog refuses further attempts for 30 seconds. The state
+ * is mirrored to DataStore through [PinManager] (see PinDialog): an
+ * in-memory-only throttle was reset by force-stopping the app, which
+ * defeated the lockout entirely.
  */
 object PinThrottle {
     private const val MAX_FAILURES = 5
@@ -53,6 +57,15 @@ object PinThrottle {
     fun reset() {
         failures = 0
         lockedUntilMs = 0L
+    }
+
+    /** Current state for persisting after a change. */
+    fun snapshot(): Pair<Int, Long> = failures to lockedUntilMs
+
+    /** Restores persisted state (e.g. after a restart mid-lockout). */
+    fun restore(failures: Int, lockedUntilMs: Long) {
+        this.failures = failures
+        this.lockedUntilMs = lockedUntilMs
     }
 }
 
@@ -85,6 +98,20 @@ fun PinDialog(
     // DataStore-backed manager calls are suspend: run them off the main thread.
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    // Restore a persisted lockout (e.g. the app was force-stopped while
+    // locked out): without this, the in-memory throttle started clean.
+    LaunchedEffect(manager) {
+        val (failures, lockedUntil) = runCatching { manager.throttleState() }
+            .getOrDefault(0 to 0L)
+        PinThrottle.restore(failures, lockedUntil)
+    }
+
+    /** Persists the throttle after every change, in the same coroutine. */
+    suspend fun persistThrottle() {
+        val (failures, lockedUntil) = PinThrottle.snapshot()
+        runCatching { manager.setThrottleState(failures, lockedUntil) }
+    }
 
     val emptyErr = stringResource(R.string.the_pin_can_t_be_empty)
     val shortErr = stringResource(R.string.the_pin_must_be_at_least_4_characters)
@@ -131,9 +158,11 @@ fun PinDialog(
                             error = lockoutErr()
                         } else if (manager.verify(first)) {
                             PinThrottle.reset()
+                            persistThrottle()
                             onSuccess()
                         } else {
                             PinThrottle.recordFailure()
+                            persistThrottle()
                             first = ""
                             error = if (PinThrottle.isLockedOut()) lockoutErr() else wrongErr
                         }
@@ -159,10 +188,12 @@ fun PinDialog(
                             error = lockoutErr()
                         } else if (!manager.verify(oldPin)) {
                             PinThrottle.recordFailure()
+                            persistThrottle()
                             oldPin = ""
                             error = if (PinThrottle.isLockedOut()) lockoutErr() else wrongErr
                         } else {
                             PinThrottle.reset()
+                            persistThrottle()
                             val err = validateSetup(first, second)
                             if (err != null) {
                                 error = err
