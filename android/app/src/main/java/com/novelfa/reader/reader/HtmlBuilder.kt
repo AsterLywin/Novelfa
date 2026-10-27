@@ -599,6 +599,29 @@ object HtmlBuilder {
     // ------------------------------------------------------------------
     // Page construction.
     // ------------------------------------------------------------------
+    // Build generation: incremented whenever a newer build supersedes
+    // the running one (a resize mid-build). Slices of the old build
+    // check their captured generation at each slice boundary and stop
+    // silently — they must never call onDone or tear the document down
+    // after a newer build has taken over.
+    var buildSeq = 0;
+    // Collapsed-stage wait: when a build is refused because the stage
+    // is implausibly small (the WebView still settling during reader
+    // open), this timer bounds the wait. A resize that makes the stage
+    // sane starts the build and clears it; if the stage never recovers,
+    // teardown leaves a readable flow document instead of a "preparing"
+    // pill forever. Cleared the moment a real build starts.
+    var stageWaitTimer = 0;
+    function clearStageWait() {
+        if (stageWaitTimer) { clearTimeout(stageWaitTimer); stageWaitTimer = 0; }
+    }
+    function armStageWait() {
+        if (stageWaitTimer) return;
+        stageWaitTimer = setTimeout(function () {
+            stageWaitTimer = 0;
+            if (!tornDown && building && !ready) teardown(new Error('stage never reached usable size'));
+        }, 3000);
+    }
     function newPageEl() {
         var p = document.createElement('div');
         p.className = 'rdr-page';
@@ -634,16 +657,19 @@ object HtmlBuilder {
     // to the restored page — so repaginations keep the strip hidden
     // until the build finishes, exactly like the old synchronous build.
     function buildPages(onDone, progressive) {
+        var myGen = buildSeq;
         var Wpx = stageW(), Hpx = stageH();
-        strip.innerHTML = '';
-        pages = [];
-        // Progressive display: on the first build the strip stays
-        // visible from the first slice, so the reader shows real pages
-        // as they are built instead of a blank "preparing" screen for
-        // the whole chapter. Only the page under construction (the
-        // probe) is hidden until it is finalized; finished pages are
-        // revealed by finalizePage as soon as they are complete.
-        strip.style.visibility = progressive ? '' : 'hidden';
+        // Collapsed-stage guard: a stage only a few dozen px tall (or
+        // narrow) cannot be a real reader viewport — it is the WebView
+        // still settling (bars animating in, first layout). Building
+        // on it packs one token per page (contentH below one line
+        // height) into a thousand-page strip that then takes minutes
+        // to grind through, while the native side reports the growing
+        // garbage count as real pages. Refuse the build instead: the
+        // resize handler restarts it once the stage is sane, and the
+        // wait timer above bounds the wait. Nothing is reported, no
+        // pages are built, the document is not torn down.
+        if (Wpx < 50 || Hpx < 120) { armStageWait(); return; }
 
         // Pages MUST carry their final width from the start: an
         // absolutely-positioned page without a width shrink-wraps, and
@@ -655,16 +681,36 @@ object HtmlBuilder {
             return p;
         }
 
+        // Padding probe, appended to the stage (not the strip) so the
+        // strip's existing pages are untouched if the content-height
+        // guard below refuses the build.
+        var padProbe = mkPage();
+        padProbe.style.visibility = 'hidden';
+        chap.appendChild(padProbe);
+        var pcs = window.getComputedStyle(padProbe);
+        var padT = parseFloat(pcs.paddingTop) || 0;
+        var padB = parseFloat(pcs.paddingBottom) || 0;
+        chap.removeChild(padProbe);
+        var contentH = Hpx - padT - padB;
+        if (contentH < 48) { armStageWait(); return; }
+        clearStageWait();
+
+        strip.innerHTML = '';
+        pages = [];
+        // Progressive display: on the first build the strip stays
+        // visible from the first slice, so the reader shows real pages
+        // as they are built instead of a blank "preparing" screen for
+        // the whole chapter. Only the page under construction (the
+        // probe) is hidden until it is finalized; finished pages are
+        // revealed by finalizePage as soon as they are complete.
+        strip.style.visibility = progressive ? '' : 'hidden';
+
         var probe = mkPage();
         // visibility:hidden (never display:none): the probe still has
         // layout, so every measurement taken inside it is identical
         // to the old hidden-strip build — only its pixels are hidden.
         probe.style.visibility = 'hidden';
         strip.appendChild(probe);
-        var pcs = window.getComputedStyle(probe);
-        var padT = parseFloat(pcs.paddingTop) || 0;
-        var padB = parseFloat(pcs.paddingBottom) || 0;
-        var contentH = Hpx - padT - padB;
 
         var leaves = flatten(source, [], []);
         var cur1 = { el: probe, frags: [] };
@@ -743,12 +789,18 @@ object HtmlBuilder {
         // output); the slice driver just yields to the event loop
         // between steps.
         function startSplit(chain, leaf, li, availH) {
+            var tokens = tokenize(leaf);
+            // A leaf with no tokens (an empty block, a spacer div with
+            // only padding) must be skipped, not split: the split loop
+            // would otherwise read tokens[from] past the end and throw
+            // mid-build, tearing down a healthy chapter.
+            if (!tokens.length) return null;
             var lineH = 0;
             try { lineH = parseFloat(window.getComputedStyle(leaf).lineHeight) || 0; } catch (e) { }
             if (!lineH) lineH = 24;
             return {
                 chain: chain, leaf: leaf, li: li, availH: availH,
-                tokens: tokenize(leaf), from: 0, first: true,
+                tokens: tokens, from: 0, first: true,
                 fragIndex: 0, lineH: lineH
             };
         }
@@ -885,12 +937,14 @@ object HtmlBuilder {
             try { lineH = parseFloat(window.getComputedStyle(leaf).lineHeight) || 0; } catch (e) { }
             if (isSplittable(leaf) && (cur1.frags.length === 0 || avail >= (lineH || 24))) {
                 splitState = startSplit(chain, leaf, li, avail);
+                if (!splitState) { li++; return li >= leaves.length; }
                 return false;
             } else if (cur1.frags.length) {
                 finalizePage();
                 if (!tryWhole(chain, leaf, li)) {
                     if (isSplittable(leaf)) {
                         splitState = startSplit(chain, leaf, li, contentH);
+                        if (!splitState) { li++; return li >= leaves.length; }
                         return false;
                     } else emitTallPage(chain, leaf, li);
                 }
@@ -988,6 +1042,7 @@ object HtmlBuilder {
         // then yield so the page stays responsive (scrolling, taps,
         // the native "preparing" poll) while a long chapter builds.
         function runSlice() {
+            if (myGen !== buildSeq) return;
             var t0 = Date.now(), done = false;
             try {
                 while (!done && Date.now() - t0 < 30) done = stepWork();
@@ -1103,32 +1158,44 @@ object HtmlBuilder {
         var progressive = !ready;
         building = true;
         window.__rdrPagerBuilding = true;
-        // A resize that arrives mid-build is dropped by the guards
-        // above (building / !ready); remember the build size so the
-        // completion can rebuild once for the current size instead
-        // of leaving pages built for a stale viewport.
+        // New generation: any slices still queued from a superseded
+        // build die on their generation check instead of finishing
+        // into (or tearing down) this document.
+        buildSeq++;
+        lastW = stageW(); lastH = stageH();
+        // Remember the build size so the completion can rebuild once
+        // for the current size instead of leaving pages built for a
+        // stale viewport (a resize mid-build restarts the build
+        // outright via the resize handler below; this is the belt
+        // to its braces for changes that arrive between slices).
         var buildW = stageW(), buildH = stageH();
-        try {
-            if (window.__rdrPagerTestFail) throw new Error('test-forced failure');
-            buildPages(function (earlyRestored) {
-                try {
-                    if (stageW() <= 0 || stageH() <= 0) throw new Error('zero-size stage');
-                    if (!pages.length && source && source.childNodes.length) {
-                        throw new Error('no pages from non-empty source');
-                    }
-                    if (pages.length && stageH() > 0) {
-                        // A collapsed stage (old WebView dropping the stage
-                        // offsets) can leave JS geometry "valid" while the pages
-                        // render a few px tall: garbage that throws nothing.
-                        // Detect it visually and tear down to the readable flow.
-                        var pr = pages[0].el.getBoundingClientRect();
-                        if (pr && pr.height < stageH() * 0.5) throw new Error('page height collapse');
-                    }
-                    window.__rdrPagerError = null;
-                } catch (e) {
-                    teardown(e);
+        var collapseRetried = false;
+        function onBuilt(earlyRestored) {
+            try {
+                if (stageW() <= 0 || stageH() <= 0) throw new Error('zero-size stage');
+                if (!pages.length && source && source.childNodes.length) {
+                    throw new Error('no pages from non-empty source');
+                }
+                if (pages.length && stageH() > 0) {
+                    // A collapsed stage (old WebView dropping the stage
+                    // offsets) can leave JS geometry "valid" while the pages
+                    // render a few px tall: garbage that throws nothing.
+                    // A transient stage glitch must not kill the chapter
+                    // outright: rebuild once with fresh geometry, and
+                    // only tear down if the collapse repeats.
+                    var pr = pages[0].el.getBoundingClientRect();
+                    if (pr && pr.height < stageH() * 0.5) throw new Error('page height collapse');
+                }
+                window.__rdrPagerError = null;
+            } catch (e) {
+                if (String(e && e.message || e) === 'page height collapse' && !collapseRetried) {
+                    collapseRetried = true;
+                    buildPages(onBuilt, false);
                     return;
                 }
+                teardown(e);
+                return;
+            }
                 building = false;
                 window.__rdrPagerBuilding = false;
                 ready = true;
@@ -1161,15 +1228,18 @@ object HtmlBuilder {
                 } else {
                     show(pageForAnchor(anchor), true);
                 }
-                watchLateImages();
-                // After the watch: backdrops must never be watched as late
-                // images (they load from cache and would only cause extra
-                // repagination cycles), so marking runs last.
-                markImagePages();
-                if (Math.abs(stageW() - buildW) >= 2 || Math.abs(stageH() - buildH) >= 2) {
-                    scheduleRepaginate();
-                }
-            }, progressive);
+            watchLateImages();
+            // After the watch: backdrops must never be watched as late
+            // images (they load from cache and would only cause extra
+            // repagination cycles), so marking runs last.
+            markImagePages();
+            if (Math.abs(stageW() - buildW) >= 2 || Math.abs(stageH() - buildH) >= 2) {
+                scheduleRepaginate();
+            }
+        }
+        try {
+            if (window.__rdrPagerTestFail) throw new Error('test-forced failure');
+            buildPages(onBuilt, progressive);
         } catch (e) {
             teardown(e);
             return;
@@ -1506,13 +1576,25 @@ object HtmlBuilder {
 
     var lastW = 0, lastH = 0, resizeTimer = 0;
     window.addEventListener('resize', function () {
-        if (!ready) return;
+        if (tornDown) return;
         if (resizeTimer) clearTimeout(resizeTimer);
         resizeTimer = setTimeout(function () {
             resizeTimer = 0;
-            if (!chap) return;
+            if (!chap || tornDown) return;
             if (Math.abs(stageW() - lastW) >= 2 || Math.abs(stageH() - lastH) >= 2) {
                 lastW = stageW(); lastH = stageH();
+                if (building) {
+                    // The stage moved mid-build (the classic reader-open
+                    // case: the WebView grows while the first build is
+                    // still slicing). The old code ignored resizes
+                    // until ready, so the build ground on with stale
+                    // geometry and its garbage pages stuck. Abort it
+                    // and restart for the new size instead.
+                    buildSeq++;
+                    building = false;
+                    window.__rdrPagerBuilding = false;
+                    clearStageWait();
+                }
                 paginate();
             }
         }, 180);
