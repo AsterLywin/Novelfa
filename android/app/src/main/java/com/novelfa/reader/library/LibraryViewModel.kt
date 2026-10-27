@@ -11,6 +11,7 @@ import com.novelfa.reader.data.isCompleted
 import com.novelfa.reader.data.isInProgress
 import com.novelfa.reader.data.isUuidLikeTitle
 import com.novelfa.reader.data.progressPercent
+import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.settings.CollectionManager
 import com.novelfa.reader.settings.ManualCollectionRegistry
 import java.io.File
@@ -169,6 +170,9 @@ class LibraryViewModel(
 
     fun byCollection(name: String): Flow<List<BookEntity>> = dao.byCollection(name)
 
+    /** One failed import in a batch: file name + human-readable reason. */
+    data class FailedImport(val name: String, val reason: String)
+
     /** Batch import result (WPF parity: added/duplicates/failed summary). */
     data class ImportSummary(
         val added: Int,
@@ -181,14 +185,24 @@ class LibraryViewModel(
         /** Lowercased original file names of the newly added books. */
         val addedNames: List<String> = emptyList(),
         /** Added books whose reading progress was restored from a record. */
-        val progressRestored: Int = 0
+        val progressRestored: Int = 0,
+        /** Per-file failures (batch imports only; single-file rethrows). */
+        val failedDetails: List<FailedImport> = emptyList()
     )
 
     /**
-     * Imports several books, skipping ones already in the library (matched by
-     * original file name, like the desktop client's path-based dedupe) and
+     * Imports several books, skipping ones already in the library and
      * ones repeated inside the batch. A single-URI batch rethrows so the
      * diagnostic import-error path keeps working.
+     *
+     * Duplicate detection is by CONTENT, not by name alone: the name
+     * (or, when the name is unknown, the declared size) only nominates
+     * candidates, and a streaming SHA-256 decides. So the same book
+     * under a new name is still a duplicate, and an updated book under
+     * the old name is no longer blocked as a "duplicate" — the old
+     * name-only rule did both of those backwards. A hash that cannot
+     * be computed on either side falls back to the old name rule
+     * (treat as duplicate) rather than importing a possible copy.
      */
     suspend fun importMultiple(
         uris: List<Uri>,
@@ -196,9 +210,12 @@ class LibraryViewModel(
         passwordProvider: PdfPasswordProvider? = null
     ): ImportSummary {
         val imp = requireNotNull(importer) { "Importer not provided" }
-        val known = dao.allBooks().first()
-            .mapNotNull { it.originalFileName?.lowercase() }
-            .toMutableSet()
+        val existingBooks = dao.allBooks().first()
+        val knownByName = existingBooks
+            .mapNotNull { b -> b.originalFileName?.lowercase()?.let { it to b } }
+            .toMap()
+        val known = knownByName.keys.toMutableSet()
+        val batchAddedNames = mutableSetOf<String>()
         var added = 0
         var duplicates = 0
         var failed = 0
@@ -206,14 +223,74 @@ class LibraryViewModel(
         val duplicateUris = mutableListOf<Uri>()
         val duplicateNames = mutableListOf<String>()
         val addedNames = mutableListOf<String>()
+        val failedDetails = mutableListOf<FailedImport>()
+        // Lazily hashed once per URI, only when a candidate exists:
+        // hashing every pick unconditionally would re-read every book.
+        val uriHashes = mutableMapOf<Uri, String?>()
+        suspend fun hashOf(uri: Uri): String? {
+            if (uri !in uriHashes) uriHashes[uri] = imp.sha256OfUri(uri)
+            return uriHashes[uri]
+        }
+        suspend fun isSameContent(uri: Uri, book: BookEntity): Boolean? {
+            val newHash = hashOf(uri) ?: return null
+            val stored = File(book.filePath)
+            if (!stored.isFile) return null
+            val oldHash = runCatching { sha256OfFile(stored) }.getOrNull() ?: return null
+            return newHash == oldHash
+        }
         for (uri in uris) {
             val displayName = imp.displayNameOf(uri)
             val key = displayName?.lowercase()
-            if (!overwriteDuplicates && key != null && (key in known)) {
-                duplicates++
-                duplicateUris.add(uri)
-                if (displayName != null) duplicateNames.add(displayName)
-                continue
+            if (!overwriteDuplicates) {
+                if (key != null && key in batchAddedNames) {
+                    // Repeated inside this batch: the first pick already
+                    // imported it; the name rule is enough here.
+                    duplicates++
+                    duplicateUris.add(uri)
+                    duplicateNames.add(displayName)
+                    continue
+                }
+                var duplicate: BookEntity? = null
+                var undecided = false
+                if (key != null && key in known) {
+                    when (isSameContent(uri, knownByName.getValue(key))) {
+                        true -> duplicate = knownByName.getValue(key)
+                        false -> duplicate = null
+                        null -> {
+                            duplicate = knownByName.getValue(key)
+                            undecided = true
+                        }
+                    }
+                } else {
+                    // No name match: nominate by declared size, then hash.
+                    val size = imp.displaySizeOf(uri)
+                    if (size != null) {
+                        for (candidate in existingBooks) {
+                            val stored = File(candidate.filePath)
+                            if (stored.isFile && stored.length() == size) {
+                                when (isSameContent(uri, candidate)) {
+                                    true -> {
+                                        duplicate = candidate
+                                        break
+                                    }
+                                    false, null -> Unit
+                                }
+                            }
+                        }
+                    }
+                }
+                if (duplicate != null) {
+                    duplicates++
+                    // An undecided (unhashable) name collision keeps the
+                    // old overwrite-confirmation path (uri + name both
+                    // recorded); a proven same-content duplicate is
+                    // skipped silently and needs neither.
+                    if (undecided) {
+                        duplicateUris.add(uri)
+                        if (displayName != null) duplicateNames.add(displayName)
+                    }
+                    continue
+                }
             }
             try {
                 val newId = imp.importBook(
@@ -225,6 +302,7 @@ class LibraryViewModel(
                 if (imp.applyReadingRecord(newId)) restored++
                 if (key != null) {
                     known.add(key)
+                    batchAddedNames.add(key)
                     addedNames.add(key)
                 }
             } catch (e: CancellationException) {
@@ -234,9 +312,17 @@ class LibraryViewModel(
                 // the diagnostic detail from the real exception.
                 if (uris.size == 1) throw e
                 failed++
+                failedDetails += FailedImport(
+                    displayName ?: uri.lastPathSegment ?: uri.toString(),
+                    (e as? com.novelfa.reader.data.ImportException)?.messageFa
+                        ?: e.message ?: e.javaClass.simpleName
+                )
             }
         }
-        return ImportSummary(added, duplicates, failed, duplicateUris, duplicateNames, addedNames, restored)
+        return ImportSummary(
+            added, duplicates, failed, duplicateUris, duplicateNames,
+            addedNames, restored, failedDetails
+        )
     }
 
     /**
@@ -251,13 +337,15 @@ class LibraryViewModel(
         var added = 0
         var failed = 0
         var restored = 0
+        val failedDetails = mutableListOf<FailedImport>()
         for (uri in uris) {
-            val displayName = imp.displayNameOf(uri)?.lowercase()
+            val displayName = imp.displayNameOf(uri)
+            val key = displayName?.lowercase()
             try {
                 // Remove the existing book with the same file name.
-                if (displayName != null) {
+                if (key != null) {
                     val existing = dao.allBooks().first()
-                        .firstOrNull { it.originalFileName?.lowercase() == displayName }
+                        .firstOrNull { it.originalFileName?.lowercase() == key }
                     if (existing != null) {
                         removeBook(existing)
                     }
@@ -269,9 +357,16 @@ class LibraryViewModel(
                 throw e
             } catch (e: Exception) {
                 failed++
+                failedDetails += FailedImport(
+                    displayName ?: uri.lastPathSegment ?: uri.toString(),
+                    (e as? com.novelfa.reader.data.ImportException)?.messageFa
+                        ?: e.message ?: e.javaClass.simpleName
+                )
             }
         }
-        return ImportSummary(added, 0, failed, progressRestored = restored)
+        return ImportSummary(
+            added, 0, failed, progressRestored = restored, failedDetails = failedDetails
+        )
     }
 
     suspend fun toggleFavorite(book: BookEntity) {

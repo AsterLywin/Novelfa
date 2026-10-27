@@ -101,6 +101,17 @@ class HtmlTextTest {
     // --- Render-pipeline hardening (ported from AI Studio defect pass) ---
 
     @Test
+    fun stripScripts_keepsDataImageSrc_blocksDataHref() {
+        val html = "<img src=\"data:image/png;base64,xx\">" +
+            "<a href=\"data:text/html;base64,evil\">x</a>" +
+            "<img src=\"javascript:evil()\">"
+        val got = HtmlText.stripScripts(html)
+        assertTrue(got.contains("data:image/png;base64,xx"))
+        assertFalse(got.contains("data:text/html"))
+        assertFalse(got.contains("javascript:"))
+    }
+
+    @Test
     fun stripScripts_removesNoscriptAndInlineHandlers() {
         val html = "<p onclick=\"evil()\">hi</p><noscript>no</noscript><img src=\"a.png\" onload='x()'>"
         val got = HtmlText.stripScripts(html)

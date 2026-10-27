@@ -118,7 +118,13 @@ fun CollectionsScreen(
                 if (summary.added > 0) parts.add(addedFmt.format(summary.added))
                 if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
                 if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
-                if (summary.failed > 0) parts.add(failedFmt.format(summary.failed))
+                if (summary.failed > 0) {
+                    val base = failedFmt.format(summary.failed)
+                    val sepC = if (java.util.Locale.getDefault().language.startsWith("en")) ", " else "، "
+                    val shown = summary.failedDetails.take(3)
+                        .joinToString(sepC) { "${it.name}: ${it.reason}" }
+                    parts.add(if (summary.failedDetails.isEmpty()) base else "$base ($shown)")
+                }
                 if (parts.isNotEmpty()) {
                     Toast.makeText(
                         context,

@@ -101,14 +101,28 @@ object EpubParser {
             val idref = spine.item(i).attributes.getNamedItem("idref")?.nodeValue?.trim() ?: continue
             if (idref.isEmpty()) continue
             val (href, mediaType) = manifest[idref] ?: continue
-            // Skip non-XHTML spine items (cover-in-spine etc.): a missing
-            // media-type stays lenient, but an explicit non-document type
-            // would render as binary garbage.
+            // Skip non-document spine items (cover-in-spine etc.): a
+            // missing media-type stays lenient, but an explicit
+            // non-document type would render as binary garbage.
+            // SVG content documents (EPUB3) ARE documents and render
+            // as pages, so they are kept — except the book's own cover
+            // file, which must not become a reading chapter.
+            val isSvg = mediaType?.equals("image/svg+xml", ignoreCase = true) == true
             if (mediaType != null &&
                 !mediaType.equals("application/xhtml+xml", ignoreCase = true) &&
-                !mediaType.equals("text/html", ignoreCase = true)
+                !mediaType.equals("text/html", ignoreCase = true) && !isSvg
             ) continue
             val file = HrefResolver.resolve(opfFolder, href)
+            if (!file.isFile) {
+                // A spine item pointing at a missing file used to be
+                // added anyway (canonicalPath succeeds for missing
+                // files), reaching the reader as a blank/broken chapter.
+                continue
+            }
+            if (isSvg && coverFile != null &&
+                runCatching { file.canonicalPath }.getOrNull() ==
+                    runCatching { coverFile.canonicalPath }.getOrNull()
+            ) continue
             // Dedupe: duplicate itemrefs (or hrefs resolving to the same file)
             // would produce duplicate LazyColumn keys and crash the drawer.
             val canonical = runCatching { file.canonicalPath }.getOrNull() ?: continue

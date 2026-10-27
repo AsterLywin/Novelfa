@@ -553,6 +553,18 @@ class ReaderViewModel(
         saveProgress(index)
     }
 
+    /**
+     * Forces the current paged anchor to the DB, bypassing the 500ms
+     * throttle: called on close / dispose, so a turn followed
+     * immediately by closing the reader no longer loses the last page.
+     * A no-op outside paged mode or with no anchor recorded.
+     */
+    suspend fun flushPagedAnchor() {
+        if (readingMode != ReadingMode.PAGED_HORIZONTAL) return
+        if (pagedAnchor == null) return
+        saveProgress(index, force = true)
+    }
+
     /** Clears the in-memory anchor (chapter change): the next save writes null. */
     fun clearPagedAnchor() {
         pagedAnchor = null
@@ -716,7 +728,15 @@ class ReaderViewModel(
             val frag = runCatching {
                 java.net.URLDecoder.decode(fragRaw, "UTF-8")
             }.getOrDefault(fragRaw)
-            if (filePart.isEmpty()) return@withContext null
+            // A fragment-only href ("#footnote-3", the usual footnote
+            // and in-chapter anchor form) points at the chapter that
+            // CONTAINS the link. The old code returned null here, so
+            // every same-chapter anchor link was dead on tap.
+            if (filePart.isEmpty()) {
+                if (frag.isBlank()) return@withContext null
+                val base = if (baseIdx in chapters.indices) baseIdx else index
+                return@withContext base to frag
+            }
             val base = if (baseIdx in chapters.indices) baseIdx else index
             val folder = chapters[base].file.parentFile
                 ?: return@withContext null

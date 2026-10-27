@@ -83,6 +83,7 @@ import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.parser.BookConverter
 import com.novelfa.reader.parser.BookFormat
+import com.novelfa.reader.parser.CacheStamp
 import com.novelfa.reader.parser.ConvertedBook
 import com.novelfa.reader.parser.EpubParser
 import com.novelfa.reader.settings.SupportDialog
@@ -149,13 +150,20 @@ fun ReaderScreen(
     fun closeReader() {
         scope.launch {
             runCatching { vm?.xpFlush() }
+            // The paged anchor is throttled (500ms) on turns; a close
+            // right after a turn used to lose the last page. Flush it
+            // here, forced, so closing never loses the position.
+            runCatching { vm?.flushPagedAnchor() }
             onClose()
         }
     }
     DisposableEffect(vm) {
         onDispose {
             val v = vm
-            if (v != null) xpFlushScope.launch { runCatching { v.xpFlush() } }
+            if (v != null) xpFlushScope.launch {
+                runCatching { v.xpFlush() }
+                runCatching { v.flushPagedAnchor() }
+            }
         }
     }
     var loadError by remember { mutableStateOf(false) }
@@ -254,6 +262,8 @@ fun ReaderScreen(
     val fontMaxMsg = stringResource(R.string.font_size_max, 72)
     val pagerReloadMsg = stringResource(R.string.pager_reload)
     val pagerFailedMsg = stringResource(R.string.pager_failed)
+    val fontMissingMsg = stringResource(R.string.reader_font_missing)
+    val linkTargetMsg = stringResource(R.string.link_target_not_found)
 
     suspend fun showVmError(v: ReaderViewModel) {
         snackbar.showSnackbar(chapterErr + (v.lastError ?: ""))
@@ -358,6 +368,15 @@ fun ReaderScreen(
             vm = v
             pageHtml = v.html
             pageBase = v.baseUrl
+            // The reader used to fall back to Vazirmatn silently when
+            // the book's saved font file was gone (deleted from the
+            // font store): the user saw a different font with no
+            // explanation. Say so once, on open. A blank fontFamily
+            // means "no font chosen", and the contains("") filter above
+            // matches every file then, so it is never a missing font.
+            if (entity.fontFamily.isNotBlank() && files.isEmpty()) {
+                snackbar.showSnackbar(fontMissingMsg)
+            }
         } catch (e: CancellationException) {
             // Navigation away: don't show a spurious error.
             throw e
@@ -596,7 +615,12 @@ fun ReaderScreen(
      * chapter opens and its fragment is applied on page-finish.
      */
     suspend fun handleInBookLink(v: ReaderViewModel, href: String, chap: Int) {
-        val (idx, frag) = v.resolveLink(href, chap) ?: return
+        val (idx, frag) = v.resolveLink(href, chap) ?: run {
+            // A tap that does nothing, with no message, reads as a
+            // broken link. Say plainly that it points outside the book.
+            snackbar.showSnackbar(linkTargetMsg)
+            return
+        }
         if (idx == v.index) {
             if (frag.isNotBlank()) jumpToAnchor(v, frag)
         } else {
@@ -1834,8 +1858,10 @@ private fun SpacingDialog(
  * TXT / Markdown / PDF / DOCX are converted by [BookConverter] into
  * chapter files in the same cache directory, and a valid stamp lets the
  * next open rebuild the book from those files without re-converting.
- * The stamp covers mtime AND length, so a replaced file with an
- * unchanged mtime still re-converts.
+ * The stamp ([CacheStamp]) covers mtime, length AND a first/last-bytes
+ * fingerprint, so a replaced file with an unchanged mtime and the same
+ * length still re-converts. The importer fills this cache at import
+ * time, so the first open is normally a cache hit, not a re-parse.
  */
 @Throws(IOException::class)
 private fun openParsed(
@@ -1862,16 +1888,19 @@ private fun openParsed(
     val chapterFallback: (Int) -> String = { n ->
         context.getString(R.string.chapter_fallback, n)
     }
-    val stamp = File(outDir, ".src_stamp")
-    val stampText = book.lastModified().toString() + "|" + book.length()
-    val stampOk = stamp.exists() && runCatching { stamp.readText() }.getOrNull() == stampText
+    val stampOk = CacheStamp.isValidStamp(outDir, book)
     if (stampOk) {
         if (format == BookFormat.EPUB) {
             return EpubParser.parse(outDir, titleFallback ?: book.name, chapterFallback)
         }
-        ConvertedBook.read(outDir, titleFallback ?: book.name, chapterFallback)?.let { return it }
-        // Cache present but no chapter files (e.g. a crashed convert):
-        // fall through to a fresh conversion below.
+        val cached = ConvertedBook.read(outDir, titleFallback ?: book.name, chapterFallback)
+        if (cached != null && isConvertedCacheValid(outDir, cached)) {
+            return cached
+        }
+        // Cache present but empty, unreadable, or missing its images
+        // (e.g. a crashed convert, or media files deleted by hand):
+        // fall through to a fresh conversion below instead of
+        // showing blank chapters / broken images silently.
     }
     outDir.deleteRecursively()
     outDir.mkdirs()
@@ -1913,8 +1942,35 @@ private fun openParsed(
     } else {
         BookConverter.parse(book, outDir, chapterFallback, titleFallback)
     }
-    stamp.writeText(stampText)
+    CacheStamp.writeStamp(outDir, book)
     return parsed
+}
+
+/**
+ * Health check for a converted-book cache hit: every chapter file must
+ * exist and be non-empty, and if any chapter references `media/` images
+ * (DOCX / scanned PDF), that folder must actually hold files. A cache
+ * that fails this is re-converted, never shown half-broken.
+ */
+private fun isConvertedCacheValid(
+    outDir: File,
+    parsed: com.novelfa.reader.model.ParsedBook
+): Boolean {
+    if (parsed.chapters.isEmpty()) return false
+    var needsMedia = false
+    for (chapter in parsed.chapters) {
+        val file = chapter.file
+        if (!file.isFile || file.length() == 0L) return false
+        if (!needsMedia) {
+            val text = runCatching { file.readText(Charsets.UTF_8) }.getOrNull()
+            if (text != null && text.contains("media/")) needsMedia = true
+        }
+    }
+    if (needsMedia) {
+        val media = File(outDir, "media").listFiles()
+        if (media.isNullOrEmpty()) return false
+    }
+    return true
 }
 
 /**
@@ -1925,8 +1981,17 @@ private fun openParsed(
  * so opening a long book stays cheap.
  */
 private fun detectBookIsLtr(chapters: List<com.novelfa.reader.model.Chapter>): Boolean {
+    // Sample the first TEXT-bearing chapters, not blindly the first
+    // three: a book whose first chapters are cover / TOC / image-only
+    // (scanned PDF, illustrated EPUB) used to be judged from an empty
+    // sample and always paginated RTL. Empty chapters are skipped,
+    // up to 10 chapters are consulted, and a book with no letters at
+    // all still falls back to RTL (the Persian-first default) — for a
+    // purely image-only book there is simply no content signal.
     val sample = StringBuilder()
-    for (chapter in chapters.take(3)) {
+    var consulted = 0
+    for (chapter in chapters) {
+        if (consulted >= 10) break
         val text = runCatching {
             chapter.file.inputStream().bufferedReader(Charsets.UTF_8).use { reader ->
                 val buf = CharArray(4096)
@@ -1934,7 +1999,10 @@ private fun detectBookIsLtr(chapters: List<com.novelfa.reader.model.Chapter>): B
                 if (n > 0) String(buf, 0, n) else ""
             }
         }.getOrNull() ?: continue
-        sample.append(HtmlText.htmlToPlainText(text)).append(' ')
+        val plain = HtmlText.htmlToPlainText(text)
+        if (plain.isBlank()) continue
+        consulted++
+        sample.append(plain).append(' ')
         if (sample.length >= 8192) break
     }
     return HtmlText.detectDirection(sample.toString()) == 1

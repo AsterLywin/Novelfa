@@ -63,11 +63,39 @@ object BookConverter {
         fallbackName: String
     ): ParsedBook {
         val text = runCatching {
-            PdfParser.parse(source.readBytes(), fallbackName, outDir, chapterFallback)
+            PdfParser.parseDetailed(source.readBytes(), fallbackName, outDir, chapterFallback)
         }
         if (text.isSuccess) {
-            val parsed = text.getOrThrow()
-            if (parsed.chapters.isNotEmpty()) return parsed
+            val (parsed, hasText, pageTexts) = text.getOrThrow()
+            if (parsed.chapters.isNotEmpty()) {
+                val mixed = hasText.any { it } && hasText.any { !it }
+                if (!mixed) return parsed
+                // MIXED book (some pages text, some scanned): the old
+                // code returned the text-only book and silently dropped
+                // every image page. Build it page by page instead:
+                // consecutive text pages group into a section (bounded
+                // like the text path), consecutive image pages group
+                // into an image section (chunkSections splits it, as
+                // for a fully scanned book). More than 1000 image
+                // pages would blow up storage/time like a fully scanned
+                // book over the cap, so that case keeps the text book.
+                val imagePages = hasText.withIndex().filter { !it.value }.map { it.index }
+                if (imagePages.size > PdfImageBook.MAX_IMAGE_PAGES) return parsed
+                try {
+                    return buildMixedPdf(
+                        source, outDir, parsed.title, hasText, pageTexts, chapterFallback
+                    )
+                } catch (e: Exception) {
+                    // A failed mixed build must not lose the text book
+                    // that already parsed: rebuild it cleanly and
+                    // return that instead of failing the whole import.
+                    outDir.listFiles()
+                        ?.filter { it.isFile && it.name.matches(Regex("ch\\d+\\.xhtml")) }
+                        ?.forEach { it.delete() }
+                    File(outDir, "media").deleteRecursively()
+                    return PdfParser.parse(source.readBytes(), fallbackName, outDir, chapterFallback)
+                }
+            }
         } else {
             val err = text.exceptionOrNull()
             if (err is PdfPasswordRequiredException ||
@@ -77,11 +105,76 @@ object BookConverter {
                 throw err
             }
         }
-        val title = text.getOrNull()?.title ?: File(fallbackName).nameWithoutExtension
+        val title = text.getOrNull()?.first?.title ?: File(fallbackName).nameWithoutExtension
         try {
             return PdfImageBook.render(source, outDir, title)
         } catch (renderErr: Exception) {
             throw text.exceptionOrNull() ?: renderErr
         }
+    }
+
+    private fun buildMixedPdf(
+        source: File,
+        outDir: File,
+        title: String,
+        hasText: List<Boolean>,
+        pageTexts: List<List<String>>,
+        chapterFallback: (Int) -> String
+    ): ParsedBook {
+        // The text parse above already wrote chapter files into
+        // outDir; the mixed build replaces them, so stale chapters
+        // from the text book must not survive (a shorter mixed book
+        // would otherwise keep the text book's tail chapters).
+        outDir.listFiles()
+            ?.filter { it.isFile && it.name.matches(Regex("ch\\d+\\.xhtml")) }
+            ?.forEach { it.delete() }
+        val imagePages = hasText.withIndex().filter { !it.value }.map { it.index }
+        if (imagePages.isNotEmpty()) {
+            PdfImageBook.renderPages(source, outDir, imagePages)
+        }
+        val sections = mutableListOf<ConvertedBook.Section>()
+        var textBody = StringBuilder()
+        var imageBody = StringBuilder()
+        fun flushText() {
+            if (textBody.isNotEmpty()) {
+                sections += ConvertedBook.Section(
+                    chapterFallback(sections.size + 1), textBody.toString()
+                )
+                textBody = StringBuilder()
+            }
+        }
+        fun flushImages() {
+            if (imageBody.isNotEmpty()) {
+                sections += ConvertedBook.Section(
+                    chapterFallback(sections.size + 1), imageBody.toString()
+                )
+                imageBody = StringBuilder()
+            }
+        }
+        for (i in hasText.indices) {
+            if (hasText[i]) {
+                flushImages()
+                for (para in pageTexts[i]) {
+                    val html = "<p>" + ConvertedBook.escape(para) + "</p>"
+                    if (textBody.isNotEmpty() &&
+                        textBody.length + html.length > ConvertedBook.MAX_SECTION_CHARS
+                    ) {
+                        flushText()
+                    }
+                    textBody.append(html)
+                }
+            } else {
+                flushText()
+                imageBody.append(
+                    "<p><img src=\"media/" + PdfImageBook.fileNameFor(i) + "\"></p>"
+                )
+                if (imageBody.length > ConvertedBook.MAX_SECTION_CHARS) flushImages()
+            }
+        }
+        flushText()
+        flushImages()
+        return ConvertedBook.write(
+            outDir, title, ConvertedBook.chunkSections(sections)
+        )
     }
 }

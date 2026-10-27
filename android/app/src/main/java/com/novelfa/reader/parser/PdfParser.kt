@@ -38,7 +38,22 @@ object PdfParser {
         outDir: File,
         chapterFallback: (Int) -> String,
         password: String? = null
-    ): ParsedBook {
+    ): ParsedBook = parseDetailed(bytes, fileName, outDir, chapterFallback, password).first
+
+    /**
+     * Like [parse], plus the per-page text the caller needs to build a
+     * MIXED book (text pages + image pages in page order): the parsed
+     * book, one flag per page (true = that page yielded text), and the
+     * paragraphs per page. [BookConverter] uses this so a PDF with some
+     * scanned pages no longer drops those pages entirely.
+     */
+    fun parseDetailed(
+        bytes: ByteArray,
+        fileName: String,
+        outDir: File,
+        chapterFallback: (Int) -> String,
+        password: String? = null
+    ): Triple<ParsedBook, List<Boolean>, List<List<String>>> {
         val doc = PdfDoc(bytes, password)
         val pages = doc.pageObjectNumbers()
         if (pages.isEmpty()) {
@@ -51,14 +66,29 @@ object PdfParser {
         val outline = doc.outlineEntries(pages)
         val sections: List<ConvertedBook.Section>
         if (outline.size >= 2) {
-            sections = outline.mapIndexed { idx, entry ->
+            // Pages before the first outline entry used to be dropped
+            // entirely (cover, foreword, …): they become a first
+            // section of their own, and the entry titles shift by one.
+            val hasPre = outline.first().pageIndex > 0
+            val preSection = if (hasPre) {
+                val pre = (0 until outline.first().pageIndex).flatMap { pageParagraphs[it] }
+                listOf(
+                    ConvertedBook.Section(
+                        chapterFallback(1),
+                        pre.joinToString("") { "<p>" + ConvertedBook.escape(it) + "</p>" }
+                    )
+                )
+            } else emptyList()
+            val outlineSections = outline.mapIndexed { idx, entry ->
                 val end = outline.getOrNull(idx + 1)?.pageIndex ?: pages.size
                 val paras = (entry.pageIndex until end).flatMap { pageParagraphs[it] }
                 ConvertedBook.Section(
-                    entry.title.trim().take(120).ifBlank { chapterFallback(idx + 1) },
+                    entry.title.trim().take(120)
+                        .ifBlank { chapterFallback(idx + if (hasPre) 2 else 1) },
                     paras.joinToString("") { "<p>" + ConvertedBook.escape(it) + "</p>" }
                 )
-            }.filter { it.bodyHtml.isNotEmpty() }
+            }
+            sections = (preSection + outlineSections).filter { it.bodyHtml.isNotEmpty() }
         } else {
             val all = pageParagraphs.flatten()
             val built = mutableListOf<ConvertedBook.Section>()
@@ -84,7 +114,8 @@ object PdfParser {
             sections = built
         }
         val title = doc.infoTitle() ?: File(fileName).nameWithoutExtension
-        return ConvertedBook.write(outDir, title, ConvertedBook.chunkSections(sections))
+        val parsed = ConvertedBook.write(outDir, title, ConvertedBook.chunkSections(sections))
+        return Triple(parsed, pageParagraphs.map { it.isNotEmpty() }, pageParagraphs)
     }
 
     // ------------------------------------------------------------------

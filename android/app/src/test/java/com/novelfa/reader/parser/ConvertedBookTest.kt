@@ -2,7 +2,10 @@ package com.novelfa.reader.parser
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 
 /**
  * Tests for [ConvertedBook.chunkSections]' giant-paragraph split:
@@ -12,6 +15,37 @@ import org.junit.Test
  * giant leaf for every page break (tens of seconds on a phone).
  */
 class ConvertedBookTest {
+
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
+    @Test
+    fun writeRead_roundTripsTitleAndCover() {
+        val out = tempFolder.newFolder("out")
+        val media = File(out, "media").apply { mkdirs() }
+        val cover = File(media, "cover.jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        ConvertedBook.write(
+            out, "My Real Title",
+            listOf(ConvertedBook.Section("One", "<p>text</p>")),
+            coverFile = cover
+        )
+        val read = ConvertedBook.read(out, "some-uuid.docx") { n -> "Section $n" }
+        // Title must come from the sidecar, NOT from the file name,
+        // and the cover must survive the round trip (it used to be null).
+        assertEquals("My Real Title", read?.title)
+        assertEquals(cover.canonicalPath, read?.coverFile?.canonicalPath)
+    }
+
+    @Test
+    fun read_withoutSidecar_fallsBackToFileName() {
+        val out = tempFolder.newFolder("out2")
+        File(out, "ch0001.xhtml").writeText(
+            "<html><head><title>One</title></head><body><p>text</p></body></html>"
+        )
+        val read = ConvertedBook.read(out, "book.docx") { n -> "Section $n" }
+        assertEquals("book", read?.title)
+        assertEquals(null, read?.coverFile)
+    }
 
     private fun plain(html: String): String =
         Regex("<[^>]*>").replace(html, "")

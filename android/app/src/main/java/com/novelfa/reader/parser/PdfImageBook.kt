@@ -54,15 +54,31 @@ object PdfImageBook {
      * encrypted files at all).
      */
     fun render(pdfFile: File, outDir: File, title: String): ParsedBook {
+        val count = renderPages(pdfFile, outDir, null)
+        return ConvertedBook.write(outDir, title, buildSections(title, count))
+    }
+
+    /**
+     * Renders [indices] (or every page when null) into `outDir/media/`
+     * and returns the PDF's page count. Used by the mixed text+image
+     * path, which renders only the image pages instead of the whole
+     * book. The per-page cap still applies to a full render; a mixed
+     * render is capped by its caller on the image-page count.
+     */
+    fun renderPages(pdfFile: File, outDir: File, indices: List<Int>?): Int {
         ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
             PdfRenderer(pfd).use { renderer ->
                 val count = renderer.pageCount
                 if (count <= 0) throw IllegalArgumentException("PDF has no pages")
-                if (count > MAX_IMAGE_PAGES) {
+                if (indices == null && count > MAX_IMAGE_PAGES) {
                     throw IllegalArgumentException("PDF has too many pages for image rendering")
                 }
+                val wanted = indices ?: (0 until count).toList()
+                if (wanted.any { it < 0 || it >= count }) {
+                    throw IllegalArgumentException("PDF page index out of range")
+                }
                 val mediaDir = File(outDir, "media").apply { mkdirs() }
-                for (i in 0 until count) {
+                for (i in wanted) {
                     renderer.openPage(i).use { page ->
                         var width = RENDER_WIDTH
                         var height = (page.height * (width.toFloat() / page.width.toFloat()))
@@ -92,7 +108,7 @@ object PdfImageBook {
                         }
                     }
                 }
-                return ConvertedBook.write(outDir, title, buildSections(title, count))
+                return count
             }
         }
     }

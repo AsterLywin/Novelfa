@@ -7,6 +7,7 @@ import android.util.Log
 import com.novelfa.reader.R
 import com.novelfa.reader.parser.BookConverter
 import com.novelfa.reader.parser.BookFormat
+import com.novelfa.reader.parser.CacheStamp
 import com.novelfa.reader.parser.EpubParser
 import com.novelfa.reader.parser.PdfParser
 import com.novelfa.reader.parser.PdfPasswordRequiredException
@@ -14,6 +15,7 @@ import com.novelfa.reader.parser.PdfPasswordWrongException
 import com.novelfa.reader.parser.PdfUnsupportedEncryptionException
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.UUID
 import java.util.zip.ZipException
@@ -120,7 +122,14 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         val id = UUID.randomUUID().toString()
         val booksDir = File(context.filesDir, "books").apply { mkdirs() }
         val tmpDest = File(booksDir, "$id.tmp")
-        val tmpDir = File(context.cacheDir, "epub_tmp/$id")
+        // Reader-open cache, filled HERE at import time (not thrown
+        // away): the first open reuses these chapters/extraction via
+        // the stamp instead of re-parsing the whole book — the DOCX
+        // "render takes forever on first open" was this second parse.
+        // A failed import deletes it again (see the catch blocks);
+        // a successful import leaves it for openParsed, and the
+        // startup prune removes it if the book row ever disappears.
+        val openCacheDir = File(context.filesDir, "epub_open/$id")
         // Assigned inside the try (extension known only after sniffing);
         // the failure paths below delete whichever file got created.
         var dest: File? = null
@@ -158,7 +167,13 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             // title, the parser falls back to the file name — the UUID
             // name would show up as the book title otherwise.
             val displayName = queryDisplayName(sourceUri) ?: id
-            val format = BookFormat.fromExtension(displayName)
+            // Strong content signatures win over the extension: a
+            // mislabelled file (DOCX named .pdf, EPUB named .docx)
+            // must parse as what it IS, not fail as what it claims.
+            // Plain-text formats have no signature, so their extension
+            // still decides (see BookFormat.detectStrongContent).
+            val format = BookFormat.detectStrongContent(tmpDest)
+                ?: BookFormat.fromExtension(displayName)
                 ?: BookFormat.detect(tmpDest)
                 ?: throw ImportException(
                     "Unsupported book format: $displayName",
@@ -170,13 +185,13 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 tmpDest.copyTo(destFile, overwrite = true)
                 tmpDest.delete()
             }
-            tmpDir.mkdirs()
+            openCacheDir.mkdirs()
             val chapterFallback: (Int) -> String = { n ->
                 context.getString(R.string.chapter_fallback, n)
             }
             val parsed = if (format == BookFormat.EPUB) {
-                unzip(destFile, tmpDir)
-                EpubParser.parse(tmpDir, displayName, chapterFallback)
+                unzip(destFile, openCacheDir)
+                EpubParser.parse(openCacheDir, displayName, chapterFallback)
             } else if (format == BookFormat.PDF) {
                 // Password-protected PDFs are stored DECRYPTED (see
                 // resolvePdfDecryption): the reader then opens them like
@@ -186,7 +201,7 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 )
                 if (decrypted != null) destFile.writeBytes(decrypted)
                 try {
-                    BookConverter.parse(destFile, File(tmpDir, "chapters"), chapterFallback, displayName)
+                    BookConverter.parse(destFile, openCacheDir, chapterFallback, displayName)
                 } catch (e: Exception) {
                     throw ImportException(
                         e.message ?: "parse failed",
@@ -198,7 +213,7 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 // Converted formats: parse errors get a format-aware
                 // user-facing message instead of the EPUB-only texts.
                 try {
-                    BookConverter.parse(destFile, File(tmpDir, "chapters"), chapterFallback, displayName)
+                    BookConverter.parse(destFile, openCacheDir, chapterFallback, displayName)
                 } catch (e: Exception) {
                     throw ImportException(
                         e.message ?: "parse failed",
@@ -254,24 +269,27 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     originalFileName = displayName
                 )
             )
-            tmpDir.deleteRecursively()
+            // The cache above is complete and the stored file is final
+            // (decrypted PDFs were already rewritten): stamp it so the
+            // first open trusts it instead of re-parsing.
+            CacheStamp.writeStamp(openCacheDir, destFile)
             id
         } catch (e: CancellationException) {
             // Never swallow coroutine cancellation: clean up and rethrow so the
             // caller's scope cancels properly instead of faking an import error.
-            tmpDir.deleteRecursively()
+            openCacheDir.deleteRecursively()
             dest?.delete()
             tmpDest.delete()
             throw e
         } catch (e: ImportException) {
             Log.e("NovelfaImporter", "import failed: ${e.message}", e)
-            tmpDir.deleteRecursively()
+            openCacheDir.deleteRecursively()
             dest?.delete()
             tmpDest.delete()
             throw e
         } catch (e: Exception) {
             Log.e("NovelfaImporter", "import failed: ${e.message}", e)
-            tmpDir.deleteRecursively()
+            openCacheDir.deleteRecursively()
             dest?.delete()
             tmpDest.delete()
             throw ImportException(
@@ -350,6 +368,8 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             when {
                 t.message?.contains("encrypted", ignoreCase = true) == true ->
                     return R.string.import_error_pdf_encrypted
+                t.message?.contains("too many pages", ignoreCase = true) == true ->
+                    return R.string.import_error_pdf_too_many_pages
                 t is ZipException -> return R.string.import_error_damaged
                 t is SecurityException -> return R.string.import_error_access_denied
                 t is IOException -> return R.string.import_error_cannot_read
@@ -391,6 +411,30 @@ class Importer(private val context: Context, private val db: ReaderDb) {
 
     /** Original file name from the SAF picker (null when unavailable). */
     fun displayNameOf(uri: Uri): String? = queryDisplayName(uri)
+
+    /** Declared size of the SAF pick in bytes (null when unavailable). */
+    fun displaySizeOf(uri: Uri): Long? = queryDisplaySize(uri)
+
+    /**
+     * Streaming SHA-256 of a picked file (null on any failure): used
+     * for content-based duplicate detection, so the same book under a
+     * new name is still a duplicate and an updated book under the old
+     * name is not. Never loads the file into memory.
+     */
+    suspend fun sha256OfUri(uri: Uri): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val digest = MessageDigest.getInstance("SHA-256")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val buf = ByteArray(8192)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    digest.update(buf, 0, n)
+                }
+            } ?: return@runCatching null
+            digest.digest().joinToString("") { "%02x".format(it) }
+        }.getOrNull()
+    }
 
     private fun queryDisplayName(uri: Uri): String? = runCatching {
         context.contentResolver.query(
@@ -461,26 +505,47 @@ class Importer(private val context: Context, private val db: ReaderDb) {
     }
 
     /**
-     * Reads the total entry count from the ZIP End-of-Central-Directory record
-     * (last 22 bytes). Returns Int.MAX_VALUE if the EOCD can't be found (e.g.
-     * zip64 or comment) — the in-loop guard still applies.
+     * Reads the total entry count from the ZIP End-of-Central-Directory
+     * record. The EOCD is NOT necessarily in the last 22 bytes: a zip
+     * comment (up to 64 KiB) sits after it, so the tail is scanned
+     * backwards for the signature. Returns 0 when the EOCD can't be
+     * found or the count is 0xFFFF (zip64) — 0 defers to the in-loop
+     * guard, which is the correct check there. The old code returned
+     * Int.MAX_VALUE in exactly these cases, so the pre-check above
+     * rejected EVERY commented or zip64 EPUB as "too many entries".
      */
     private fun centralDirectoryEntryCount(zip: File): Int {
-        if (zip.length() < 22) return Int.MAX_VALUE
+        if (zip.length() < 22) return 0
         return try {
+            val tailSize = minOf(zip.length(), 22L + 65535L).toInt()
+            val buf = ByteArray(tailSize)
             java.io.RandomAccessFile(zip, "r").use { raf ->
-                raf.seek(zip.length() - 22)
-                val buf = ByteArray(22)
+                raf.seek(zip.length() - tailSize)
                 raf.readFully(buf)
-                // EOCD signature 0x06054b50, entry count at offset 10 (LE u16).
-                if (buf[0] != 0x50.toByte() || buf[1] != 0x4b.toByte() ||
-                    buf[2] != 0x05.toByte() || buf[3] != 0x06.toByte()) {
-                    return Int.MAX_VALUE
-                }
-                ((buf[11].toInt() and 0xFF) shl 8) or (buf[10].toInt() and 0xFF)
             }
+            // Scan backwards for the EOCD signature 0x06054b50. A
+            // signature found inside the comment itself must not win:
+            // the real EOCD is the one whose comment-length field ends
+            // exactly at the end of the file.
+            var i = tailSize - 22
+            while (i >= 0) {
+                if (buf[i] == 0x50.toByte() && buf[i + 1] == 0x4b.toByte() &&
+                    buf[i + 2] == 0x05.toByte() && buf[i + 3] == 0x06.toByte()
+                ) {
+                    val commentLen = ((buf[i + 21].toInt() and 0xFF) shl 8) or
+                        (buf[i + 20].toInt() and 0xFF)
+                    if (i + 22 + commentLen == tailSize) {
+                        val count = ((buf[i + 11].toInt() and 0xFF) shl 8) or
+                            (buf[i + 10].toInt() and 0xFF)
+                        // zip64: the real count lives in the zip64 EOCD.
+                        return if (count == 0xFFFF) 0 else count
+                    }
+                }
+                i--
+            }
+            0
         } catch (e: Exception) {
-            Int.MAX_VALUE
+            0
         }
     }
 }

@@ -92,6 +92,8 @@ object DocxParser {
         val coreTitle = readCoreTitle(extractDir, dbf)
         val mediaDir = File(outDir, "media").apply { mkdirs() }
         val state = State(extractDir, rels, numbering, mediaDir)
+        state.footnoteTexts.putAll(readNotes(extractDir, dbf, "word/footnotes.xml"))
+        state.endnoteTexts.putAll(readNotes(extractDir, dbf, "word/endnotes.xml"))
 
         val body = doc.documentElement?.let { firstChildElement(it, "body") }
             ?: throw IllegalArgumentException("Not a valid DOCX: no document body")
@@ -118,12 +120,22 @@ object DocxParser {
         }
         var title = coreTitle ?: File(fileName).nameWithoutExtension
         var seenContent = false
-        val kids = body.childNodes
-        for (i in 0 until kids.length) {
-            val node = kids.item(i)
-            if (node.nodeType != Node.ELEMENT_NODE) continue
-            val el = node as Element
-            when (localName(el)) {
+        // Body children, recursing into structured-document tags:
+        // a w:sdt (Word template / content control) holds its real
+        // paragraphs in sdtContent, and the old loop skipped the tag
+        // entirely — losing every paragraph inside it.
+        fun processChildren(parent: Element) {
+            val kids = parent.childNodes
+            for (i in 0 until kids.length) {
+                val node = kids.item(i)
+                if (node.nodeType != Node.ELEMENT_NODE) continue
+                val el = node as Element
+                if (localName(el) == "sdt") {
+                    val content = firstChildElement(el, "sdtContent")
+                    if (content != null) processChildren(content)
+                    continue
+                }
+                when (localName(el)) {
                 "p" -> {
                     val para = parseParagraph(el, state)
                     val style = para.style
@@ -166,11 +178,45 @@ object DocxParser {
                     currentBody.append(renderTable(el, state))
                     seenContent = true
                 }
-                // sectPr and anything else: layout metadata, not content.
-                else -> Unit
+                    // sectPr and anything else: layout metadata, not content.
+                    else -> Unit
+                }
             }
         }
+        processChildren(body)
         flushSection()
+        // Footnotes/endnotes: their references above became superscript
+        // numbers; the texts themselves are appended to the last section
+        // so no content is lost. No new UI string is needed (a plain
+        // numbered list, no heading word in either language).
+        if (state.referencedFootnotes.isNotEmpty() || state.referencedEndnotes.isNotEmpty()) {
+            val notesHtml = StringBuilder("<hr/>")
+            if (state.referencedFootnotes.isNotEmpty()) {
+                notesHtml.append("<ol>")
+                for (id in state.referencedFootnotes) {
+                    notesHtml.append("<li>")
+                        .append(ConvertedBook.escape(state.footnoteTexts[id] ?: ""))
+                        .append("</li>")
+                }
+                notesHtml.append("</ol>")
+            }
+            if (state.referencedEndnotes.isNotEmpty()) {
+                notesHtml.append("<ol>")
+                for (id in state.referencedEndnotes) {
+                    notesHtml.append("<li>")
+                        .append(ConvertedBook.escape(state.endnoteTexts[id] ?: ""))
+                        .append("</li>")
+                }
+                notesHtml.append("</ol>")
+            }
+            if (sections.isNotEmpty()) {
+                val last = sections.last()
+                sections[sections.size - 1] =
+                    last.copy(bodyHtml = last.bodyHtml + notesHtml.toString())
+            } else {
+                sections += ConvertedBook.Section(chapterFallback(1), notesHtml.toString())
+            }
+        }
         if (sections.isEmpty()) {
             return ConvertedBook.write(outDir, title, emptyList())
         }
@@ -187,6 +233,12 @@ object DocxParser {
         val mediaDir: File
     ) {
         var firstImage: File? = null
+        val footnoteTexts = mutableMapOf<Int, String>()
+        val endnoteTexts = mutableMapOf<Int, String>()
+        val referencedFootnotes = mutableListOf<Int>()
+        val referencedEndnotes = mutableListOf<Int>()
+        /** Rel target → dest file, so reused images share one file. */
+        val imageDestByTarget = mutableMapOf<String, File>()
     }
 
     private data class Para(
@@ -309,13 +361,66 @@ object DocxParser {
                     html.append(' ')
                 }
                 "br" -> html.append("<br/>")
+                "footnoteReference" -> {
+                    val id = (el.getAttribute("w:id").ifEmpty { el.getAttribute("id") })
+                        .toIntOrNull()
+                    val text = id?.let { state.footnoteTexts[it] }
+                    if (id != null && text != null) {
+                        if (!state.referencedFootnotes.contains(id)) {
+                            state.referencedFootnotes += id
+                        }
+                        val num = state.referencedFootnotes.indexOf(id) + 1
+                        html.append("<sup>[").append(num).append("]</sup>")
+                    }
+                }
+                "endnoteReference" -> {
+                    val id = (el.getAttribute("w:id").ifEmpty { el.getAttribute("id") })
+                        .toIntOrNull()
+                    val text = id?.let { state.endnoteTexts[it] }
+                    if (id != null && text != null) {
+                        if (!state.referencedEndnotes.contains(id)) {
+                            state.referencedEndnotes += id
+                        }
+                        val num = state.referencedEndnotes.indexOf(id) + 1
+                        html.append("<sup>[").append(num).append("]</sup>")
+                    }
+                }
                 "drawing", "pict" -> {
                     // Embedded image: blip/imageData r:embed → media file.
                     val embed = findEmbedId(el)
                     val target = embed?.let { state.rels[it] } ?: continue
                     val srcFile = File(state.extractDir, "word/" + target)
                     if (!srcFile.isFile) continue
-                    val dest = File(state.mediaDir, srcFile.name)
+                    // Same basename in different folders must not
+                    // collide: the plain basename is kept (the common
+                    // case, and what existing books already use), but
+                    // when it is already taken by another target, the
+                    // rel target path is folded into the dest name,
+                    // with a numeric suffix for a still-colliding name.
+                    // Reused targets share their dest file.
+                    val dest = state.imageDestByTarget.getOrPut(target) {
+                        val taken = { f: File ->
+                            f.exists() ||
+                                state.imageDestByTarget.values.any { it == f }
+                        }
+                        var candidate = File(state.mediaDir, srcFile.name)
+                        if (taken(candidate)) {
+                            val base = target.replace("../", "").replace('/', '_')
+                                .replace('\\', '_').takeIf { it.isNotBlank() } ?: srcFile.name
+                            candidate = File(state.mediaDir, base)
+                            var n = 2
+                            while (taken(candidate)) {
+                                val stem = base.substringBeforeLast('.')
+                                val ext = base.substringAfterLast('.', "")
+                                candidate = File(
+                                    state.mediaDir,
+                                    if (ext.isNotEmpty()) "$stem-$n.$ext" else "$base-$n"
+                                )
+                                n++
+                            }
+                        }
+                        candidate
+                    }
                     if (!dest.exists()) {
                         runCatching { srcFile.copyTo(dest) }
                     }
@@ -370,11 +475,39 @@ object DocxParser {
                 val ck = cell.childNodes
                 for (k in 0 until ck.length) {
                     val cn = ck.item(k)
-                    if (cn.nodeType != Node.ELEMENT_NODE || localName(cn as Element) != "p") continue
-                    val para = parseParagraph(cn, state)
-                    if (para.html.isNotBlank()) parts += para.html
+                    if (cn.nodeType != Node.ELEMENT_NODE) continue
+                    val cnEl = cn as Element
+                    when (localName(cnEl)) {
+                        "p" -> {
+                            val para = parseParagraph(cnEl, state)
+                            if (para.html.isNotBlank()) parts += para.html
+                        }
+                        // Nested table inside a cell: previously dropped.
+                        "tbl" -> parts += renderTable(cnEl, state)
+                        "sdt" -> {
+                            val content = firstChildElement(cnEl, "sdtContent")
+                            if (content != null) {
+                                val sk = content.childNodes
+                                for (s in 0 until sk.length) {
+                                    val sn = sk.item(s)
+                                    if (sn.nodeType != Node.ELEMENT_NODE ||
+                                        localName(sn as Element) != "p"
+                                    ) continue
+                                    val para = parseParagraph(sn, state)
+                                    if (para.html.isNotBlank()) parts += para.html
+                                }
+                            }
+                        }
+                    }
                 }
-                sb.append("<td>").append(parts.joinToString("<br/>")).append("</td>")
+                val span = firstChildElement(cell, "tcPr")
+                    ?.let { firstChildElement(it, "gridSpan") }
+                    ?.let {
+                        (it.getAttribute("w:val").ifEmpty { it.getAttribute("val") })
+                            .toIntOrNull()
+                    }?.takeIf { it > 1 }
+                sb.append(if (span != null) "<td colspan=\"$span\">" else "<td>")
+                    .append(parts.joinToString("<br/>")).append("</td>")
             }
             sb.append("</tr>")
         }
@@ -515,6 +648,44 @@ object DocxParser {
                 } else if (id.isNotEmpty() && target.isNotEmpty()) {
                     out[id] = target
                 }
+            }
+            out
+        }.getOrDefault(emptyMap())
+    }
+
+    /**
+     * footnote/endnote id → text, from word/footnotes.xml or
+     * word/endnotes.xml. Separator notes (ids used for the rule line)
+     * are skipped. Any failure returns an empty map: notes are
+     * best-effort content, never a reason to fail the whole book.
+     */
+    private fun readNotes(
+        extractDir: File,
+        dbf: DocumentBuilderFactory,
+        fileName: String
+    ): Map<Int, String> {
+        val file = File(extractDir, fileName)
+        if (!file.isFile) return emptyMap()
+        return runCatching {
+            val doc = dbf.newDocumentBuilder().parse(file)
+            val out = mutableMapOf<Int, String>()
+            val kids = doc.documentElement?.childNodes ?: return@runCatching out
+            for (i in 0 until kids.length) {
+                val n = kids.item(i)
+                if (n.nodeType != Node.ELEMENT_NODE) continue
+                val el = n as Element
+                val type = el.getAttribute("w:type").ifEmpty { el.getAttribute("type") }
+                if (type == "separator" || type == "continuationSeparator") continue
+                val id = (el.getAttribute("w:id").ifEmpty { el.getAttribute("id") })
+                    .toIntOrNull() ?: continue
+                val texts = el.getElementsByTagNameNS("*", "t")
+                val parts = mutableListOf<String>()
+                for (j in 0 until texts.length) {
+                    val t = texts.item(j).textContent?.trim()
+                    if (!t.isNullOrEmpty()) parts += t
+                }
+                val text = parts.joinToString(" ").trim()
+                if (text.isNotEmpty()) out[id] = text
             }
             out
         }.getOrDefault(emptyMap())

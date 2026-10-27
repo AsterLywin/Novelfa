@@ -46,11 +46,19 @@ object HtmlText {
             "\\s+on[a-zA-Z]+\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)",
             RegexOption.IGNORE_CASE
         ).replace(out, "")
-        // javascript:/vbscript:/data: URLs in href/src: the reader runs with
-        // JS enabled, so a crafted book could execute script when a link is
-        // tapped. Neuter the attribute (kept as inert data-blocked).
+        // javascript:/vbscript: URLs in href/src, and data: URLs in
+        // href: the reader runs with JS enabled, so a crafted book
+        // could execute script when a link is tapped. Neuter the
+        // attribute (kept as inert data-blocked). data: in src is
+        // NOT neutered anymore: an EPUB chapter's embedded base64
+        // image (data:image/…) is ordinary content, and the old rule
+        // silently stripped every such image from the reader.
         out = Regex(
-            "\\s+(?:href|src|xlink:href)\\s*=\\s*(\"|')\\s*(?:javascript|vbscript|data)\\s*:",
+            "\\s+href\\s*=\\s*(\"|')\\s*(?:javascript|vbscript|data)\\s*:",
+            RegexOption.IGNORE_CASE
+        ).replace(out, " data-blocked=$1")
+        out = Regex(
+            "\\s+(?:src|xlink:href)\\s*=\\s*(\"|')\\s*(?:javascript|vbscript)\\s*:",
             RegexOption.IGNORE_CASE
         ).replace(out, " data-blocked=$1")
         return out

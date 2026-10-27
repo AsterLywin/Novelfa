@@ -25,6 +25,40 @@ object ConvertedBook {
     const val MAX_SECTION_CHARS = 12_000
 
     /**
+     * Sidecar written beside the chapter files: the book title the
+     * parser found (internal metadata, first-line title, …) and the
+     * cover's path relative to [outDir]. Without it, [read] could only
+     * rebuild the title from the file name — so a book whose real
+     * title came from its metadata reverted to its file name on the
+     * second open — and the cover was always lost (null). Old caches
+     * without this file still read fine via the filename fallback.
+     * Line 1 = escaped title, line 2 = escaped relative cover path
+     * (empty when coverless); escaping is backslash + 'n' for newline.
+     */
+    private const val META_FILE_NAME = "book_meta.txt"
+
+    private fun escapeMeta(s: String): String =
+        s.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "")
+
+    private fun unescapeMeta(s: String): String {
+        val sb = StringBuilder()
+        var i = 0
+        while (i < s.length) {
+            if (s[i] == '\\' && i + 1 < s.length && s[i + 1] == 'n') {
+                sb.append('\n')
+                i += 2
+            } else if (s[i] == '\\' && i + 1 < s.length && s[i + 1] == '\\') {
+                sb.append('\\')
+                i += 2
+            } else {
+                sb.append(s[i])
+                i++
+            }
+        }
+        return sb.toString()
+    }
+
+    /**
      * Writes [sections] as `ch0001.xhtml`… into [outDir] (created if
      * needed) and returns the [ParsedBook] the reader consumes. Each file
      * carries its title in a `<title>` element so [read] can rebuild the
@@ -37,6 +71,17 @@ object ConvertedBook {
         coverFile: File? = null
     ): ParsedBook {
         outDir.mkdirs()
+        val coverRelative = coverFile?.let {
+            runCatching { it.relativeTo(outDir).path }.getOrNull()
+        }?.takeIf { rel ->
+            !rel.startsWith(".." + File.separator) && rel != ".."
+        }
+        runCatching {
+            File(outDir, META_FILE_NAME).writeText(
+                escapeMeta(title) + "\n" + escapeMeta(coverRelative ?: ""),
+                Charsets.UTF_8
+            )
+        }
         val chapters = sections.mapIndexed { i, section ->
             // Locale.US: in a Persian locale %d would emit Eastern-Arabic
             // digits, which [read]'s ch\d+ match would then miss.
@@ -67,7 +112,15 @@ object ConvertedBook {
             ?.sortedBy { it.name }
             ?: return null
         if (files.isEmpty()) return null
-        val title = File(fileName).nameWithoutExtension
+        val metaLines = runCatching {
+            File(outDir, META_FILE_NAME).readLines(Charsets.UTF_8)
+        }.getOrNull()
+        val title = metaLines?.getOrNull(0)?.let { unescapeMeta(it) }
+            ?.trim()?.takeIf { it.isNotBlank() }
+            ?: File(fileName).nameWithoutExtension
+        val cover = metaLines?.getOrNull(1)?.let { unescapeMeta(it) }
+            ?.takeIf { it.isNotBlank() }
+            ?.let { File(outDir, it) }?.takeIf { it.isFile }
         val chapters = files.mapIndexed { i, file ->
             val text = runCatching { file.readText(Charsets.UTF_8) }.getOrNull() ?: ""
             val found = Regex("<title>(.*?)</title>", RegexOption.DOT_MATCHES_ALL)
@@ -75,7 +128,7 @@ object ConvertedBook {
                 ?.trim()?.takeIf { it.isNotBlank() }
             Chapter(title = found ?: chapterFallback(i + 1), file = file)
         }
-        return ParsedBook(title = title, chapters = chapters, coverFile = null)
+        return ParsedBook(title = title, chapters = chapters, coverFile = cover)
     }
 
     /**

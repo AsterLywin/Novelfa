@@ -42,11 +42,18 @@ object TextBookParser {
         // Book title: a short first line with no sentence punctuation,
         // followed by a blank line, in a document that has more to say.
         // Anything else keeps the file name (the EPUB parser's fallback).
+        // The title is only claimed when the NEXT block is a heading
+        // (the title-page shape: "My Book" then "فصل ۱"): without that
+        // guard, a book whose first line is simply short — a
+        // dedication, an author line, a one-line opening — had that
+        // line silently deleted from the text. With the guard, such a
+        // line stays in the body and the filename is the title.
         var title = File(fileName).nameWithoutExtension
         var bodyBlocks = blocks
         val first = blocks.first()
         if (blocks.size >= 3 && first.lines().size == 1 && first.length <= 60 &&
-            first.last() !in ".!؟?،؛:" && !isHeading(first)
+            first.last() !in ".!؟?،؛:" && !isHeading(first) &&
+            blocks.getOrNull(1)?.let { isHeading(it) } == true
         ) {
             title = first.trim()
             bodyBlocks = blocks.drop(1)

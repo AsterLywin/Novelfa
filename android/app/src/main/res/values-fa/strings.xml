@@ -241,6 +241,9 @@
     <string name="import_error_pdf_password_required">این PDF رمزدار است. برای ایمپورت، رمزش را وارد کنید.</string>
     <string name="import_error_pdf_password_wrong">رمز اشتباه بود و این PDF ایمپورت نشد.</string>
     <string name="import_error_pdf_unsupported_encryption">این PDF از روش رمزنگاری‌ای استفاده می‌کند که ناول‌فا پشتیبانی نمی‌کند.</string>
+    <string name="import_error_pdf_too_many_pages">تعداد صفحات این PDF برای باز شدن در ناول‌فا بیش از حد است.</string>
+    <string name="reader_font_missing">فونت ذخیره‌شده این کتاب پیدا نشد، پس فونت پیش‌فرض استفاده شد.</string>
+    <string name="link_target_not_found">این لینک به بیرون کتاب اشاره می‌کند و اینجا باز نمی‌شود.</string>
     <string name="collection_name_exists">مجموعه‌ای با این اسم از قبل وجود داره.</string>
     <string name="collection_create_failed">ساخت مجموعه انجام نشد.</string>
     <string name="collection_rename_failed">تغییر نام مجموعه انجام نشد.</string>

@@ -27,6 +27,20 @@ class TextBookParserTest {
     }
 
     @Test
+    fun txt_shortFirstLineBeforeBody_isKeptNotDroppedAsTitle() {
+        val text = "به مادرم\n\nداستان از اینجا شروع می‌شود.\n\nادامه‌ی داستان.\n"
+        val out = tempFolder.newFolder("out-ded")
+        val book = TextBookParser.parseText(
+            text.toByteArray(Charsets.UTF_8), "story.txt", out, ::fallback
+        )
+        // The dedication line is NOT a title page (no heading follows
+        // it), so it must stay in the body, not vanish as a "title".
+        val body = book.chapters.joinToString("") { it.file.readText() }
+        assertTrue(body.contains("به مادرم"))
+        assertEquals("story", book.title)
+    }
+
+    @Test
     fun txt_noHeadings_chunksBySizeWithFallbackTitles() {
         val para = "این یک پاراگراف طولانی است. ".repeat(200)
         val text = (para + "\n\n").repeat(10)

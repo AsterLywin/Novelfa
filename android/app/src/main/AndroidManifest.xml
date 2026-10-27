@@ -41,6 +41,8 @@
                 <data android:pathPattern=".*\\.txt" />
                 <data android:pathPattern=".*\\.md" />
                 <data android:pathPattern=".*\\.markdown" />
+                <data android:pathPattern=".*\\.mdown" />
+                <data android:pathPattern=".*\\.text" />
                 <data android:pathPattern=".*\\.pdf" />
                 <data android:pathPattern=".*\\.docx" />
             </intent-filter>

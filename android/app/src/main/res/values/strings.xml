@@ -241,6 +241,9 @@
     <string name="import_error_pdf_password_required">This PDF is password-protected. Enter its password to import it.</string>
     <string name="import_error_pdf_password_wrong">The password was wrong, so this PDF could not be imported.</string>
     <string name="import_error_pdf_unsupported_encryption">This PDF uses an encryption method Novelfa does not support.</string>
+    <string name="import_error_pdf_too_many_pages">This PDF has too many pages for Novelfa to open.</string>
+    <string name="reader_font_missing">The saved font for this book was not found, so the default font is used.</string>
+    <string name="link_target_not_found">This link points outside the book, so it cannot be opened here.</string>
     <string name="collection_name_exists">A collection with this name already exists.</string>
     <string name="collection_create_failed">Couldn\'t create the collection.</string>
     <string name="collection_rename_failed">Couldn\'t rename the collection.</string>
