@@ -729,6 +729,7 @@ object HtmlBuilder {
         function mkPage() {
             var p = newPageEl();
             p.style.width = Wpx + 'px';
+            p.style.height = Hpx + 'px';
             p.style.left = '0px';
             return p;
         }
@@ -746,6 +747,18 @@ object HtmlBuilder {
         var contentH = Hpx - padT - padB;
         if (contentH < 48) { stageRefused = Wpx + 'x' + Hpx + ' (contentH ' + Math.round(contentH) + ')'; stageNote(); armStageWait(); return; }
         clearStageWait();
+        // Explicit px heights: the pager already sets explicit px WIDTHS
+        // because a shrink-wrapped page measures garbage. Heights had
+        // the same fragility in reverse: they relied on the CSS
+        // containing-block chain (page 100% of strip 100% of chap
+        // inset-0 of viewport), and on the reporting phone that chain
+        // breaks (chapH 0, stripH 0 with a sane 632 window — reproduced
+        // in Chromium by forcing chap+strip static, which yields the
+        // exact same collapse geometry). Pinning every link to Hpx
+        // makes the geometry independent of that chain, whatever broke
+        // it; on a healthy document these equal the CSS values anyway.
+        if (chap) chap.style.height = Hpx + 'px';
+        if (strip) strip.style.height = Hpx + 'px';
 
         strip.innerHTML = '';
         pages = [];
@@ -1194,6 +1207,10 @@ object HtmlBuilder {
                 if (source.parentNode) source.parentNode.removeChild(source);
             }
             if (document.documentElement) document.documentElement.classList.remove('rdr-paged');
+            // The explicit px height from buildPages must not stick to
+            // the restored flow chapter (it would freeze it at one
+            // viewport height instead of flowing naturally).
+            if (chap) chap.style.height = '';
             // Let in-book '#frag' taps fall back to native fragment
             // scrolling in the restored flow document.
             window.rdrGoToAnchor = undefined;
