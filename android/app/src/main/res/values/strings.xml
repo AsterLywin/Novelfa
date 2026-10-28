@@ -148,6 +148,7 @@
 <string name="import_stage_copy">Copying file…</string>
     <string name="import_stage_decrypt">Checking PDF encryption…</string>
     <string name="import_stage_validate">Validating PDF…</string>
+    <string name="reader_convert_progress">Preparing book… %1$d of %2$d pages</string>
     <string name="import_stage_save">Saving book…</string>
         <string name="import_large_files_note">Large files may take a moment; you can stop the import with Cancel.</string>
     <string name="apply_custom_color">Apply</string>

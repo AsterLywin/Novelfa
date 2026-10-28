@@ -88,6 +88,7 @@ import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CacheStamp
 import com.novelfa.reader.parser.ConvertedBook
 import com.novelfa.reader.parser.EpubParser
+import com.novelfa.reader.parser.PdfImageBook
 import com.novelfa.reader.settings.SupportDialog
 import com.novelfa.reader.settings.SupportTracker
 import androidx.compose.foundation.shape.CircleShape
@@ -142,6 +143,12 @@ fun ReaderScreen(
     val prefs = remember(context) { PrefsStore(context.applicationContext) }
 
     var vm by remember { mutableStateOf<ReaderViewModel?>(null) }
+    // Conversion progress for the loading UI: (pages done, pages
+    // total) of the PDF text parse / image preload. Null = nothing
+    // to report (EPUB, cached opens). Only ever moves forward: the
+    // text phase and the render phase each count from zero, and a
+    // backward jump would look like the bar rewinding.
+    var convertProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     // XP flush on reader exit: the close button flushes first and only
     // then navigates home (so the home celebration sees the final unit);
     // system-back/gesture exits hit the DisposableEffect safety net below
@@ -307,7 +314,15 @@ fun ReaderScreen(
         try {
             val entity = withContext(Dispatchers.IO) { dao.getById(bookId) }
                 ?: throw IOException("book not found")
-            val parsed = withContext(Dispatchers.IO) { openParsed(context, entity.filePath, bookId, entity.originalFileName) }
+            val parsed = withContext(Dispatchers.IO) {
+                openParsed(
+                    context, entity.filePath, bookId, entity.originalFileName,
+                    onProgress = { done, total ->
+                        val prev = convertProgress?.first ?: 0
+                        if (done > prev) convertProgress = done to total
+                    }
+                )
+            }
             val store = FontStore(context)
             val files = withContext(Dispatchers.IO) {
                 store.list().filter {
@@ -371,6 +386,25 @@ fun ReaderScreen(
             vm = v
             pageHtml = v.html
             pageBase = v.baseUrl
+            // Background fill for lazily-opened PDFs: the open phase
+            // rendered only the first pages, so the rest render now,
+            // in reading order, while the user reads. This launch is
+            // a child of this LaunchedEffect, so leaving the reader
+            // cancels it; a failure here is best-effort only and must
+            // never surface as an open error after the book already
+            // opened (the next open resumes the fill).
+            if (BookFormat.detect(File(entity.filePath)) == BookFormat.PDF) {
+                launch {
+                    try {
+                        PdfImageBook.renderMissing(
+                            File(entity.filePath),
+                            File(context.filesDir, "epub_open/$bookId")
+                        )
+                    } catch (e: Exception) {
+                        // Best-effort background fill; ignore.
+                    }
+                }
+            }
             // The reader used to fall back to Vazirmatn silently when
             // the book's saved font file was gone (deleted from the
             // font store): the user saw a different font with no
@@ -1295,7 +1329,16 @@ fun ReaderScreen(
                             TextButton(onClick = { closeReader() }) { Text(stringResource(R.string.close)) }
                         }
                     }
-                    pageHtml.isEmpty() -> CircularProgressIndicator()
+                    pageHtml.isEmpty() -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        // A bare spinner cannot tell "slow" from
+                        // "stuck": show the live conversion progress
+                        // whenever the open path reports it.
+                        convertProgress?.let { (done, total) ->
+                            Spacer(Modifier.height(16.dp))
+                            Text(stringResource(R.string.reader_convert_progress, done, total))
+                        }
+                    }
                     else -> ReaderWebView(
                         html = pageHtml,
                         baseUrl = pageBase,
@@ -1906,7 +1949,9 @@ private suspend fun openParsed(
     bookPath: String,
     bookId: String,
     /** Original file name, when known: title fallback instead of the "$uuid.<ext>" storage name. */
-    titleFallback: String? = null
+    titleFallback: String? = null,
+    /** PDF conversion progress for the loading UI: (pages done, pages total). */
+    onProgress: ((Int, Int) -> Unit)? = null
 ): com.novelfa.reader.model.ParsedBook {
     val book = File(bookPath)
     if (!book.exists()) {
@@ -1977,7 +2022,7 @@ private suspend fun openParsed(
         }
         EpubParser.parse(outDir, titleFallback ?: book.name, chapterFallback)
     } else {
-        BookConverter.parse(book, outDir, chapterFallback, titleFallback)
+        BookConverter.parse(book, outDir, chapterFallback, titleFallback, onProgress)
     }
     CacheStamp.writeStamp(outDir, book)
     return parsed

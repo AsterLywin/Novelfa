@@ -149,7 +149,8 @@ object PdfParser {
         outDir: File,
         chapterFallback: (Int) -> String,
         password: String? = null,
-    checkCancelled: (() -> Unit)? = null
+    checkCancelled: (() -> Unit)? = null,
+    onPage: ((Int, Int) -> Unit)? = null
     ): Triple<ParsedBook, List<Boolean>, List<List<String>>> {
         val doc = PdfDoc(bytes, password)
         val pages = doc.pageObjectNumbers()
@@ -171,9 +172,15 @@ object PdfParser {
         // could not interrupt a big text PDF at all — the job was
         // cancelled but the parse ran on to completion regardless.
         val pageParagraphs = mutableListOf<List<String>>()
-        for (num in pages) {
+        for ((idx, num) in pages.withIndex()) {
             checkCancelled?.invoke()
             pageParagraphs += runCatching { doc.pageParagraphs(num) }.getOrDefault(emptyList())
+            // Progress for the reader's loading UI: every 10th page
+            // and the last one, so a long parse does not recompose
+            // the UI once per page.
+            if (idx + 1 == pages.size || (idx + 1) % 10 == 0) {
+                onPage?.invoke(idx + 1, pages.size)
+            }
         }
         val outline = doc.outlineEntries(pages)
         val sections: List<ConvertedBook.Section>

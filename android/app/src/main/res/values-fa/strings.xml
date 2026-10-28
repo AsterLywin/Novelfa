@@ -148,6 +148,7 @@
 <string name="import_stage_copy">در حال کپی فایل…</string>
     <string name="import_stage_decrypt">در حال بررسی رمز PDF…</string>
     <string name="import_stage_validate">در حال اعتبارسنجی PDF…</string>
+    <string name="reader_convert_progress">در حال آماده‌سازی کتاب… %1$d از %2$d صفحه</string>
     <string name="import_stage_save">در حال ذخیره کتاب…</string>
         <string name="import_large_files_note">برای فایل‌های بزرگ ممکن است کمی طول بکشد؛ با «انصراف» می‌توانید ایمپورت را متوقف کنید.</string>
     <string name="apply_custom_color">اعمال</string>

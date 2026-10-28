@@ -30,6 +30,15 @@ object PdfImageBook {
 
     /** Image rendering is bounded: beyond this the import fails cleanly. */
     const val MAX_IMAGE_PAGES = 1000
+    /**
+     * Pages rendered before the reader opens (the ReadEra rule: the
+     * first pages must be readable in seconds, not after the whole
+     * book renders). The rest render in the background while the
+     * user reads ([renderMissing], launched by the reader); reading
+     * speed is far slower than rendering speed, so the background
+     * pass normally stays ahead of the reader.
+     */
+    const val OPEN_PRELOAD_PAGES = 20
     const val RENDER_WIDTH = 1440
     const val JPEG_QUALITY = 85
     private const val MAX_RENDER_HEIGHT = 8192
@@ -52,14 +61,57 @@ object PdfImageBook {
     }
 
     /**
-     * Renders every page of [pdfFile] into `outDir/media/` and returns
-     * the image book. The file must already be decrypted (the importer
-     * stores password PDFs decrypted; the platform renderer cannot open
-     * encrypted files at all).
+     * Builds the image book for [pdfFile]: sections for EVERY page are
+     * written at once (cheap HTML), but only the first
+     * [OPEN_PRELOAD_PAGES] pages are rendered before returning — that
+     * is what makes the reader open in seconds instead of after a
+     * minutes-long full render behind a bare spinner. The remaining
+     * pages render in the background via [renderMissing]. The file
+     * must already be decrypted (the importer stores password PDFs
+     * decrypted; the platform renderer cannot open encrypted files
+     * at all). The 1000-page cap keeps its old meaning: a book over
+     * it still fails here instead of opening half-rendered.
      */
-    suspend fun render(pdfFile: File, outDir: File, title: String): ParsedBook {
-        val count = renderPages(pdfFile, outDir, null)
+    suspend fun render(
+        pdfFile: File,
+        outDir: File,
+        title: String,
+        onProgress: ((Int, Int) -> Unit)? = null
+    ): ParsedBook {
+        val count = renderPages(pdfFile, outDir, null, onProgress, OPEN_PRELOAD_PAGES)
         return ConvertedBook.write(outDir, title, buildSections(title, count))
+    }
+
+    /**
+     * Renders every page image the chapter files reference but whose
+     * file does not exist yet, in reading order, skipping pages past
+     * [MAX_IMAGE_PAGES]. The reader launches this in the background
+     * right after opening (and on every later open, resuming where a
+     * previous session stopped): it is how a lazily-opened book
+     * becomes complete without blocking the first page. Returns how
+     * many pages it rendered; 0 when nothing was missing. Pure
+     * file-existence work when the book is already complete, so
+     * re-opens stay cheap.
+     */
+    suspend fun renderMissing(pdfFile: File, outDir: File): Int {
+        val refs = mutableSetOf<Int>()
+        val refRegex = Regex("""media/page-(\d+)\.jpg""")
+        outDir.listFiles()
+            ?.filter { it.isFile && it.name.matches(Regex("""ch\d+\.xhtml""")) }
+            ?.forEach { chapter ->
+                val text = runCatching { chapter.readText(Charsets.UTF_8) }.getOrNull()
+                    ?: return@forEach
+                refRegex.findAll(text).forEach { m ->
+                    (m.groupValues[1].toIntOrNull()?.minus(1))?.let { refs += it }
+                }
+            }
+        if (refs.isEmpty()) return 0
+        val mediaDir = File(outDir, "media")
+        val missing = refs.filter { it < MAX_IMAGE_PAGES && !File(mediaDir, fileNameFor(it)).isFile }
+            .sorted()
+        if (missing.isEmpty()) return 0
+        renderPages(pdfFile, outDir, missing)
+        return missing.size
     }
 
     /**
@@ -83,19 +135,43 @@ object PdfImageBook {
      * phone, and small renders stay sequential to avoid thread
      * overhead. Validation and output files are unchanged.
      */
-    suspend fun renderPages(pdfFile: File, outDir: File, indices: List<Int>?): Int {
+    suspend fun renderPages(
+        pdfFile: File,
+        outDir: File,
+        indices: List<Int>?,
+        // Progress for the reader's loading UI: (pages rendered in
+        // this call, total pages in the PDF). Throttled to every 10th
+        // page and the last one, so a 1000-page render does not
+        // recompose the UI a thousand times. Invoked from worker
+        // threads on the parallel path; the UI only ever moves it
+        // forward, so out-of-order reports are harmless.
+        onProgress: ((Int, Int) -> Unit)? = null,
+        // When set with indices == null, renders only the first
+        // [limit] pages instead of the whole book (the open-phase
+        // preload); the cap check below is then the caller's job.
+        limit: Int? = null
+    ): Int {
         val count = ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
             PdfRenderer(pfd).use { it.pageCount }
         }
         if (count <= 0) throw IllegalArgumentException("PDF has no pages")
+        // The cap applies to the whole book even on a preload call:
+        // a 2000-page scan must still fail here (as before) instead
+        // of opening after 20 wasted renders.
         if (indices == null && count > MAX_IMAGE_PAGES) {
             throw IllegalArgumentException("PDF has too many pages for image rendering")
         }
-        val wanted = indices ?: (0 until count).toList()
+        val wanted = (indices ?: (0 until count).toList())
+            .let { if (limit != null) it.take(limit) else it }
         if (wanted.any { it < 0 || it >= count }) {
             throw IllegalArgumentException("PDF page index out of range")
         }
         val mediaDir = File(outDir, "media").apply { mkdirs() }
+        val done = java.util.concurrent.atomic.AtomicInteger(0)
+        fun report() {
+            val d = done.get()
+            if (d == wanted.size || d % 10 == 0) onProgress?.invoke(d, count)
+        }
         val workers = minOf(3, Runtime.getRuntime().availableProcessors(), wanted.size)
         if (workers <= 1) {
             ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
@@ -106,6 +182,8 @@ object PdfImageBook {
                         // between pages must not ignore Cancel.
                         currentCoroutineContext().ensureActive()
                         renderOne(renderer, i, mediaDir)
+                        done.incrementAndGet()
+                        report()
                     }
                 }
             }
@@ -128,7 +206,11 @@ object PdfImageBook {
                         pdfFile, ParcelFileDescriptor.MODE_READ_ONLY
                     ).use { pfd ->
                         PdfRenderer(pfd).use { renderer ->
-                            for (i in part) renderOne(renderer, i, mediaDir)
+                            for (i in part) {
+                                renderOne(renderer, i, mediaDir)
+                                done.incrementAndGet()
+                                report()
+                            }
                         }
                     }
                 })

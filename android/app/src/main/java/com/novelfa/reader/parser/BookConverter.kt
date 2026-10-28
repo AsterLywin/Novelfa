@@ -28,7 +28,11 @@ object BookConverter {
          * (importer, reader open path) must pass it; the default keeps
          * the old behaviour for callers that don't.
          */
-        titleFallback: String? = null
+        titleFallback: String? = null,
+        // Progress for the reader's loading UI: (pages done, pages
+        // total) of the PDF text parse / image render. Other formats
+        // convert fast enough not to need it; PDF is the slow one.
+        onProgress: ((Int, Int) -> Unit)? = null
     ): ParsedBook {
         val fallbackName = titleFallback?.takeIf { it.isNotBlank() } ?: source.name
         return when (BookFormat.detect(source)) {
@@ -38,7 +42,7 @@ object BookConverter {
             BookFormat.MARKDOWN -> TextBookParser.parseMarkdown(
                 source.readBytes(), fallbackName, outDir, chapterFallback
             )
-            BookFormat.PDF -> parsePdf(source, outDir, chapterFallback, fallbackName)
+            BookFormat.PDF -> parsePdf(source, outDir, chapterFallback, fallbackName, onProgress)
             BookFormat.DOCX -> DocxParser.parseFile(source, outDir, chapterFallback, fallbackName)
             else -> throw IllegalArgumentException(
                 "Unsupported book format: ${source.name}"
@@ -62,7 +66,8 @@ object BookConverter {
         source: File,
         outDir: File,
         chapterFallback: (Int) -> String,
-        fallbackName: String
+        fallbackName: String,
+        onProgress: ((Int, Int) -> Unit)? = null
     ): ParsedBook {
         // Cancellation hook for the blocking text parse (see PdfParser):
         // without it, Cancel could not interrupt a big text PDF. The
@@ -71,7 +76,7 @@ object BookConverter {
         val ctx = currentCoroutineContext()
         val cancelCheck = { ctx.ensureActive() }
         val text = runCatching {
-            PdfParser.parseDetailed(source.readBytes(), fallbackName, outDir, chapterFallback, null, cancelCheck)
+            PdfParser.parseDetailed(source.readBytes(), fallbackName, outDir, chapterFallback, null, cancelCheck, onProgress)
         }
         if (text.isSuccess) {
             val (parsed, hasText, pageTexts) = text.getOrThrow()
@@ -91,7 +96,8 @@ object BookConverter {
                 if (imagePages.size > PdfImageBook.MAX_IMAGE_PAGES) return parsed
                 try {
                     return buildMixedPdf(
-                        source, outDir, parsed.title, hasText, pageTexts, chapterFallback
+                        source, outDir, parsed.title, hasText, pageTexts, chapterFallback,
+                        onProgress
                     )
                 } catch (e: Exception) {
                     // A failed mixed build must not lose the text book
@@ -115,7 +121,7 @@ object BookConverter {
         }
         val title = text.getOrNull()?.first?.title ?: File(fallbackName).nameWithoutExtension
         try {
-            return PdfImageBook.render(source, outDir, title)
+            return PdfImageBook.render(source, outDir, title, onProgress)
         } catch (renderErr: Exception) {
             throw text.exceptionOrNull() ?: renderErr
         }
@@ -127,7 +133,8 @@ object BookConverter {
         title: String,
         hasText: List<Boolean>,
         pageTexts: List<List<String>>,
-        chapterFallback: (Int) -> String
+        chapterFallback: (Int) -> String,
+        onProgress: ((Int, Int) -> Unit)? = null
     ): ParsedBook {
         // The text parse above already wrote chapter files into
         // outDir; the mixed build replaces them, so stale chapters
@@ -138,7 +145,13 @@ object BookConverter {
             ?.forEach { it.delete() }
         val imagePages = hasText.withIndex().filter { !it.value }.map { it.index }
         if (imagePages.isNotEmpty()) {
-            PdfImageBook.renderPages(source, outDir, imagePages)
+            // Open-phase preload only (first 20 image pages); the
+            // reader's background pass renders the rest while the
+            // user reads, exactly like the fully-scanned path.
+            PdfImageBook.renderPages(
+                source, outDir,
+                imagePages.take(PdfImageBook.OPEN_PRELOAD_PAGES), onProgress
+            )
         }
         val sections = mutableListOf<ConvertedBook.Section>()
         var textBody = StringBuilder()
