@@ -145,6 +145,7 @@
     <string name="import_summary_failed">%1$d failed</string>
     <string name="import_summary_restored">Progress restored for %1$d</string>
     <string name="import_in_progress">Importing book…</string>
+    <string name="import_large_files_note">Large files may take a moment; you can stop the import with Cancel.</string>
     <string name="apply_custom_color">Apply</string>
     <string name="invalid_hex">Invalid color code</string>
     <string name="pick_this_color">Use this color</string>

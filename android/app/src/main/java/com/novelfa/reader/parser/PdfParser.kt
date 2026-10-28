@@ -1942,12 +1942,28 @@ object PdfParser {
                                     items += tok
                                     i = next
                                 } else break
+                            } else if (content[i] == '/') {
+                                // Names can appear inside arrays (marked
+                                // content, pattern operands): same token
+                                // as at the top level, not an empty word.
+                                var j = i + 1
+                                while (j < content.length && !isDelim(content[j])) j++
+                                items += Token.Name(content.substring(i + 1, j))
+                                i = j
+                            } else if (content[i] == '%') {
+                                // Comments can appear inside arrays too.
+                                while (i < content.length && content[i] != '\n') i++
                             } else {
                                 var j = i
                                 while (j < content.length && !isDelim(content[j])) j++
                                 val word = content.substring(i, j)
                                 word.toDoubleOrNull()?.let { items += Token.Number(it) }
-                                i = j
+                                // A stray delimiter (')', '{', '}', ...)
+                                // yields an EMPTY word; without this
+                                // guard i never advances, the tokenizer
+                                // spins forever, and the import dialog
+                                // stays up for eternity.
+                                i = if (j > i) j else i + 1
                             }
                         }
                         out += Token.Arr(items)

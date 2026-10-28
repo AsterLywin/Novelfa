@@ -146,6 +146,20 @@ class PdfParserTest {
         assertTrue(body.contains("Hel lo World"))
     }
 
+    @Test(timeout = 15000)
+    fun tjArray_strayNameAndComment_terminatesAndExtracts() {
+        // Regression: a name or comment inside a [...] array used to
+        // yield an empty word that never advanced the tokenizer, so
+        // the whole PDF import hung forever behind the import dialog.
+        val content = ("BT /F1 12 Tf [(Hel) /SomeName % a comment\n (lo)] TJ ET")
+            .toByteArray(Charsets.ISO_8859_1)
+        val pdf = twoPagePdf(content, outline = false)
+        val out = tempFolder.newFolder("out")
+        val book = PdfParser.parse(pdf, "book.pdf", out, ::fallback)
+        val body = book.chapters.joinToString("") { it.file.readText() }
+        assertTrue(body.contains("Hello"))
+    }
+
     @Test
     fun encryptedPdf_danglingEncryptRef_unsupported() {
         // A trailer claiming /Encrypt whose dict object does not exist

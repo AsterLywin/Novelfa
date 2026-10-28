@@ -142,6 +142,8 @@ import com.novelfa.reader.theme.RanksDialog
 import com.novelfa.reader.theme.StarRow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -325,6 +327,11 @@ fun LibraryScreen(
     // below stays up until importUris finishes (success or failure),
     // and its scrim also blocks a second tap / tab switch mid-import.
     var isImporting by remember { mutableStateOf(false) }
+    // The running import job, so the progress dialog's Cancel button
+    // can actually stop it: before this, a hung import (e.g. a PDF
+    // whose tokenizer never advanced) left a non-dismissible dialog
+    // up forever with no way out.
+    var importJob by remember { mutableStateOf<Job?>(null) }
     var pendingDuplicateNames by remember { mutableStateOf<List<String>>(emptyList()) }
     // Encrypted-PDF password prompt (also covers the ACTION_VIEW path,
     // which funnels through importUris below).
@@ -345,6 +352,7 @@ fun LibraryScreen(
             return "$base ($shown)"
         }
         isImporting = true
+        importJob = currentCoroutineContext()[Job]
         try {
             val summary = viewModel.importMultiple(uris, passwordProvider = pdfPasswordPrompt.provider)
             // If duplicates found, ask for confirmation instead of silently skipping
@@ -383,6 +391,7 @@ fun LibraryScreen(
                 context.getString(R.string.import_error_not_valid_epub) + "\n" + detail
             )
         } finally {
+            importJob = null
             isImporting = false
         }
     }
@@ -397,14 +406,24 @@ fun LibraryScreen(
     val launchImport = { picker.launch(SUPPORTED_BOOK_MIME_TYPES) }
 
     if (isImporting) {
+        // Standard Material3 progress dialog: title, indeterminate
+        // progress, an explanatory note, and a working Cancel — the
+        // old one was a bare spinner row with an empty confirm slot
+        // and no way out at all.
         AlertDialog(
             onDismissRequest = {},
-            confirmButton = {},
+            title = { Text(stringResource(R.string.import_in_progress)) },
             text = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.width(16.dp))
-                    Text(stringResource(R.string.import_in_progress))
+                Column {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(16.dp))
+                    Text(stringResource(R.string.import_large_files_note))
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { importJob?.cancel() }) {
+                    Text(stringResource(R.string.cancel))
                 }
             }
         )
@@ -416,8 +435,13 @@ fun LibraryScreen(
     // in-flight import.
     LaunchedEffect(pendingImportUri) {
         val uri = pendingImportUri ?: return@LaunchedEffect
-        importUris(listOf(uri))
-        onImportUriConsumed()
+        try {
+            importUris(listOf(uri))
+        } finally {
+            // Consume even on cancel, or the pending URI would
+            // re-import on the next composition (e.g. rotation).
+            onImportUriConsumed()
+        }
     }
 
     val pinManager = viewModel.pinGate as? PinManager

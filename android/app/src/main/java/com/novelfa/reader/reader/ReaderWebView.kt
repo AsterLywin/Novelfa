@@ -292,6 +292,27 @@ fun ReaderWebView(
                             val cssX = (e.x / density).toInt()
                             val cssY = (e.y / density).toInt()
                             Log.d("NovelfaTouch", "tap x=${e.x} w=$w zone=$zone css=$cssX,$cssY")
+                            // The listener deliberately does NOT consume
+                            // ACTION_DOWN (tall-page scrolling needs
+                            // it), and this tap consumes ACTION_UP — so
+                            // without a cancel the WebView is left with
+                            // a DOWN and no UP, and its long-press
+                            // timer turns that dangling gesture into a
+                            // text SELECTION on the page the turn just
+                            // revealed (same coordinates, new content).
+                            // A synthetic CANCEL, fed straight to the
+                            // WebView's own handler (bypassing this
+                            // listener, so no recursion), ends its
+                            // gesture cleanly; the turn itself is
+                            // programmatic and unaffected. Swipes never
+                            // showed this because their UP reaches the
+                            // WebView normally.
+                            val cancel = MotionEvent.obtain(
+                                e.downTime, e.eventTime,
+                                MotionEvent.ACTION_CANCEL, e.x, e.y, 0
+                            )
+                            host.onTouchEvent(cancel)
+                            cancel.recycle()
                             host.evaluateJavascript(
                                 "(function(){var el=document.elementFromPoint($cssX,$cssY);" +
                                     "if(!el) return 'none';" +

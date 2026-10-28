@@ -151,8 +151,11 @@ fun SettingsRoute(
 
 /** Support prompt dialog (fa text from the Task 4 map). WPF parity:
  * the Windows SupportToast is a clickable pill opening
- * Daramet.com/NovelFa, so this dialog gets the same donate action
- * instead of thank-you text with no way to act on it. */
+ * Daramet.com/NovelFa, so this dialog's affirmative action opens the
+ * same link. The old wiring had it backwards: «باشه» only dismissed
+ * and the link hid behind «دونیت», so tapping «باشه» — the button
+ * anyone taps first — did nothing at all, while About's link row
+ * (same Intent) worked fine. */
 @Composable
 fun SupportDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
@@ -161,18 +164,18 @@ fun SupportDialog(onDismiss: () -> Unit) {
         title = { Text(stringResource(R.string.support_novelfa)) },
         text = { Text(stringResource(R.string.thank_you_from_the_bottom_of_our_hearts_for_helping_our)) },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.ok_2))
-            }
-        },
-        dismissButton = {
             TextButton(onClick = {
                 context.startActivity(
                     Intent(Intent.ACTION_VIEW, Uri.parse("http://Daramet.com/NovelFa"))
                 )
                 onDismiss()
             }) {
-                Text(stringResource(R.string.link_donate))
+                Text(stringResource(R.string.ok_2))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.close))
             }
         }
     )
