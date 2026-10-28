@@ -6,6 +6,10 @@ import android.os.ParcelFileDescriptor
 import com.novelfa.reader.model.ParsedBook
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * ComicScreen-style image fallback for PDFs with no extractable text
@@ -53,7 +57,7 @@ object PdfImageBook {
      * stores password PDFs decrypted; the platform renderer cannot open
      * encrypted files at all).
      */
-    fun render(pdfFile: File, outDir: File, title: String): ParsedBook {
+    suspend fun render(pdfFile: File, outDir: File, title: String): ParsedBook {
         val count = renderPages(pdfFile, outDir, null)
         return ConvertedBook.write(outDir, title, buildSections(title, count))
     }
@@ -79,7 +83,7 @@ object PdfImageBook {
      * phone, and small renders stay sequential to avoid thread
      * overhead. Validation and output files are unchanged.
      */
-    fun renderPages(pdfFile: File, outDir: File, indices: List<Int>?): Int {
+    suspend fun renderPages(pdfFile: File, outDir: File, indices: List<Int>?): Int {
         val count = ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
             PdfRenderer(pfd).use { it.pageCount }
         }
@@ -96,7 +100,13 @@ object PdfImageBook {
         if (workers <= 1) {
             ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
                 PdfRenderer(pfd).use { renderer ->
-                    for (i in wanted) renderOne(renderer, i, mediaDir)
+                    for (i in wanted) {
+                        // Cancellation lands between pages: a native
+                        // render is uninterruptible, but the wait
+                        // between pages must not ignore Cancel.
+                        currentCoroutineContext().ensureActive()
+                        renderOne(renderer, i, mediaDir)
+                    }
                 }
             }
             return count
@@ -124,13 +134,25 @@ object PdfImageBook {
                 })
             }
             for (f in futures) {
-                try {
-                    f.get()
-                } catch (e: java.util.concurrent.ExecutionException) {
-                    // Surface the worker's own failure (a bad page),
-                    // not the wrapper, so the caller's error reporting
-                    // stays exactly what the sequential path produced.
-                    throw (e.cause as? Exception) ?: e
+                // A bare f.get() is a blocking wait: coroutine
+                // cancellation cannot reach it, so the import dialog's
+                // Cancel button looked dead for the whole render of a
+                // big scanned book. Poll with a short timeout and let
+                // cancellation land between polls; the finally below
+                // shuts the pool down, stopping the workers.
+                while (true) {
+                    try {
+                        f.get(100, TimeUnit.MILLISECONDS)
+                        break
+                    } catch (e: TimeoutException) {
+                        currentCoroutineContext().ensureActive()
+                    } catch (e: java.util.concurrent.ExecutionException) {
+                        // Surface the worker's own failure (a bad
+                        // page), not the wrapper, so the caller's
+                        // error reporting stays exactly what the
+                        // sequential path produced.
+                        throw (e.cause as? Exception) ?: e
+                    }
                 }
             }
         } finally {

@@ -1901,7 +1901,7 @@ private fun SpacingDialog(
  * time, so the first open is normally a cache hit, not a re-parse.
  */
 @Throws(IOException::class)
-private fun openParsed(
+private suspend fun openParsed(
     context: Context,
     bookPath: String,
     bookId: String,

@@ -13,7 +13,7 @@ import java.io.File
  */
 object BookConverter {
 
-    fun parse(
+    suspend fun parse(
         source: File,
         outDir: File,
         chapterFallback: (Int) -> String,
@@ -56,7 +56,7 @@ object BookConverter {
      * as an image failure. If rendering also fails, the original text
      * error (when there is one) is the honest one to report.
      */
-    private fun parsePdf(
+    private suspend fun parsePdf(
         source: File,
         outDir: File,
         chapterFallback: (Int) -> String,
@@ -113,7 +113,7 @@ object BookConverter {
         }
     }
 
-    private fun buildMixedPdf(
+    private suspend fun buildMixedPdf(
         source: File,
         outDir: File,
         title: String,

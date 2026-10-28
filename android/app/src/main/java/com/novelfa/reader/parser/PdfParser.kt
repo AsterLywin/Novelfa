@@ -157,7 +157,15 @@ object PdfParser {
         if (pages.size > MAX_PAGES) {
             throw IllegalArgumentException("PDF has too many pages")
         }
-        val pageParagraphs = pages.map { doc.pageParagraphs(it) }
+        // ReadEra's per-page failure rule, adapted: one pathological
+        // page must never kill the whole book. A page that throws
+        // becomes a text-less page (the mixed path then renders it
+        // as an image, exactly like a scanned page) instead of the
+        // entire text parse collapsing into the full-image fallback
+        // or failing the import outright.
+        val pageParagraphs = pages.map {
+            runCatching { doc.pageParagraphs(it) }.getOrDefault(emptyList())
+        }
         val outline = doc.outlineEntries(pages)
         val sections: List<ConvertedBook.Section>
         if (outline.size >= 2) {

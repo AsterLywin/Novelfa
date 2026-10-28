@@ -161,6 +161,34 @@ class PdfParserTest {
     }
 
     @Test
+    fun halfBrokenPdf_badPage_doesNotKillBook() {
+        // One page whose content object does not exist at all: the
+        // book must still import with the good page's text, and the
+        // bad page must read as text-less (the mixed path renders
+        // such pages as images) instead of failing the whole parse.
+        val good = "BT /F1 12 Tf (Good page) Tj ET".toByteArray(Charsets.ISO_8859_1)
+        val pdf = buildPdf(
+            mapOf(
+                1 to "<< /Type /Catalog /Pages 2 0 R >>".toByteArray(Charsets.ISO_8859_1),
+                2 to "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".toByteArray(Charsets.ISO_8859_1),
+                3 to ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] " +
+                    "/Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>").toByteArray(Charsets.ISO_8859_1),
+                4 to ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] " +
+                    "/Resources << /Font << /F1 5 0 R >> >> /Contents 99 0 R >>").toByteArray(Charsets.ISO_8859_1),
+                5 to ("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica " +
+                    "/Encoding /WinAnsiEncoding >>").toByteArray(Charsets.ISO_8859_1),
+                6 to streamObj("<< /Length ${good.size} >>", good)
+            )
+        )
+        val out = tempFolder.newFolder("out")
+        val (parsed, hasText, pageTexts) = PdfParser.parseDetailed(pdf, "book.pdf", out, ::fallback)
+        assertEquals(listOf(true, false), hasText)
+        assertTrue(pageTexts[0].joinToString("").contains("Good page"))
+        assertTrue(pageTexts[1].isEmpty())
+        assertTrue(parsed.chapters.isNotEmpty())
+    }
+
+    @Test
     fun encryptedPdf_danglingEncryptRef_unsupported() {
         // A trailer claiming /Encrypt whose dict object does not exist
         // is malformed encryption, not an unencrypted file.
