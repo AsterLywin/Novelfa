@@ -210,7 +210,8 @@ class LibraryViewModel(
     suspend fun importMultiple(
         uris: List<Uri>,
         overwriteDuplicates: Boolean = false,
-        passwordProvider: PdfPasswordProvider? = null
+        passwordProvider: PdfPasswordProvider? = null,
+        onStage: ((String?) -> Unit)? = null
     ): ImportSummary {
         val imp = requireNotNull(importer) { "Importer not provided" }
         val existingBooks = dao.allBooks().first()
@@ -299,7 +300,8 @@ class LibraryViewModel(
                 val newId = imp.importBook(
                     uri,
                     overwrite = overwriteDuplicates,
-                    passwordProvider = passwordProvider
+                    passwordProvider = passwordProvider,
+                    onStage = onStage
                 )
                 added++
                 if (imp.applyReadingRecord(newId)) restored++

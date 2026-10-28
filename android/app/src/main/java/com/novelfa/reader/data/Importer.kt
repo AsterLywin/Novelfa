@@ -25,6 +25,8 @@ import java.util.zip.ZipException
 import java.util.zip.ZipFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /**
@@ -110,8 +112,19 @@ class Importer(private val context: Context, private val db: ReaderDb) {
     suspend fun importBook(
         sourceUri: Uri,
         overwrite: Boolean = false,
-        passwordProvider: PdfPasswordProvider? = null
+        passwordProvider: PdfPasswordProvider? = null,
+        // Stage reporter for the import dialog (null = no reporting):
+        // the dialog shows which step a stuck import sits in, so a
+        // "never finishes" report names the step instead of guessing.
+        // Values: "copy", "decrypt", "validate", "save"; null resets.
+        onStage: ((String?) -> Unit)? = null
     ): String = withContext(Dispatchers.IO) {
+        // Captured once: the blocking steps below (file copy, native
+        // open, hashing) have no suspension point, so without an
+        // explicit check the dialog's Cancel could not interrupt them
+        // at all — the job was cancelled but the work ran on.
+        val ioCtx = currentCoroutineContext()
+        onStage?.invoke(null)
         // When overwriting, find and delete the existing book with the same
         // original file name first.
         if (overwrite) {
@@ -149,15 +162,28 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             )
         }
         try {
+            onStage?.invoke("copy")
             context.contentResolver.openInputStream(sourceUri)?.use { input ->
                 tmpDest.outputStream().use { output ->
                     // Cap the copy even when the provider didn't report a size:
                     // copyTo with a byte budget instead of unbounded.
                     var remaining = MAX_BOOK_BYTES
+                    var zeroReads = 0
                     val buf = ByteArray(8192)
                     while (true) {
+                        ioCtx.ensureActive()
                         val n = input.read(buf)
                         if (n < 0) break
+                        if (n == 0) {
+                            // A provider that returns 0 forever (never
+                            // data, never EOF) used to spin this loop
+                            // eternally with no progress at all.
+                            if (++zeroReads > 10000) {
+                                throw IOException("stalled input stream: $sourceUri")
+                            }
+                            continue
+                        }
+                        zeroReads = 0
                         remaining -= n
                         if (remaining < 0) {
                             throw ImportException(
@@ -223,10 +249,14 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 // resolvePdfDecryption): the reader then opens them
                 // like any plain PDF, and the password itself is
                 // never stored.
+                ioCtx.ensureActive()
+                onStage?.invoke("decrypt")
                 val decrypted = resolvePdfDecryption(
                     destFile.readBytes(), displayName, passwordProvider
                 )
                 if (decrypted != null) destFile.writeBytes(decrypted)
+                ioCtx.ensureActive()
+                onStage?.invoke("validate")
                 pdfPageCountOrThrow(destFile, displayName)
                 // A re-imported file keeps its saved position: the
                 // record is keyed by content hash, and the same
@@ -265,6 +295,8 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     messageFa = context.getString(R.string.import_error_no_readable_sections)
                 )
             }
+            ioCtx.ensureActive()
+            onStage?.invoke("save")
             // Belt and braces on top of the titleFallback above: a
             // parser must never store the storage UUID as the book
             // title when the original file name is known. The generated
@@ -494,11 +526,16 @@ class Importer(private val context: Context, private val db: ReaderDb) {
      * name is not. Never loads the file into memory.
      */
     suspend fun sha256OfUri(uri: Uri): String? = withContext(Dispatchers.IO) {
+        // Captured for the same reason as in importBook: this hash
+        // re-reads the whole picked file, and its loop must notice
+        // Cancel instead of running to completion regardless.
+        val ioCtx = currentCoroutineContext()
         runCatching {
             val digest = MessageDigest.getInstance("SHA-256")
             context.contentResolver.openInputStream(uri)?.use { input ->
                 val buf = ByteArray(8192)
                 while (true) {
+                    ioCtx.ensureActive()
                     val n = input.read(buf)
                     if (n < 0) break
                     digest.update(buf, 0, n)

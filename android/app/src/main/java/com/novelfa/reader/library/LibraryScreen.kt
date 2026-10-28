@@ -332,6 +332,11 @@ fun LibraryScreen(
     // whose tokenizer never advanced) left a non-dismissible dialog
     // up forever with no way out.
     var importJob by remember { mutableStateOf<Job?>(null) }
+    // Current import stage for the progress dialog ("copy", "decrypt",
+    // "validate", "save"; null = no stage to show). Set by importBook
+    // through importMultiple; a stuck import's screenshot names the
+    // exact step it sits in.
+    var importStage by remember { mutableStateOf<String?>(null) }
     var pendingDuplicateNames by remember { mutableStateOf<List<String>>(emptyList()) }
     // Encrypted-PDF password prompt (also covers the ACTION_VIEW path,
     // which funnels through importUris below).
@@ -352,9 +357,14 @@ fun LibraryScreen(
             return "$base ($shown)"
         }
         isImporting = true
+        importStage = null
         importJob = currentCoroutineContext()[Job]
         try {
-            val summary = viewModel.importMultiple(uris, passwordProvider = pdfPasswordPrompt.provider)
+            val summary = viewModel.importMultiple(
+                uris,
+                passwordProvider = pdfPasswordPrompt.provider,
+                onStage = { importStage = it }
+            )
             // If duplicates found, ask for confirmation instead of silently skipping
             if (summary.duplicates > 0 && summary.duplicateUris.isNotEmpty()) {
                 pendingDuplicates = summary.duplicateUris
@@ -392,6 +402,7 @@ fun LibraryScreen(
             )
         } finally {
             importJob = null
+            importStage = null
             isImporting = false
         }
     }
@@ -417,6 +428,19 @@ fun LibraryScreen(
                 Column {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(16.dp))
+                    // The live stage, when the importer reports one:
+                    // a stuck import's screenshot names its step.
+                    val stageText = when (importStage) {
+                        "copy" -> stringResource(R.string.import_stage_copy)
+                        "decrypt" -> stringResource(R.string.import_stage_decrypt)
+                        "validate" -> stringResource(R.string.import_stage_validate)
+                        "save" -> stringResource(R.string.import_stage_save)
+                        else -> null
+                    }
+                    if (stageText != null) {
+                        Text(stageText)
+                        Spacer(Modifier.height(8.dp))
+                    }
                     Text(stringResource(R.string.import_large_files_note))
                 }
             },
