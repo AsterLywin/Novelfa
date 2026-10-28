@@ -1,10 +1,13 @@
 package com.novelfa.reader.data
 
 import android.content.Context
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.util.Log
 import com.novelfa.reader.R
+import com.novelfa.reader.model.ParsedBook
 import com.novelfa.reader.parser.BookConverter
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CacheStamp
@@ -133,6 +136,9 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         // Assigned inside the try (extension known only after sniffing);
         // the failure paths below delete whichever file got created.
         var dest: File? = null
+        // Lazy-PDF chapter count from a saved reading record, when
+        // one exists for this exact content (see the PDF branch).
+        var recordChapters: Int? = null
         // Fail fast on absurd picks instead of filling internal storage with
         // the unbounded SAF copy below.
         val pickedSize = queryDisplaySize(sourceUri)
@@ -193,22 +199,51 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 unzip(destFile, openCacheDir)
                 EpubParser.parse(openCacheDir, displayName, chapterFallback)
             } else if (format == BookFormat.PDF) {
+                // LAZY import (the ReadEra/ComicScreen rule): import
+                // time must not grow with the book. The old path ran
+                // the full text extraction (every page) and, for
+                // scanned books, rendered every page to JPEG here —
+                // on a phone that is minutes for a big PDF, which is
+                // exactly the "import never finishes" users report,
+                // and the Cancel button could not interrupt the
+                // blocking parse at all (no suspension point inside
+                // it). Now import only:
+                //  - decrypts when needed (fast crypto; the reader
+                //    opens the stored file like any plain PDF after),
+                //  - validates with a cheap native open (PdfRenderer
+                //    page count — Pdfium, full spec), failing fast
+                //    on files it cannot open,
+                // and defers extraction + rendering to first open:
+                // openParsed re-parses on a missing cache stamp, and
+                // the first progress save persists the real chapter
+                // count to the row. The book is in the library in
+                // seconds; the first open pays the conversion cost
+                // behind the reader's loading indicator instead.
                 // Password-protected PDFs are stored DECRYPTED (see
-                // resolvePdfDecryption): the reader then opens them like
-                // any plain PDF, and the password itself is never stored.
+                // resolvePdfDecryption): the reader then opens them
+                // like any plain PDF, and the password itself is
+                // never stored.
                 val decrypted = resolvePdfDecryption(
                     destFile.readBytes(), displayName, passwordProvider
                 )
                 if (decrypted != null) destFile.writeBytes(decrypted)
-                try {
-                    BookConverter.parse(destFile, openCacheDir, chapterFallback, displayName)
-                } catch (e: Exception) {
-                    throw ImportException(
-                        e.message ?: "parse failed",
-                        messageFa = context.getString(parseErrorMessageRes(e)),
-                        cause = e
-                    )
-                }
+                pdfPageCountOrThrow(destFile, displayName)
+                // A re-imported file keeps its saved position: the
+                // record is keyed by content hash, and the same
+                // content parses to the same chapters, so the
+                // record's chapter count IS this book's chapter
+                // count — the row carries it until the first open
+                // replaces it with the freshly parsed count. Without
+                // a record the count stays 0 (unknown) until then.
+                recordChapters = runCatching { sha256OfFile(destFile) }
+                    .getOrNull()?.let { recordStore.find(it, null)?.totalChapters }
+                    ?.takeIf { it > 0 }
+                ParsedBook(
+                    title = File(displayName).nameWithoutExtension
+                        .takeIf { it.isNotBlank() } ?: displayName,
+                    chapters = emptyList(),
+                    coverFile = null
+                )
             } else {
                 // Converted formats: parse errors get a format-aware
                 // user-facing message instead of the EPUB-only texts.
@@ -222,7 +257,9 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     )
                 }
             }
-            if (parsed.chapters.isEmpty()) {
+            // Lazy PDFs deliberately have no chapters yet (they are
+            // built on first open); every other format must parse.
+            if (format != BookFormat.PDF && parsed.chapters.isEmpty()) {
                 throw ImportException(
                     "Book has no readable chapters",
                     messageFa = context.getString(R.string.import_error_no_readable_sections)
@@ -264,15 +301,17 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     title = bookTitle,
                     filePath = destFile.absolutePath,
                     coverPath = coverPath,
-                    totalChapters = parsed.chapters.size,
+                    totalChapters = recordChapters ?: parsed.chapters.size,
                     dateAdded = Instant.now().toString(),
                     originalFileName = displayName
                 )
             )
             // The cache above is complete and the stored file is final
             // (decrypted PDFs were already rewritten): stamp it so the
-            // first open trusts it instead of re-parsing.
-            CacheStamp.writeStamp(openCacheDir, destFile)
+            // first open trusts it instead of re-parsing. Lazy PDFs
+            // have no cache to stamp — the missing stamp is exactly
+            // what makes the first open convert them.
+            if (format != BookFormat.PDF) CacheStamp.writeStamp(openCacheDir, destFile)
             id
         } catch (e: CancellationException) {
             // Never swallow coroutine cancellation: clean up and rethrow so the
@@ -295,6 +334,33 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             throw ImportException(
                 e.message ?: "import failed",
                 messageFa = context.getString(importErrorMessageRes(e)),
+                cause = e
+            )
+        }
+    }
+
+    /**
+     * Fast PDF validation for lazy import: opens the stored file with
+     * the platform renderer (Pdfium) and reads only its page count.
+     * No text extraction, no page rendering — seconds at most. A file
+     * the renderer cannot open fails here, fast, instead of after
+     * minutes of parsing that was never going to succeed.
+     */
+    private fun pdfPageCountOrThrow(pdfFile: File, displayName: String): Int {
+        try {
+            ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                PdfRenderer(pfd).use { renderer ->
+                    val count = renderer.pageCount
+                    if (count <= 0) throw IOException("PDF has no pages: $displayName")
+                    return count
+                }
+            }
+        } catch (e: ImportException) {
+            throw e
+        } catch (e: Exception) {
+            throw ImportException(
+                e.message ?: "PDF cannot be opened: $displayName",
+                messageFa = context.getString(R.string.import_error_bad_structure),
                 cause = e
             )
         }

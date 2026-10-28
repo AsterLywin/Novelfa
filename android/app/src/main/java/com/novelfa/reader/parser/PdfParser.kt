@@ -37,8 +37,9 @@ object PdfParser {
         fileName: String,
         outDir: File,
         chapterFallback: (Int) -> String,
-        password: String? = null
-    ): ParsedBook = parseDetailed(bytes, fileName, outDir, chapterFallback, password).first
+        password: String? = null,
+    checkCancelled: (() -> Unit)? = null
+    ): ParsedBook = parseDetailed(bytes, fileName, outDir, chapterFallback, password, checkCancelled).first
 
     /**
      * Conservative encryption probe, for the importer's fast path.
@@ -147,7 +148,8 @@ object PdfParser {
         fileName: String,
         outDir: File,
         chapterFallback: (Int) -> String,
-        password: String? = null
+        password: String? = null,
+    checkCancelled: (() -> Unit)? = null
     ): Triple<ParsedBook, List<Boolean>, List<List<String>>> {
         val doc = PdfDoc(bytes, password)
         val pages = doc.pageObjectNumbers()
@@ -163,8 +165,15 @@ object PdfParser {
         // as an image, exactly like a scanned page) instead of the
         // entire text parse collapsing into the full-image fallback
         // or failing the import outright.
-        val pageParagraphs = pages.map {
-            runCatching { doc.pageParagraphs(it) }.getOrDefault(emptyList())
+        // Cancellation hook (the caller injects it): page extraction
+        // is pure blocking CPU work with no suspension point, so
+        // without a per-page check the import dialog's Cancel button
+        // could not interrupt a big text PDF at all — the job was
+        // cancelled but the parse ran on to completion regardless.
+        val pageParagraphs = mutableListOf<List<String>>()
+        for (num in pages) {
+            checkCancelled?.invoke()
+            pageParagraphs += runCatching { doc.pageParagraphs(num) }.getOrDefault(emptyList())
         }
         val outline = doc.outlineEntries(pages)
         val sections: List<ConvertedBook.Section>

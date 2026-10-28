@@ -2,6 +2,8 @@ package com.novelfa.reader.parser
 
 import com.novelfa.reader.model.ParsedBook
 import java.io.File
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * Single dispatch for every non-EPUB format, shared by the importer
@@ -62,8 +64,14 @@ object BookConverter {
         chapterFallback: (Int) -> String,
         fallbackName: String
     ): ParsedBook {
+        // Cancellation hook for the blocking text parse (see PdfParser):
+        // without it, Cancel could not interrupt a big text PDF. The
+        // context is captured once here (this function is suspend);
+        // the hook itself just throws when that job is cancelled.
+        val ctx = currentCoroutineContext()
+        val cancelCheck = { ctx.ensureActive() }
         val text = runCatching {
-            PdfParser.parseDetailed(source.readBytes(), fallbackName, outDir, chapterFallback)
+            PdfParser.parseDetailed(source.readBytes(), fallbackName, outDir, chapterFallback, null, cancelCheck)
         }
         if (text.isSuccess) {
             val (parsed, hasText, pageTexts) = text.getOrThrow()
@@ -93,7 +101,7 @@ object BookConverter {
                         ?.filter { it.isFile && it.name.matches(Regex("ch\\d+\\.xhtml")) }
                         ?.forEach { it.delete() }
                     File(outDir, "media").deleteRecursively()
-                    return PdfParser.parse(source.readBytes(), fallbackName, outDir, chapterFallback)
+                    return PdfParser.parse(source.readBytes(), fallbackName, outDir, chapterFallback, null, cancelCheck)
                 }
             }
         } else {
