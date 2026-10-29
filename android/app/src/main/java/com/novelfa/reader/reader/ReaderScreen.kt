@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -66,6 +67,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -112,6 +114,7 @@ import java.io.File
 import java.io.IOException
 import java.util.zip.ZipFile
 import androidx.compose.material3.rememberDrawerState
+import coil.compose.AsyncImage
 import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.ParticleLayer
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
@@ -263,6 +266,9 @@ fun ReaderScreen(
     val savedModeKey by prefs.readingMode.collectAsState(initial = "paged")
     val modeNow = ReadingMode.fromKey(savedModeKey)
     var modeOpen by remember { mutableStateOf(false) }
+    // Image the user tapped (IMAGE_JS / paged native hit test): while
+    // non-null the save dialog is open for it.
+    var imageToSave by remember { mutableStateOf<ImageSaveTarget?>(null) }
 
     val chapterErr = stringResource(R.string.couldn_t_display_the_chapter)
     val openErr = stringResource(R.string.couldn_t_open_the_book)
@@ -276,6 +282,8 @@ fun ReaderScreen(
     val pagerFailedMsg = stringResource(R.string.pager_failed)
     val fontMissingMsg = stringResource(R.string.reader_font_missing)
     val linkTargetMsg = stringResource(R.string.link_target_not_found)
+    val imageSavedTemplate = stringResource(R.string.image_saved)
+    val imageSaveFailedMsg = stringResource(R.string.image_save_failed)
 
     suspend fun showVmError(v: ReaderViewModel) {
         snackbar.showSnackbar(chapterErr + (v.lastError ?: ""))
@@ -684,6 +692,29 @@ fun ReaderScreen(
      * the current chapter file jumps in place, otherwise the target
      * chapter opens and its fragment is applied on page-finish.
      */
+    /**
+     * Image tap (from IMAGE_JS via the bridge, or the paged native hit
+     * test): resolves the tapped <img> src to a saveable target and
+     * opens the save dialog for it. A tap that resolves to nothing
+     * (outside the app's files, a remote URL, a non-image) says so
+     * instead of opening an empty dialog.
+     */
+    suspend fun handleImageTap(v: ReaderViewModel, src: String, chap: Int) {
+        val folder = when {
+            chap in v.chapters.indices -> v.chapters[chap].file.parentFile
+            v.index in v.chapters.indices -> v.chapters[v.index].file.parentFile
+            else -> null
+        }
+        val target = withContext(Dispatchers.IO) {
+            ImageSaver.resolveImageSource(context, src, folder)
+        }
+        if (target == null) {
+            snackbar.showSnackbar(imageSaveFailedMsg)
+        } else {
+            imageToSave = target
+        }
+    }
+
     suspend fun handleInBookLink(v: ReaderViewModel, href: String, chap: Int) {
         val (idx, frag) = v.resolveLink(href, chap) ?: run {
             // A tap that does nothing, with no message, reads as a
@@ -746,6 +777,10 @@ fun ReaderScreen(
             onLinkClick = { href, chap ->
                 val v = vm
                 if (v != null) scope.launch { handleInBookLink(v, href, chap) }
+            },
+            onImageClick = { src, chap ->
+                val v = vm
+                if (v != null) scope.launch { handleImageTap(v, src, chap) }
             },
             onChapterVisible = { ci, gen ->
                 scope.launch {
@@ -1365,6 +1400,15 @@ fun ReaderScreen(
                         // @font-face rules point at.
                         fontFiles = (vm?.fontFiles ?: emptyList()) +
                             (vm?.fallbackFontFiles ?: emptyList()),
+                        // Paged-mode image tap (native hit test): the
+                        // paged document holds only the current
+                        // chapter, so its index is the chapter.
+                        onImageTap = { src ->
+                            val v = vm
+                            if (v != null) scope.launch {
+                                handleImageTap(v, src, v.index)
+                            }
+                        },
                         onError = { details ->
                             scope.launch { snackbar.showSnackbar(chapterErr + details) }
                         },
@@ -1671,6 +1715,72 @@ fun ReaderScreen(
                             diagOpen = true
                             refreshDiag()
                         }) { Text(stringResource(R.string.diag_open_button)) }
+                    }
+                }
+            }
+        }
+    }
+
+    // Image-save dialog: the tapped image (preview when it is a
+    // file; data: images have no file to preview from) with the save
+    // icon. Saving writes a copy to Pictures/Novelfa in the gallery
+    // (no permission, no picker) and reports the name actually used;
+    // a failure leaves the dialog open so the user can retry.
+    if (imageToSave != null) {
+        val target = imageToSave!!
+        val saveLabel = stringResource(R.string.save)
+        val cancelLabel = stringResource(R.string.cancel)
+        Dialog(onDismissRequest = { imageToSave = null }) {
+            Card {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    target.file?.let { file ->
+                        AsyncImage(
+                            model = file,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 280.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                    Text(
+                        text = target.displayName,
+                        style = MaterialTheme.typography.labelMedium,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { imageToSave = null }) {
+                            Text(cancelLabel)
+                        }
+                        TextButton(onClick = {
+                            scope.launch {
+                                val result = ImageSaver.saveToGallery(context, target)
+                                result.onSuccess { name ->
+                                    snackbar.showSnackbar(imageSavedTemplate.format(name))
+                                    imageToSave = null
+                                }
+                                result.onFailure {
+                                    snackbar.showSnackbar(imageSaveFailedMsg)
+                                }
+                            }
+                        }) {
+                            AppIcon(
+                                kind = AppIconKind.Download,
+                                tint = MaterialTheme.colorScheme.primary,
+                                size = 18.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(saveLabel)
+                        }
                     }
                 }
             }

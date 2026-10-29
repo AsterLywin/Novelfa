@@ -328,4 +328,6 @@
     <string name="import_section_title">ایمپورت</string>
     <string name="fast_import">ایمپورت سریع</string>
     <string name="fast_import_desc">هر کتاب موقع ایمپورت فقط یک بار خوانده می‌شود و جلدهای ساخته‌شده در پس‌زمینه می‌آیند. با خاموش‌کردن، رفتار قبلی ایمپورت برمی‌گردد.</string>
+    <string name="image_saved">عکس در گالری ذخیره شد: %1$s</string>
+    <string name="image_save_failed">این عکس ذخیره نشد.</string>
 </resources>

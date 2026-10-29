@@ -30,6 +30,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 class ScrollBridge(
     private val onScroll: (Int, Int, Int, Int) -> Unit,
     private val onLinkClick: (String, Int) -> Unit = { _, _ -> },
+    /** Image-save tap (IMAGE_JS): raw <img> src + containing chapter index. */
+    private val onImageClick: (String, Int) -> Unit = { _, _ -> },
     private val onChapterVisible: (Int, Int) -> Unit = { _, _ -> },
     /** Paged-mode tap turn at a chapter edge: +1 = last page, -1 = first page. */
     private val onPageEdge: (Int) -> Unit = {},
@@ -59,6 +61,11 @@ class ScrollBridge(
     @JavascriptInterface
     fun onLink(href: String, chap: Long) {
         onLinkClick(href, chap.toInt())
+    }
+
+    @JavascriptInterface
+    fun onImageClick(src: String, chap: Long) {
+        onImageClick(src, chap.toInt())
     }
 
     @JavascriptInterface
@@ -147,7 +154,12 @@ fun ReaderWebView(
     // novelfa-font:// scheme (see HtmlBuilder.fontFaceCss). Served
     // only by exact file name from this list — never by path — so an
     // EPUB can never use a font URL to reach another file.
-    fontFiles: List<File> = emptyList()
+    fontFiles: List<File> = emptyList(),
+    // Paged-mode image tap: raw <img> src at the tap point. Needed
+    // because native taps own ACTION_UP in paged mode, so the JS
+    // image listener (IMAGE_JS) never fires there — this hit test is
+    // the paged-mode equivalent, and it feeds the same save dialog.
+    onImageTap: (String) -> Unit = {}
 ) {
     val loaded = remember { mutableStateOf<String?>(null) }
     // The WebView factory runs once; the mode can change afterwards.
@@ -155,6 +167,7 @@ fun ReaderWebView(
     // Same for the font list: the interceptor below reads the latest
     // list, so a font change does not need a WebView recreation.
     val fontFilesNow = rememberUpdatedState(fontFiles)
+    val onImageTapNow = rememberUpdatedState(onImageTap)
     // Tracks the mode the WebView settings below were last applied for.
     // These settings only take full effect on page load / when changed,
     // so they must be refreshed whenever the mode flips (mode switches
@@ -326,12 +339,24 @@ fun ReaderWebView(
                             host.evaluateJavascript(
                                 "(function(){var el=document.elementFromPoint($cssX,$cssY);" +
                                     "if(!el) return 'none';" +
+                                    // Images own their tap, like in
+                                    // IMAGE_JS: an image tap opens the
+                                    // save dialog and never turns the
+                                    // page, even on an outer quarter.
+                                    // The backdrop clone on image pages
+                                    // has pointer-events:none, so the
+                                    // hit element here is the real img.
+                                    "var img=(el.tagName==='IMG')?el:(el.closest?el.closest('img'):null);" +
+                                    "if(img) return 'image:'+((img.getAttribute('src')||img.src||''));" +
                                     "var a=el.closest?el.closest('a[href]'):null;" +
                                     "return a?'link':'notlink';})();"
                             ) { result ->
                                 val hit = result?.trim()?.trim { it == '"' } ?: ""
                                 Log.d("NovelfaTouch", "tap hit=$hit zone=$zone")
-                                if (hit == "link") {
+                                if (hit.startsWith("image:")) {
+                                    val src = hit.removePrefix("image:")
+                                    if (src.isNotEmpty()) onImageTapNow.value(src)
+                                } else if (hit == "link") {
                                     // Preserve the link: dispatch a click
                                     // on the hit element; LINK_JS (capture
                                     // phase) owns it from here.

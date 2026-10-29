@@ -328,4 +328,6 @@
     <string name="import_section_title">Import</string>
     <string name="fast_import">Fast import</string>
     <string name="fast_import_desc">Read each book once during import and build missing covers in the background. Turn off to use the previous import behaviour.</string>
+    <string name="image_saved">Image saved to your gallery: %1$s</string>
+    <string name="image_save_failed">Couldn\'t save this image.</string>
 </resources>

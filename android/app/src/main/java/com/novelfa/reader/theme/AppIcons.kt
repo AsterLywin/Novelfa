@@ -34,6 +34,7 @@ enum class AppIconKind(val data: String, val duo: Boolean = false) {
     Clock("M8,1.5 A6.5,6.5 0 1 1 7.99,1.5 Z M8,4.5 V8 L10.5,9.5", duo = true),
     Close("M4,4 L12,12 M12,4 L4,12"),
     Dots("M3,6.8 A1.2,1.2 0 1 1 2.99,6.8 Z M8,6.8 A1.2,1.2 0 1 1 7.99,6.8 Z M13,6.8 A1.2,1.2 0 1 1 12.99,6.8 Z"),
+    Download("M8,2 V9 M5,6.5 L8,9.5 L11,6.5 M2.5,12.5 H13.5"),
     Drop("M8,1.8 C6.5,3.6 3.6,6.6 3.6,9.6 A4.4,4.4 0 0 0 12.4,9.6 C12.4,6.6 9.5,3.6 8,1.8 Z", duo = true),
     Edit("M10.5,2.5 L13.5,5.5 L5.5,13.5 H2.5 V10.5 Z M9,4 L12,7", duo = true),
     ExitFullscreen("M6,2 V6 H2 M14,6 H10 V2 M10,14 V10 H14 M2,10 H6 V14"),

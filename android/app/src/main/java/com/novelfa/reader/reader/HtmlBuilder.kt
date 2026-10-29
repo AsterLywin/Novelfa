@@ -143,6 +143,9 @@ object HtmlBuilder {
         // without it a tapped link navigates the WebView itself out of
         // the reader shell.
         sb.append("<script>").append(LINK_JS).append("</script>")
+        // Image-save taps (see IMAGE_JS): every build, paged and
+        // vertical, so an image tap always opens the save dialog.
+        sb.append("<script>").append(IMAGE_JS).append("</script>")
         if (paged) {
             // rdrPager: deterministic block-level pagination (see PAGER_JS).
             // Runs before <body> is parsed; its boot waits for
@@ -1738,6 +1741,11 @@ object HtmlBuilder {
         var t = e.target;
         if (t && t.nodeType !== 1) t = t.parentElement;
         if (!t || !t.closest) return;
+        // Images own their tap: a tapped image opens the save dialog
+        // (see IMAGE_JS), it never follows a surrounding link. Text
+        // inside the same link still navigates normally, because its
+        // target is not an image and has no <img> ancestor.
+        if (t.tagName === 'IMG' || t.closest('img')) return;
         var a = t.closest('a[href]');
         if (!a) return;
         var raw = a.getAttribute('href');
@@ -1773,4 +1781,43 @@ object HtmlBuilder {
         try { if (window.Android && Android.onLink) Android.onLink(h, ci); } catch (err) { }
     }, true);
 })();"""
+
+    /**
+     * Image taps (every reader document, paged and vertical): a tap on
+     * an <img> opens the image-save dialog instead of doing anything
+     * else. Capture phase, like LINK_JS, and it stops propagation so
+     * the paged tap zones (bubble phase) never also turn the page.
+     * LINK_JS already skips image taps (see above), so a linked image
+     * saves instead of navigating. The src is the absolute file URL
+     * HtmlText.makeImageSourcesAbsolute wrote into the chapter HTML
+     * (or a data: URL for an inline image); the app resolves it and
+     * decides whether it can be saved. SVG wrapper <image> elements
+     * were already converted to <img> by prepareChapterBody, so they
+     * arrive here too; standalone vector <svg> art is not an <img>
+     * and has no save tap. On device in paged mode this listener
+     * never fires (native taps own ACTION_UP) — the native hit test
+     * in ReaderWebView covers that path and calls the same bridge.
+     */
+    private const val IMAGE_JS = """// Novelfa image-save tap — injected into EVERY reader document
+(function () {
+    document.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.nodeType !== 1) t = t.parentElement;
+        if (!t || !t.closest) return;
+        var img = (t.tagName === 'IMG') ? t : t.closest('img');
+        if (!img) return;
+        var src = img.getAttribute('src') || img.src || '';
+        if (!src) return;
+        var ci = -1;
+        var cd = img.closest ? img.closest('.rdr-chap') : null;
+        if (cd) {
+            var dv = parseInt(cd.getAttribute('data-idx'), 10);
+            if (!isNaN(dv)) ci = dv;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        try { if (window.Android && Android.onImageClick) Android.onImageClick(src, ci); } catch (err) { }
+    }, true);
+})();"""
+
 }
