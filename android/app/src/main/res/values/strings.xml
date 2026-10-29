@@ -314,4 +314,13 @@
     <string name="diag_note_js_taps">Tap turns inside the page change the pager page above but do not appear as a native turn; only swipes, edge taps, page edges and stuck taps do.</string>
     <string name="page_indicator">Page %1$d of %2$d</string>
     <string name="pager_failed">This chapter’s pagination failed; scroll vertically to read, or open another chapter from the list.</string>
+    <string name="pdf_native_loading">Opening PDF…</string>
+    <string name="pdf_native_error">Couldn\'t open this PDF.</string>
+    <string name="pdf_zoom_in">Zoom in</string>
+    <string name="pdf_zoom_out">Zoom out</string>
+    <string name="pdf_fit_width">Fit width</string>
+    <string name="pdf_prev_page">Previous page</string>
+    <string name="pdf_next_page">Next page</string>
+    <string name="pdf_page_failed">This page couldn\'t be rendered.</string>
+    <string name="pdf_retry">Retry</string>
 </resources>

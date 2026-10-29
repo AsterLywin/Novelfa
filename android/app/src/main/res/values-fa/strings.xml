@@ -314,4 +314,13 @@
     <string name="diag_note_js_taps">ورق‌های لمسی داخل صفحه، عدد صفحه‌ی پیجر در بالا را عوض می‌کنند ولی به‌عنوان ورق بومی ثبت نمی‌شوند؛ فقط سوایپ‌ها، ضربه‌های لبه، لبه‌های صفحه و ورق‌های گیرکرده ثبت می‌شوند.</string>
     <string name="page_indicator">صفحه‌ی %1$d از %2$d</string>
     <string name="pager_failed">صفحه‌بندی این بخش ساخته نشد؛ با کشیدن عمودی بخوانید یا از فهرست، بخش دیگری را باز کنید.</string>
+    <string name="pdf_native_loading">در حال باز کردن PDF…</string>
+    <string name="pdf_native_error">باز کردن این PDF انجام نشد.</string>
+    <string name="pdf_zoom_in">بزرگ‌تر</string>
+    <string name="pdf_zoom_out">کوچک‌تر</string>
+    <string name="pdf_fit_width">عرض صفحه</string>
+    <string name="pdf_prev_page">صفحه‌ی قبل</string>
+    <string name="pdf_next_page">صفحه‌ی بعد</string>
+    <string name="pdf_page_failed">رندر این صفحه انجام نشد.</string>
+    <string name="pdf_retry">تلاش دوباره</string>
 </resources>

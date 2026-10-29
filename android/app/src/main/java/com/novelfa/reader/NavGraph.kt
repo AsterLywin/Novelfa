@@ -15,7 +15,7 @@ import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.library.CollectionsScreen
 import com.novelfa.reader.library.LibraryScreen
 import com.novelfa.reader.library.LibraryViewModel
-import com.novelfa.reader.reader.ReaderScreen
+import com.novelfa.reader.reader.PdfReaderRoute
 import com.novelfa.reader.settings.PinManager
 import com.novelfa.reader.settings.PrefsStorePinPrefs
 import com.novelfa.reader.settings.PrefsStoreSupportPrefs
@@ -84,7 +84,10 @@ fun NavGraph(
             val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
             val supportTracker = remember { SupportTracker(PrefsStoreSupportPrefs(prefs)) }
             val bookId = backStackEntry.arguments?.getString("bookId") ?: ""
-            ReaderScreen(
+            // Native PDF route (2026-10-29): PDF books open in the
+            // on-demand PdfRenderer viewer; every other format falls
+            // through to the existing ReaderScreen unchanged.
+            PdfReaderRoute(
                 bookId = bookId,
                 dao = db.bookDao(),
                 onClose = { navController.popBackStack() },
