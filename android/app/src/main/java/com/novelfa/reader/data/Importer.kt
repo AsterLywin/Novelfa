@@ -47,7 +47,15 @@ val SUPPORTED_BOOK_MIME_TYPES = arrayOf(
     "text/markdown",
     "text/x-markdown",
     "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    // CBZ/ZIP image books: providers report these under several
+    // types (a .cbz often arrives as application/zip), so all four
+    // are listed — the importer itself still validates the format
+    // and rejects anything that is not a real book archive.
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/x-cbz",
+    "application/vnd.comicbook+zip"
 )
 
 class ImportException(

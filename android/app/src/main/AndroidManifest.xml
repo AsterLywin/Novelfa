@@ -32,6 +32,10 @@
                 <data android:mimeType="text/x-markdown" />
                 <data android:mimeType="application/pdf" />
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/x-cbz" />
+                <data android:mimeType="application/vnd.comicbook+zip" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -45,6 +49,8 @@
                 <data android:pathPattern=".*\\.text" />
                 <data android:pathPattern=".*\\.pdf" />
                 <data android:pathPattern=".*\\.docx" />
+                <data android:pathPattern=".*\\.cbz" />
+                <data android:pathPattern=".*\\.zip" />
             </intent-filter>
         </activity>
     </application>
