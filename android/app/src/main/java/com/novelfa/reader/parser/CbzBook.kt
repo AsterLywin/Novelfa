@@ -18,8 +18,12 @@ import java.util.zip.ZipFile
  * - Order is NATURAL, not lexicographic: `page-2.jpg` before
  *   `page-10.jpg`, and folder paths sort before their contents, so
  *   a zip with chapter folders still reads in order when flattened.
- *   (Chapter folders are not split into sections in v1; the flat
- *   page order is what a vertical manhwa reader scrolls through.)
+ * - Chapter folders ARE split into sections ([chaptersForEntries]):
+ *   each folder (after stripping a path every folder shares, e.g.
+ *   the series folder) is one chapter starting at its first page,
+ *   and the native viewer offers that list as a one-tap jump. A
+ *   flat archive (no folders) has no chapters and reads exactly
+ *   as before; root-level pages belong to no chapter.
  * - Nothing is extracted at import: the original archive is stored
  *   as-is and pages are decoded on demand at open time, exactly
  *   like the native PDF viewer. A 500-page manhwa therefore imports
@@ -55,6 +59,77 @@ object CbzBook {
                 .sortedWith(::compareNatural)
         }
     }
+
+    /**
+     * One chapter of a foldered comic: the folder name as stored
+     * in the archive (book data, never translated) and the index,
+     * into the natural page order, of that chapter's first page.
+     * The native viewer jumps to [firstPageIndex] on selection;
+     * zoom, the page slider and the reading mode are untouched by
+     * the jump, so the reader lands on the chapter's first page
+     * in exactly the state it was already reading in.
+     */
+    data class CbzChapter(
+        val title: String,
+        val firstPageIndex: Int
+    )
+
+    /**
+     * Chapters for an archive, from its image entries alone (the
+     * caller may pass the raw ZIP listing; non-images are filtered
+     * and the rest is put in natural order here, so the result is
+     * the same as for [imageEntryNames]).
+     *
+     * Rules:
+     * - Chapter = the first folder segment of a page's parent
+     *   folder, after stripping the path segments EVERY foldered
+     *   page shares: `Series/Chapter 01/...` and
+     *   `Series/Chapter 02/...` give chapters `Chapter 01` and
+     *   `Chapter 02`, not two chapters both called `Series`.
+     * - Deeper nesting stays inside its chapter: `Ch 1/part 1/`
+     *   and `Ch 1/part 2/` are both chapter `Ch 1`.
+     * - Root-level pages (a cover before the first folder) belong
+     *   to no chapter; they still count as pages, so a chapter
+     *   after them starts past index 0.
+     * - A flat archive, or an archive whose pages all sit in one
+     *   single folder, yields no chapters: there is nothing to
+     *   jump between, and the viewer shows no chapter control.
+     * - Chapters come out in first-appearance order, which IS
+     *   reading order because the pages are naturally sorted.
+     */
+    fun chaptersForEntries(entryNames: List<String>): List<CbzChapter> {
+        val pages = entryNames.filter { isImageEntry(it) }.sortedWith(::compareNatural)
+        if (pages.isEmpty()) return emptyList()
+        val parents = pages.map { it.substringBeforeLast('/', "") }
+        val foldered = parents.filter { it.isNotEmpty() }
+        val common: List<String> = if (foldered.isNotEmpty() && foldered.size == parents.size) {
+            foldered.map { it.split('/') }.reduce { acc, parts ->
+                acc.zip(parts).takeWhile { (a, b) -> a == b }.map { it.first }
+            }
+        } else {
+            emptyList()
+        }
+        val firstPage = linkedMapOf<String, Int>()
+        for ((index, parent) in parents.withIndex()) {
+            val stripped = if (common.isEmpty()) {
+                parent
+            } else {
+                parent.split('/').drop(common.size).joinToString("/")
+            }
+            // substringBefore with its default: a single-segment
+            // folder IS the chapter name (an explicit "" here
+            // would have thrown single-segment chapters away).
+            val key = stripped.substringBefore('/')
+            if (key.isNotEmpty() && key !in firstPage) {
+                firstPage[key] = index
+            }
+        }
+        return firstPage.map { (title, index) -> CbzChapter(title, index) }
+    }
+
+    /** Chapters for an archive file, in reading order. */
+    fun chapters(zipFile: File): List<CbzChapter> =
+        chaptersForEntries(imageEntryNames(zipFile))
 
     /**
      * Natural order: runs of digits compare as numbers (2 < 10),

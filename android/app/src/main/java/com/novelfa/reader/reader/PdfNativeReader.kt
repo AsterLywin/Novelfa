@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,6 +25,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -66,6 +68,7 @@ import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CbzBook
+import com.novelfa.reader.parser.CbzBook.CbzChapter
 import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
@@ -131,8 +134,11 @@ import kotlinx.coroutines.withContext
  * - No text search, selection, annotation or XP credit yet for
  *   native books. Those need page-coordinate data the old XHTML
  *   path also threw away; they belong on top of this viewer.
- * - CBZ chapter folders are flattened in natural order (see
- *   [CbzBook]); there is no chapter drawer for them yet.
+ * - CBZ chapter folders become a chapter list (see
+ *   [CbzBook.chaptersForEntries]): the top bar offers it as a
+ *   one-tap jump to a chapter's first page, and a flat archive
+ *   (no folders) shows no chapter control at all, reading
+ *   exactly as before.
  * - CBR (RAR) is not supported: it needs a RAR decoder.
  * - Password PDFs work only because import already stores them
  *   decrypted; the platform renderer cannot open an encrypted
@@ -142,6 +148,10 @@ import kotlinx.coroutines.withContext
 /** One page source for the native viewer, PDF or CBZ alike. */
 internal interface NativePageSource : Closeable {
     val pageCount: Int
+
+    /** Chapter list for foldered books; empty for flat books and PDFs. */
+    val chapters: List<CbzChapter>
+        get() = emptyList()
 
     /** Renders one page to a fresh bitmap the CALLER owns. */
     fun renderPage(index: Int, targetWidthPx: Int): Bitmap
@@ -224,6 +234,9 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
 
     override val pageCount: Int
         get() = entries.size
+
+    override val chapters: List<CbzChapter> =
+        CbzBook.chaptersForEntries(entries)
 
     override fun renderPage(index: Int, targetWidthPx: Int): Bitmap {
         synchronized(lock) {
@@ -390,6 +403,16 @@ private fun NativeImageBookViewer(
     }
 
     val pageCount = source?.pageCount ?: 0
+    // Chapter list, CBZ/ZIP only (PDF sources report none). The
+    // control appears only when there is something to jump
+    // between: two or more folders, or a single folder after
+    // root-level pages (a cover before the first chapter). A flat
+    // archive, or one folder holding the whole book, shows no
+    // chapter control and reads exactly as before.
+    val chapters = source?.chapters ?: emptyList()
+    val showChapterList = chapters.size > 1 ||
+        (chapters.size == 1 && chapters[0].firstPageIndex > 0)
+    var showChapters by remember { mutableStateOf(false) }
     val savedPage = book.lastChapterIndex
     var restoredPage by remember { mutableStateOf(false) }
     val initialPage = 0
@@ -634,6 +657,11 @@ private fun NativeImageBookViewer(
                     }
                 },
                 actions = {
+                    if (showChapterList) {
+                        TextButton(onClick = { showChapters = true }) {
+                            Text(stringResource(R.string.chapters))
+                        }
+                    }
                     TextButton(onClick = { toggleMode() }) {
                         Text(
                             stringResource(
@@ -762,6 +790,54 @@ private fun NativeImageBookViewer(
                 }
             }
         }
+    }
+
+    // Chapter list: a plain dialog, not a drawer — the native
+    // viewer has no drawer, and a dialog needs no new strings
+    // (the existing section-list title and close labels are
+    // reused). Tapping a chapter jumps to its first page through
+    // the same jump the slider uses, so zoom, the slider and the
+    // reading mode are untouched: the reader lands on the
+    // chapter's first page in exactly the state it was in.
+    if (showChapters) {
+        val currentChapter = chapters.indexOfLast { it.firstPageIndex <= currentPage }
+        AlertDialog(
+            onDismissRequest = { showChapters = false },
+            title = { Text(stringResource(R.string.chapters)) },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    chapters.forEachIndexed { i, chapter ->
+                        TextButton(
+                            onClick = {
+                                showChapters = false
+                                jumpTo(chapter.firstPageIndex)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = chapter.title,
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Start,
+                                color = if (i == currentChapter) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    LocalContentColor.current
+                                }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showChapters = false }) {
+                    Text(stringResource(R.string.close))
+                }
+            }
+        )
     }
 }
 
