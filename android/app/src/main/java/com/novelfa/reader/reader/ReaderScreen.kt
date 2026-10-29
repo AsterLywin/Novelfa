@@ -1359,6 +1359,12 @@ fun ReaderScreen(
                         html = pageHtml,
                         baseUrl = pageBase,
                         bridge = bridge,
+                        // Fonts for the novelfa-font:// interceptor:
+                        // the chosen family plus the Vazirmatn
+                        // fallback, exactly the files HtmlBuilder's
+                        // @font-face rules point at.
+                        fontFiles = (vm?.fontFiles ?: emptyList()) +
+                            (vm?.fallbackFontFiles ?: emptyList()),
                         onError = { details ->
                             scope.launch { snackbar.showSnackbar(chapterErr + details) }
                         },

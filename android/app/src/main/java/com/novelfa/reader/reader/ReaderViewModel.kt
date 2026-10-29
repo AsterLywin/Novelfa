@@ -51,6 +51,46 @@ enum class ReadingMode(val key: String) {
     }
 }
 
+/**
+ * Process-wide caches for the reader's expensive, deterministic work
+ * (layout cache, step 2): they survive a ViewModel recreation, so
+ * closing a book to the home screen and reopening it in the same app
+ * process does not re-read and re-prepare the chapter, or rebuild
+ * its HTML document, when nothing about it changed. Keys always
+ * include the chapter file's identity (path + size + last-modified)
+ * and every setting the output depends on, so a changed file or a
+ * changed setting can never serve a stale document. Pager page
+ * splits themselves are deliberately NOT cached here: they depend on
+ * the live viewport size as well as the settings, and a stale split
+ * would turn to the wrong page after a rotation or a font change —
+ * pagination still runs fresh on every open, which is the correct
+ * part to re-run, while the document it paginates is reused.
+ */
+private object SharedReaderCache {
+    private const val PREPARED_MAX = 24
+    private const val HTML_MAX = 4
+    private val prepared = LinkedHashMap<String, String>(16, 0.75f, true)
+    private val htmlDocs = LinkedHashMap<String, String>(16, 0.75f, true)
+
+    @Synchronized
+    fun getPrepared(key: String): String? = prepared[key]
+
+    @Synchronized
+    fun putPrepared(key: String, value: String) {
+        prepared[key] = value
+        while (prepared.size > PREPARED_MAX) prepared.remove(prepared.keys.first())
+    }
+
+    @Synchronized
+    fun getHtml(key: String): String? = htmlDocs[key]
+
+    @Synchronized
+    fun putHtml(key: String, value: String) {
+        htmlDocs[key] = value
+        while (htmlDocs.size > HTML_MAX) htmlDocs.remove(htmlDocs.keys.first())
+    }
+}
+
 class ReaderViewModel(
     private val dao: BookDao,
     private val bookId: String,
@@ -124,9 +164,12 @@ class ReaderViewModel(
         private set
 
     /**
-     * Cached @font-face CSS: fontFaceCss() does multi-MB disk reads + base64
-     * on every call; the files don't change mid-session, so cache by
-     * (family, file list). Invalidated when the font changes.
+     * Cached @font-face CSS: fontFaceCss() now emits tiny
+     * novelfa-font:// URLs instead of multi-MB base64, so building it
+     * is cheap — but it is still cached by (family, file list) so a
+     * settings reload never rebuilds it when the font did not change.
+     * (reloadForSettings used to call fontFaceCss() directly, bypassing
+     * this cache entirely; it now uses this function.)
      */
     private var fontFaceCacheKey: Triple<String, List<File>, List<File>>? = null
     private var fontFaceCacheValue: String = ""
@@ -294,19 +337,51 @@ class ReaderViewModel(
             val body = withContext(Dispatchers.IO) { readPrepared(i) }
             val wrapped = "<div class=\"rdr-chap\" data-idx=\"" + i + "\"" +
                 HtmlText.chapterDirAttr(body) + ">" + body + "</div>"
-            docGen++
             contFirst = i
             contLast = i
             index = i
             // XP: entering a new unit may credit the previous one (dwell-gated).
             xpNoteEnter(i)
             baseUrl = baseUrl(i)
-            html = HtmlBuilder.build(
-                baseUrl, wrapped, theme, fontFamily, fontSize,
-                lineHeight, sideMargin, paragraphSpacing, isEnglish,
-                cachedFontFaceCss(), docGen,
-                paged = isPaged()
-            )
+            // Built-document cache (layout cache, step 2): the document
+            // is fully determined by the chapter file + every setting
+            // below, so a hit reuses it with only the generation
+            // number swapped in (the JS append guards compare it).
+            // A miss builds normally and stores a copy with the
+            // generation placeholder, for the next visit to this
+            // chapter with the same settings.
+            val chapterFile = chapters[i].file
+            val fontCss = cachedFontFaceCss()
+            val htmlKey = listOf(
+                bookId, i.toString(), chapterFile.absolutePath,
+                chapterFile.length().toString(), chapterFile.lastModified().toString(),
+                theme.key, fontFamily, fontSize.toString(), lineHeight.toString(),
+                sideMargin.toString(), paragraphSpacing.toString(),
+                isEnglish.toString(), isPaged().toString(), fontCss
+            ).joinToString("|")
+            val cachedHtml = SharedReaderCache.getHtml(htmlKey)
+            docGen++
+            html = if (cachedHtml != null) {
+                cachedHtml.replace(
+                    "<script>window.__rdrGen=-1;</script>",
+                    "<script>window.__rdrGen=$docGen;</script>"
+                )
+            } else {
+                val built = HtmlBuilder.build(
+                    baseUrl, wrapped, theme, fontFamily, fontSize,
+                    lineHeight, sideMargin, paragraphSpacing, isEnglish,
+                    fontCss, docGen,
+                    paged = isPaged()
+                )
+                SharedReaderCache.putHtml(
+                    htmlKey,
+                    built.replace(
+                        "<script>window.__rdrGen=$docGen;</script>",
+                        "<script>window.__rdrGen=-1;</script>"
+                    )
+                )
+                built
+            }
             lastChunk = null
             lastChunkKind = "full"
             lastError = null
@@ -642,7 +717,7 @@ class ReaderViewModel(
                     HtmlBuilder.build(
                         baseUrl, wrapped, theme, fontFamily, fontSize,
                         lineHeight, sideMargin, paragraphSpacing, isEnglish,
-                        HtmlBuilder.fontFaceCss(fontFamily, fontFiles), docGen,
+                        cachedFontFaceCss(), docGen,
                         paged = isPaged()
                     )
                 }
@@ -693,21 +768,31 @@ class ReaderViewModel(
         }
     }
 
-    private fun readPrepared(i: Int): String {
-        preparedCache[i]?.let { return it }
-        val file = chapters[i].file
-        var raw = file.inputStream().bufferedReader(Charsets.UTF_8).use { it.readText() }
-        if (raw.isNotEmpty() && raw[0] == 0xFEFF.toChar()) {
-            raw = raw.substring(1)
-        }
-        val prepared = HtmlText.prepareChapterBody(raw, file.parentFile)
+    private fun putLocalPrepared(i: Int, value: String) {
         // LRU: keep the window + neighbors; drop oldest beyond 12.
         if (preparedCache.size >= 12) {
             val oldest = preparedCache.keys.firstOrNull { it < contFirst || it > contLast }
                 ?: preparedCache.keys.firstOrNull()
             if (oldest != null) preparedCache.remove(oldest)
         }
-        preparedCache[i] = prepared
+        preparedCache[i] = value
+    }
+
+    private fun readPrepared(i: Int): String {
+        preparedCache[i]?.let { return it }
+        val file = chapters[i].file
+        val sharedKey = "$bookId:${file.absolutePath}:${file.length()}:${file.lastModified()}"
+        SharedReaderCache.getPrepared(sharedKey)?.let { shared ->
+            putLocalPrepared(i, shared)
+            return shared
+        }
+        var raw = file.inputStream().bufferedReader(Charsets.UTF_8).use { it.readText() }
+        if (raw.isNotEmpty() && raw[0] == 0xFEFF.toChar()) {
+            raw = raw.substring(1)
+        }
+        val prepared = HtmlText.prepareChapterBody(raw, file.parentFile)
+        putLocalPrepared(i, prepared)
+        SharedReaderCache.putPrepared(sharedKey, prepared)
         return prepared
     }
 

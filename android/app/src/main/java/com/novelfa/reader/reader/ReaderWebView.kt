@@ -6,8 +6,10 @@ import android.view.MotionEvent
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import java.io.File
 import kotlin.math.abs
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
@@ -140,11 +142,19 @@ fun ReaderWebView(
     // torn down (see ReaderScreen): the torn document is a scrolling
     // flow page, so turn gestures and paged WebView settings are
     // switched off for it and it scrolls (and taps links) natively.
-    paged: Boolean = false
+    paged: Boolean = false,
+    // Font files the reader's @font-face rules may request, via the
+    // novelfa-font:// scheme (see HtmlBuilder.fontFaceCss). Served
+    // only by exact file name from this list — never by path — so an
+    // EPUB can never use a font URL to reach another file.
+    fontFiles: List<File> = emptyList()
 ) {
     val loaded = remember { mutableStateOf<String?>(null) }
     // The WebView factory runs once; the mode can change afterwards.
     val pagedNow = rememberUpdatedState(paged)
+    // Same for the font list: the interceptor below reads the latest
+    // list, so a font change does not need a WebView recreation.
+    val fontFilesNow = rememberUpdatedState(fontFiles)
     // Tracks the mode the WebView settings below were last applied for.
     // These settings only take full effect on page load / when changed,
     // so they must be refreshed whenever the mode flips (mode switches
@@ -367,6 +377,46 @@ fun ReaderWebView(
                 }
                 addJavascriptInterface(bridge, "Android")
                 webViewClient = object : WebViewClient() {
+                    /**
+                     * Serve reader fonts from the FontStore list.
+                     * Runs on a WebView background thread, so file IO
+                     * here never blocks the UI thread. Only requests
+                     * for the novelfa-font:// scheme are intercepted;
+                     * everything else (chapter images, book CSS) goes
+                     * through the normal file loader untouched. A
+                     * missing or unknown font returns null, and the
+                     * browser falls back to the next family in the
+                     * font stack — a missing font degrades to the
+                     * fallback face, never to a broken page.
+                     */
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: WebResourceRequest
+                    ): WebResourceResponse? {
+                        val url = request.url
+                        if (url.scheme != "novelfa-font") return null
+                        val name = url.lastPathSegment ?: return null
+                        if (name.contains("/") || name.contains("\\")) return null
+                        val file = fontFilesNow.value.firstOrNull { it.name == name }
+                            ?: return null
+                        if (!file.isFile) return null
+                        val mime = if (file.name.lowercase().endsWith(".otf")) {
+                            "font/otf"
+                        } else {
+                            "font/ttf"
+                        }
+                        return try {
+                            WebResourceResponse(mime, null, file.inputStream())
+                        } catch (e: Exception) {
+                            android.util.Log.w(
+                                "ReaderWebView",
+                                "font intercept failed: $name",
+                                e
+                            )
+                            null
+                        }
+                    }
+
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         onPageFinished()
