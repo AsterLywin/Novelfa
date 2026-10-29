@@ -1394,10 +1394,6 @@ fun ReaderScreen(
                         html = pageHtml,
                         baseUrl = pageBase,
                         bridge = bridge,
-                        // Fonts for the novelfa-font:// interceptor:
-                        // the chosen family plus the Vazirmatn
-                        // fallback, exactly the files HtmlBuilder's
-                        // @font-face rules point at.
                         // Paged-mode image tap (native hit test): the
                         // paged document holds only the current
                         // chapter, so its index is the chapter.
