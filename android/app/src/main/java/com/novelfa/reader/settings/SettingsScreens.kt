@@ -122,6 +122,7 @@ fun SettingsRoute(
                 )
             }
             item { LanguageSection(viewModel) }
+            item { ImportSection(viewModel) }
             item { SupportSection(viewModel) }
             item {
                 PinSection(
@@ -667,6 +668,39 @@ private fun SupportSection(viewModel: SettingsViewModel) {
                 onCheckedChange = { scope.launch { viewModel.setSupportEnabled(it) } }
             )
         }
+    }
+}
+
+/**
+ * Safe-import toggle (see PrefsStore.FAST_IMPORT): ON = each book is
+ * read once during import (hash computed while copying, reused for
+ * duplicate/record/restore checks) and missing covers are built in the
+ * background after the book appears in the library. OFF = the previous
+ * behaviour exactly: the file is re-read for each check and covers are
+ * built synchronously before the book is saved. The toggle only affects
+ * imports started after it changes; books already in the library, the
+ * reader, backup and delete are untouched either way.
+ */
+@Composable
+private fun ImportSection(viewModel: SettingsViewModel) {
+    val enabled by viewModel.fastImport.collectAsState(initial = true)
+    val scope = rememberCoroutineScope()
+    SectionCard(title = stringResource(R.string.import_section_title), icon = AppIconKind.File) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.fast_import),
+                modifier = Modifier.weight(1f)
+            )
+            Switch(
+                checked = enabled,
+                onCheckedChange = { scope.launch { viewModel.setFastImport(it) } }
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.fast_import_desc),
+            style = MaterialTheme.typography.bodyMedium
+        )
     }
 }
 

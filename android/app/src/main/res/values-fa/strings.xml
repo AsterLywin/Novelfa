@@ -325,4 +325,7 @@
     <string name="pdf_retry">تلاش دوباره</string>
     <string name="cbz_native_loading">در حال باز کردن کمیک…</string>
     <string name="cbz_native_error">باز کردن این فایل کمیک انجام نشد.</string>
+    <string name="import_section_title">ایمپورت</string>
+    <string name="fast_import">ایمپورت سریع</string>
+    <string name="fast_import_desc">هر کتاب موقع ایمپورت فقط یک بار خوانده می‌شود و جلدهای ساخته‌شده در پس‌زمینه می‌آیند. با خاموش‌کردن، رفتار قبلی ایمپورت برمی‌گردد.</string>
 </resources>

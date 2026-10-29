@@ -54,6 +54,11 @@ class PrefsStore(private val context: Context) {
         val GUIDE_SHOWN = booleanPreferencesKey("guideShown")
         // Reading layout mode (replaces the old continuous toggle).
         val READING_MODE = stringPreferencesKey("readingMode")
+        // Safe (fast) import: single-read copy + deferred generated
+        // covers, toggled from Settings. Default ON: it only changes
+        // how import reads and when covers are built, never the book
+        // itself, the reader, or books already in the library.
+        val FAST_IMPORT = booleanPreferencesKey("fastImport")
         // Backup/restore: lifetime finished-books floor restored from a
         // backup (see BackupService). Effective finished count is
         // max(libraryFinished, floor) so a restored record survives an
@@ -90,6 +95,8 @@ class PrefsStore(private val context: Context) {
     val guideShown: Flow<Boolean> = context.dataStore.data.map { it[GUIDE_SHOWN] ?: false }
     /** Reading layout mode key: "paged" (default) or "continuous". */
     val readingMode: Flow<String> = context.dataStore.data.map { it[READING_MODE] ?: "paged" }
+    /** Safe import toggle (default ON; see FAST_IMPORT). */
+    val fastImport: Flow<Boolean> = context.dataStore.data.map { it[FAST_IMPORT] ?: true }
 
     /** The appearance values the first frame is painted with. */
     data class Appearance(
@@ -192,6 +199,14 @@ class PrefsStore(private val context: Context) {
     suspend fun setReadingMode(value: String) {
         context.dataStore.edit { it[READING_MODE] = value }
     }
+
+    suspend fun setFastImport(value: Boolean) {
+        context.dataStore.edit { it[FAST_IMPORT] = value }
+    }
+
+    /** Sync read of the fast-import toggle (suspend: never blocks the main thread). */
+    suspend fun fastImportNow(): Boolean =
+        context.dataStore.data.map { it[FAST_IMPORT] ?: true }.first()
 
     /** Manually-created collection names (survive even when empty). */
     val manualCollections: Flow<Set<String>> =

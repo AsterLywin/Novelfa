@@ -52,6 +52,7 @@ class SettingsViewModel(
     val lang: Flow<String> = prefs.lang
     val supportEnabled: Flow<Boolean> = prefs.supportEnabled
     val themeParticles: Flow<Boolean> = prefs.themeParticles
+    val fastImport: Flow<Boolean> = prefs.fastImport
 
     fun rankService(): RankService = RankService(rankPrefs)
 
@@ -89,6 +90,8 @@ class SettingsViewModel(
     }
 
     suspend fun setThemeParticles(value: Boolean) = prefs.setThemeParticles(value)
+
+    suspend fun setFastImport(value: Boolean) = prefs.setFastImport(value)
 
     /**
      * Minimal port of Loc.SetLanguage: persist "Lang" ("fa"/"en") and apply

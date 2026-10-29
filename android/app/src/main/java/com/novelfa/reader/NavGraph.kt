@@ -39,7 +39,7 @@ fun NavGraph(
             val viewModel = remember {
                 LibraryViewModel(
                     db.bookDao(),
-                    Importer(context, db),
+                    Importer(context, db, prefs),
                     PinManager(PrefsStorePinPrefs(prefs)),
                     cacheDir = context.cacheDir,
                     filesDir = context.filesDir,
@@ -62,7 +62,7 @@ fun NavGraph(
             val viewModel = remember {
                 LibraryViewModel(
                     db.bookDao(),
-                    Importer(context, db),
+                    Importer(context, db, prefs),
                     PinManager(PrefsStorePinPrefs(prefs)),
                     cacheDir = context.cacheDir,
                     filesDir = context.filesDir,

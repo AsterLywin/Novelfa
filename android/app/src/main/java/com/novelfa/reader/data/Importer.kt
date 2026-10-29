@@ -25,10 +25,14 @@ import java.util.UUID
 import java.util.zip.ZipException
 import java.util.zip.ZipFile
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * MIME types the in-app pickers offer. Kept here (not in the UI files)
@@ -61,9 +65,38 @@ class ImportException(
  */
 typealias PdfPasswordProvider = suspend (fileName: String, retry: Boolean) -> String?
 
-class Importer(private val context: Context, private val db: ReaderDb) {
+class Importer(
+    private val context: Context,
+    private val db: ReaderDb,
+    /** Settings toggle (null in unit tests = fast import ON, see below). */
+    private val prefs: PrefsStore? = null
+) {
 
     private val recordStore by lazy { ReadingRecordStore(context) }
+
+    /**
+     * Background scope for deferred generated covers (fast import only):
+     * deliberately NOT a child of the import coroutine — the import dialog
+     * must close as soon as the book is saved, while the cover still
+     * builds and lands via the library Flow. Best-effort only: a failed
+     * or interrupted cover job leaves the book coverless, never failing
+     * an import that already succeeded.
+     */
+    private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * SHA-256 of the bytes actually copied, keyed by the new book id
+     * (fast import only). Lets [applyReadingRecord] and the PDF
+     * record-chapter lookup reuse the copy pass instead of re-reading
+     * the whole stored file. Removed on use by [applyReadingRecord];
+     * falls back to a file hash when absent (old imports, a new
+     * Importer instance), so correctness never depends on this map.
+     */
+    private val importHashes = ConcurrentHashMap<String, String>()
+
+    /** Settings toggle, read once per import (default ON when no prefs). */
+    private suspend fun fastImportEnabled(): Boolean =
+        prefs?.fastImportNow() ?: true
 
     /**
      * Applies a stored reading record to a freshly imported book, if one
@@ -78,8 +111,11 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         if (book.isPrivate) return@withContext false
         val file = File(book.filePath)
         if (!file.isFile) return@withContext false
+        // Remove on use: the hash is only needed for the restore right
+        // after import, so the map never grows past imports whose
+        // restore has not run yet (normally zero or one).
         val record = recordStore.find(
-            sha256OfFile(file), readEpubIdentifier(file)
+            importHashes.remove(bookId) ?: sha256OfFile(file), readEpubIdentifier(file)
         ) ?: return@withContext false
         val updated = applyRecordTo(book, record) ?: return@withContext false
         dao.update(updated)
@@ -125,6 +161,9 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         // explicit check the dialog's Cancel could not interrupt them
         // at all — the job was cancelled but the work ran on.
         val ioCtx = currentCoroutineContext()
+        // Read once per import: the toggle only affects imports started
+        // after it changes; a book already importing keeps its mode.
+        val fastImport = fastImportEnabled()
         onStage?.invoke(null)
         // When overwriting, find and delete the existing book with the same
         // original file name first.
@@ -166,8 +205,14 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 messageFa = context.getString(R.string.import_error_too_large)
             )
         }
+        // SHA-256 of the copied bytes (fast import only): computed
+        // WHILE copying, so the duplicate/record/restore checks below
+        // never re-read the file. OFF = null, preserving the old
+        // re-read behaviour exactly.
+        var copyHash: String? = null
         try {
             onStage?.invoke("copy")
+            val copyDigest = if (fastImport) MessageDigest.getInstance("SHA-256") else null
             context.contentResolver.openInputStream(sourceUri)?.use { input ->
                 tmpDest.outputStream().use { output ->
                     // Cap the copy even when the provider didn't report a size:
@@ -197,9 +242,12 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                             )
                         }
                         output.write(buf, 0, n)
+                        copyDigest?.update(buf, 0, n)
                     }
                 }
             } ?: throw IOException("Cannot open input stream: $sourceUri")
+            copyHash = copyDigest?.digest()?.joinToString("") { "%02x".format(it) }
+            if (copyHash != null) importHashes[id] = copyHash
             // Keep the original file name: when a book has no internal
             // title, the parser falls back to the file name — the UUID
             // name would show up as the book title otherwise.
@@ -270,9 +318,15 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                 // count — the row carries it until the first open
                 // replaces it with the freshly parsed count. Without
                 // a record the count stays 0 (unknown) until then.
-                recordChapters = runCatching { sha256OfFile(destFile) }
-                    .getOrNull()?.let { recordStore.find(it, null)?.totalChapters }
-                    ?.takeIf { it > 0 }
+                recordChapters = if (fastImport) {
+                    // Reuse the copy-pass hash: no second full read.
+                    copyHash?.let { recordStore.find(it, null)?.totalChapters }
+                        ?.takeIf { it > 0 }
+                } else {
+                    runCatching { sha256OfFile(destFile) }
+                        .getOrNull()?.let { recordStore.find(it, null)?.totalChapters }
+                        ?.takeIf { it > 0 }
+                }
                 ParsedBook(
                     title = File(displayName).nameWithoutExtension
                         .takeIf { it.isNotBlank() } ?: displayName,
@@ -352,12 +406,13 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             var coverPath = parsed.coverFile
                 ?.takeIf { it.exists() }
                 ?.let { CoverStore(context).saveCover(it, destFile.absolutePath).absolutePath }
-            if (coverPath == null) {
-                // Coverless book (plain-text formats carry no art, and
-                // some EPUBs ship without a cover): generate a
-                // typographic cover instead of a blank box. A failure
-                // here must never fail the import — the book simply
-                // stays coverless, exactly as before.
+            if (coverPath == null && !fastImport) {
+                // Old behaviour (toggle OFF): coverless book
+                // (plain-text formats carry no art, and some EPUBs ship
+                // without a cover) gets a typographic cover BEFORE the
+                // book is saved, so the import dialog waits for it. A
+                // failure here must never fail the import — the book
+                // simply stays coverless, exactly as before.
                 coverPath = runCatching {
                     val tmp = GeneratedCover.generate(
                         context, bookTitle, destFile.absolutePath
@@ -369,6 +424,11 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     }
                 }.getOrNull()
             }
+            // Fast import: a coverless book is saved coverless NOW and
+            // its generated cover is built in the background below, so
+            // the import dialog never waits for it. The library Flow
+            // re-emits when the row is updated, so the cover appears
+            // on its own a moment later.
             db.bookDao().insert(
                 BookEntity(
                     id = id,
@@ -380,6 +440,33 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     originalFileName = displayName
                 )
             )
+            if (fastImport && coverPath == null) {
+                // Deferred generated cover (see backgroundScope): the
+                // book is already in the library, so this job only
+                // fills its cover. It re-reads the row and writes only
+                // when the book still exists and is still coverless —
+                // deleting the book first, or a cover arriving by
+                // another path, must never be overwritten.
+                val deferredTitle = bookTitle
+                val deferredPath = destFile.absolutePath
+                backgroundScope.launch {
+                    runCatching {
+                        val tmp = GeneratedCover.generate(
+                            context, deferredTitle, deferredPath
+                        ) ?: return@runCatching
+                        try {
+                            val saved = CoverStore(context)
+                                .saveCover(tmp, deferredPath).absolutePath
+                            val current = db.bookDao().getById(id)
+                            if (current != null && current.coverPath == null) {
+                                db.bookDao().update(current.copy(coverPath = saved))
+                            }
+                        } finally {
+                            tmp.delete()
+                        }
+                    }
+                }
+            }
             // The cache above is complete and the stored file is final
             // (decrypted PDFs were already rewritten): stamp it so the
             // first open trusts it instead of re-parsing. Lazy PDFs
