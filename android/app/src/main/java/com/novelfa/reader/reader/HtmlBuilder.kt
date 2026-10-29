@@ -2,7 +2,7 @@ package com.novelfa.reader.reader
 
 import com.novelfa.reader.theme.ReaderTheme
 import java.io.File
-import java.net.URLEncoder
+import java.util.Base64
 import java.util.Locale
 
 /**
@@ -265,21 +265,20 @@ object HtmlBuilder {
 
     /**
      * Port of AppendFontFace: weight 700 if the filename contains "bold"
-     * else 400, format truetype/opentype by extension.
+     * else 400, mime font/otf for .otf else font/ttf.
      *
-     * Fonts are NOT base64-embedded any more: the old version read
-     * every font file into memory and pasted a multi-MB base64 string
-     * into every built page, which the WebView then had to parse and
-     * decode on every open. Now each face points at a
-     * `novelfa-font://<encoded file name>` URL, and ReaderWebView's
-     * WebViewClient serves exactly that file from the FontStore list
-     * (exact name match, no path traversal, no other files). This
-     * deliberately avoids file:// URLs: allowFileAccessFromFileURLs
-     * was removed from ReaderWebView for security (a malicious EPUB's
-     * script could otherwise read app-private files), and a custom
-     * scheme intercepted in native code does not reopen that hole —
-     * EPUB JavaScript never sees a file path, only the font bytes for
-     * the faces the reader itself requested.
+     * Fonts are base64-embedded, as they were before 2026-10-29.
+     * The novelfa-font:// interceptor tried in 001c9f2b NEVER served
+     * a font on device and broke every user-chosen font: with the
+     * `novelfa-font://<name>` form, Android's Uri puts the name in
+     * the authority, not the path, so lastPathSegment is null and the
+     * interceptor returned null for every face — the text fell back
+     * to the system font in EPUB, TXT, Markdown and DOCX alike. Do
+     * NOT reintroduce a custom-scheme font URL without a device test
+     * proving a font actually renders; the base64 form is slower
+     * (multi-MB page strings) but it is the proven one. The cost is
+     * contained by ReaderViewModel's cachedFontFaceCss (rebuilt only
+     * when the font changes) and by the shared document cache.
      */
     fun fontFaceCss(family: String, files: List<File>): String {
         if (family.isEmpty()) {
@@ -287,15 +286,18 @@ object HtmlBuilder {
         }
         val sb = StringBuilder()
         for (f in files) {
-            if (!f.isFile) continue
+            val bytes = try {
+                f.readBytes()
+            } catch (e: Exception) {
+                continue
+            }
             val lowerName = f.nameWithoutExtension.lowercase(Locale.ROOT)
             val weight = if (lowerName.contains("bold")) "700" else "400"
-            val format = if (f.name.lowercase(Locale.ROOT).endsWith(".otf")) "opentype" else "truetype"
-            val encoded = URLEncoder.encode(f.name, "UTF-8").replace("+", "%20")
+            val mime = if (f.name.lowercase(Locale.ROOT).endsWith(".otf")) "font/otf" else "font/ttf"
             sb.append("@font-face{font-family:'").append(cssQuote(family))
                 .append("';font-weight:").append(weight)
-                .append(";font-display:swap;src:url(novelfa-font://").append(encoded)
-                .append(") format('").append(format).append("');}")
+                .append(";font-display:swap;src:url(data:").append(mime).append(";base64,")
+                .append(Base64.getEncoder().encodeToString(bytes)).append(");}")
         }
         return sb.toString()
     }

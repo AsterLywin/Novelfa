@@ -164,10 +164,9 @@ class ReaderViewModel(
         private set
 
     /**
-     * Cached @font-face CSS: fontFaceCss() now emits tiny
-     * novelfa-font:// URLs instead of multi-MB base64, so building it
-     * is cheap — but it is still cached by (family, file list) so a
-     * settings reload never rebuilds it when the font did not change.
+     * Cached @font-face CSS: fontFaceCss() base64-encodes the font
+     * files, so it is rebuilt only when (family, file list) changes —
+     * a settings reload never re-encodes fonts it already has.
      * (reloadForSettings used to call fontFaceCss() directly, bypassing
      * this cache entirely; it now uses this function.)
      */
@@ -352,12 +351,23 @@ class ReaderViewModel(
             // chapter with the same settings.
             val chapterFile = chapters[i].file
             val fontCss = cachedFontFaceCss()
+            // Font identity, NOT the CSS string itself: with base64
+            // fonts the CSS is multi-MB, and using it as a cache key
+            // would make every key (and every cached document lookup)
+            // carry megabytes. File identity is enough — a changed
+            // font file changes its size or mtime, so the key misses.
+            fun fontIdentity(files: List<File>): String =
+                files.joinToString(",") {
+                    "${it.name}:${it.length()}:${it.lastModified()}"
+                }
             val htmlKey = listOf(
                 bookId, i.toString(), chapterFile.absolutePath,
                 chapterFile.length().toString(), chapterFile.lastModified().toString(),
-                theme.key, fontFamily, fontSize.toString(), lineHeight.toString(),
-                sideMargin.toString(), paragraphSpacing.toString(),
-                isEnglish.toString(), isPaged().toString(), fontCss
+                theme.key, fontFamily, fontIdentity(fontFiles),
+                fontIdentity(fallbackFontFiles), fontSize.toString(),
+                lineHeight.toString(), sideMargin.toString(),
+                paragraphSpacing.toString(), isEnglish.toString(),
+                isPaged().toString()
             ).joinToString("|")
             val cachedHtml = SharedReaderCache.getHtml(htmlKey)
             docGen++

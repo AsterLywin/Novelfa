@@ -84,9 +84,10 @@ fun NavGraph(
             val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
             val supportTracker = remember { SupportTracker(PrefsStoreSupportPrefs(prefs)) }
             val bookId = backStackEntry.arguments?.getString("bookId") ?: ""
-            // Native PDF route (2026-10-29): PDF books open in the
-            // on-demand PdfRenderer viewer; every other format falls
-            // through to the existing ReaderScreen unchanged.
+            // Reader route: CBZ/ZIP open in the native image viewer;
+            // PDF books were reverted to ReaderScreen (converted path,
+            // user font applies) at the user's instruction on
+            // 2026-10-29; every other format uses ReaderScreen.
             PdfReaderRoute(
                 bookId = bookId,
                 dao = db.bookDao(),

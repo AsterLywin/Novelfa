@@ -1398,8 +1398,6 @@ fun ReaderScreen(
                         // the chosen family plus the Vazirmatn
                         // fallback, exactly the files HtmlBuilder's
                         // @font-face rules point at.
-                        fontFiles = (vm?.fontFiles ?: emptyList()) +
-                            (vm?.fallbackFontFiles ?: emptyList()),
                         // Paged-mode image tap (native hit test): the
                         // paged document holds only the current
                         // chapter, so its index is the chapter.

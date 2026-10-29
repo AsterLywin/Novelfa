@@ -315,17 +315,15 @@ fun PdfReaderRoute(
                 CircularProgressIndicator()
             }
         }
-        BookFormat.detect(File(entity!!.filePath)) == BookFormat.PDF -> {
-            val bookFile = File(entity!!.filePath)
-            NativeImageBookViewer(
-                book = entity!!,
-                dao = dao,
-                onClose = onClose,
-                sourceFactory = { PdfNativeRenderer(bookFile) },
-                loadingRes = R.string.pdf_native_loading,
-                errorRes = R.string.pdf_native_error
-            )
-        }
+        // PDF routing REVERTED 2026-10-29 at the user's instruction:
+        // PDF books go back to ReaderScreen (the converted
+        // text/image path via BookConverter), where the user's chosen
+        // font applies to the text — the native PdfRenderer viewer
+        // renders fixed PDF bitmaps, so it could never apply the
+        // user's font, and the user reports its rendering as broken.
+        // PdfNativeRenderer below is kept (currently unused) in case
+        // native PDF is ever wanted again; CBZ/ZIP keep the native
+        // viewer, since they never had a converted path.
         BookFormat.detect(File(entity!!.filePath)) == BookFormat.CBZ ||
             BookFormat.detect(File(entity!!.filePath)) == BookFormat.ZIP -> {
             val bookFile = File(entity!!.filePath)
