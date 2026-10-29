@@ -5,19 +5,28 @@ import java.util.zip.ZipFile
 
 /**
  * Book file formats Novelfa opens. EPUB is the native format (parsed by
- * [EpubParser]); the rest are converted to chapter HTML files at import
- * and at open time by the parsers in this package, so the reader itself
- * never knows the difference.
+ * [EpubParser]); TXT, Markdown and DOCX are converted to chapter HTML
+ * files at import and at open time by the parsers in this package, so
+ * the reader itself never knows the difference. PDF, CBZ and ZIP are
+ * the exception: they are NATIVE image/page books, opened on demand
+ * by the native viewer (see reader/PdfNativeReader.kt) and never
+ * converted — a PDF stays a PDF, a CBZ/ZIP stays its archive of
+ * page images ([CbzBook]).
  *
  * Detection prefers the file extension (what pickers and file managers
  * report) and falls back to content sniffing for extension-less files.
+ * A .zip that actually carries an EPUB or DOCX is still claimed by
+ * strong sniffing first (see the importer, which checks sniffing
+ * before extension); a plain .zip of images is an image book.
  */
 enum class BookFormat(val extension: String) {
     EPUB("epub"),
     TXT("txt"),
     MARKDOWN("md"),
     PDF("pdf"),
-    DOCX("docx");
+    DOCX("docx"),
+    CBZ("cbz"),
+    ZIP("zip");
 
     companion object {
         fun fromExtension(fileName: String): BookFormat? {
@@ -28,6 +37,8 @@ enum class BookFormat(val extension: String) {
                 "md", "markdown", "mdown" -> MARKDOWN
                 "pdf" -> PDF
                 "docx" -> DOCX
+                "cbz" -> CBZ
+                "zip" -> ZIP
                 else -> null
             }
         }

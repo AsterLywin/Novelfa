@@ -1,10 +1,12 @@
 package com.novelfa.reader.reader
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,9 +16,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,6 +40,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -53,74 +62,91 @@ import androidx.compose.ui.unit.dp
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.BookEntity
+import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.parser.BookFormat
+import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
 import java.io.Closeable
 import java.io.File
 import java.time.Instant
+import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Native PDF reader (2026-10-29): the fix for the PDF report, not
- * another conversion round.
+ * Native page-book reader (PDF since 2026-10-29, CBZ/ZIP manhwa
+ * since 2026-10-29): the fix for the PDF report, extended to
+ * image books on the same engine.
  *
  * Why this exists: the old path converted a PDF to EPUB-like XHTML
- * (hand-rolled [com.novelfa.reader.parser.PdfParser] for text, JPEG
- * pre-renders for scans) and only then showed it in the EPUB WebView.
- * That made first open pay for the WHOLE book, lost the original
- * page layout, links and fidelity, and capped scanned books at
- * 1000 pages. The three readers compared in the report all do the
- * opposite: a PDF stays a PDF, import only registers it, and the
- * viewer renders one original page at a time, on demand.
+ * (hand-rolled PdfParser for text, JPEG pre-renders for scans) and
+ * only then showed it in the EPUB WebView. That made first open pay
+ * for the WHOLE book, lost the original page layout, and capped
+ * scanned books at 1000 pages. The readers compared in the report
+ * all do the opposite: a book stays in its own format, import only
+ * registers it, and the viewer renders one original page at a time,
+ * on demand. CBZ is the same idea with a different container: a
+ * CBZ is a ZIP of page images ([CbzBook]), so a manhwa page is
+ * decoded from the archive when it is scrolled to, never extracted
+ * at import.
  *
- * This file does exactly that, with the platform renderer that was
- * already in the app (android.graphics.pdf.PdfRenderer, i.e. Pdfium;
- * no new dependency, no native library to ship):
- *
+ * Shared rules for both formats:
  * - No text extraction, no XHTML, no pre-rendered JPEG files. A page
- *   is rendered only when its list item is composed (LazyColumn
- *   windows composition to the visible pages plus a few neighbours),
- *   so opening a 500-page book costs one page, not 500.
+ *   is rendered only when its list/pager item is composed, so
+ *   opening a 500-page book costs one page, not 500.
  * - No 1000-page cap: nothing is pre-rendered or stored, so a long
  *   book is no more expensive to open than a short one. Memory is
- *   bounded by the LazyColumn window, not by the book: each page
- *   item owns its bitmap and recycles it when it leaves composition.
- * - One original page is never cut: each item is exactly one PDF
- *   page at its own aspect ratio, fit to the screen width by
- *   default. Zoom only re-renders that page at a larger width, it
- *   never reflows text.
+ *   bounded by the visible window, not by the book: each page item
+ *   owns its bitmap and recycles it when it leaves composition.
+ * - One original page is never cut: each item is exactly one page
+ *   at its own aspect ratio, fit to the screen width by default.
+ *   Zoom re-renders that page at a larger width, it never reflows
+ *   text. In vertical mode a zoomed page pans horizontally; in
+ *   paged mode horizontal drag is the page turn, so zoom there
+ *   only sharpens the render (the same trade-off ReadEra documents
+ *   for its horizontal mode).
  * - A page that fails to render fails alone (placeholder + retry),
- *   it never kills the book — the per-page isolation ReadEra uses.
- * - Progress reuses the existing book row: for a PDF,
- *   [BookEntity.lastChapterIndex] IS the page index and
- *   [BookEntity.totalChapters] IS the page count, so the library
- *   progress bar and "finished" logic work unchanged. Lazy import
- *   left totalChapters at 0; the first native open fills it in.
+ *   it never kills the book.
+ * - Progress reuses the existing book row: [BookEntity.lastChapterIndex]
+ *   IS the page index and [BookEntity.totalChapters] IS the page
+ *   count, so the library progress bar works unchanged. Lazy PDF
+ *   import left totalChapters at 0; the first native open fills it
+ *   in. CBZ import already knows the count from the archive listing.
+ * - Modes follow the GLOBAL reading-mode preference (the same
+ *   paged/continuous toggle the EPUB reader uses): paged =
+ *   HorizontalPager, one original page per screen, vertical scroll
+ *   inside a tall page; continuous = LazyColumn. Tapping the mode
+ *   button here changes the same preference the EPUB reader reads.
  *
- * Deliberate v1 limits, stated not hidden:
- * - Vertical-continuous only. The global paged/vertical toggle is
- *   an EPUB pager concept; a paged PDF mode (one original page per
- *   screen, swipe) is a follow-up, and vertical already satisfies
- *   the page model (whole page, never cut, vertical scroll inside
- *   a tall page).
- * - No text search, selection, annotation or XP credit yet. Those
- *   need page-coordinate data the old XHTML path also threw away;
- *   they belong on top of this viewer, not on the converter.
- * - Password PDFs work because import already stores them
- *   decrypted; the platform renderer cannot open an encrypted file
- *   at all, so this viewer never sees one.
+ * Deliberate limits, stated not hidden:
+ * - No text search, selection, annotation or XP credit yet for
+ *   native books. Those need page-coordinate data the old XHTML
+ *   path also threw away; they belong on top of this viewer.
+ * - CBZ chapter folders are flattened in natural order (see
+ *   [CbzBook]); there is no chapter drawer for them yet.
+ * - CBR (RAR) is not supported: it needs a RAR decoder.
+ * - Password PDFs work only because import already stores them
+ *   decrypted; the platform renderer cannot open an encrypted
+ *   file at all, so this viewer never sees one.
  */
-internal class PdfNativeRenderer(pdfFile: File) : Closeable {
+
+/** One page source for the native viewer, PDF or CBZ alike. */
+internal interface NativePageSource : Closeable {
+    val pageCount: Int
+
+    /** Renders one page to a fresh bitmap the CALLER owns. */
+    fun renderPage(index: Int, targetWidthPx: Int): Bitmap
+}
+
+internal class PdfNativeRenderer(pdfFile: File) : NativePageSource {
     private val lock = Any()
     private val pfd: ParcelFileDescriptor =
         ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY)
     private val renderer: PdfRenderer = PdfRenderer(pfd)
 
-    /** Page count, read once the renderer is open; 0 is never valid. */
-    val pageCount: Int
+    override val pageCount: Int
         get() = renderer.pageCount
 
     /**
@@ -131,7 +157,7 @@ internal class PdfNativeRenderer(pdfFile: File) : Closeable {
      * the width scaled down to match, so an absurdly tall page
      * cannot allocate an unbounded bitmap.
      */
-    fun renderPage(index: Int, targetWidthPx: Int): Bitmap {
+    override fun renderPage(index: Int, targetWidthPx: Int): Bitmap {
         synchronized(lock) {
             if (index < 0 || index >= renderer.pageCount) {
                 throw IndexOutOfBoundsException("PDF page $index out of range")
@@ -175,8 +201,68 @@ internal class PdfNativeRenderer(pdfFile: File) : Closeable {
 }
 
 /**
+ * CBZ/ZIP page source: decodes one archive image on demand.
+ * Manhwa pages are tall and mostly opaque, so they decode as
+ * RGB_565 (half the memory of ARGB_8888) and are allowed up to
+ * 16384px tall before sampling down — a tall strip must stay
+ * readable, not be shrunk to a thumbnail by a PDF-sized cap.
+ * Sampling is a power of two (the decoder's efficient path), so
+ * the decoded width is the closest power-of-two sample at or
+ * below the requested width, never an exact-width stretch.
+ */
+internal class CbzNativeSource(zipFile: File) : NativePageSource {
+    private val lock = Any()
+    private val zip = ZipFile(zipFile)
+    private val entries: List<String> = CbzBook.imageEntryNames(zipFile)
+
+    override val pageCount: Int
+        get() = entries.size
+
+    override fun renderPage(index: Int, targetWidthPx: Int): Bitmap {
+        synchronized(lock) {
+            if (index < 0 || index >= entries.size) {
+                throw IndexOutOfBoundsException("Comic page $index out of range")
+            }
+            val entry = zip.getEntry(entries[index])
+                ?: throw IllegalArgumentException("Missing comic entry: ${entries[index]}")
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            zip.getInputStream(entry).use { stream ->
+                BitmapFactory.decodeStream(stream, null, bounds)
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
+            }
+            var sample = 1
+            while (bounds.outWidth / sample > targetWidthPx ||
+                bounds.outHeight / sample > MAX_DECODE_HEIGHT
+            ) {
+                sample *= 2
+            }
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+            val bitmap = zip.getInputStream(entry).use { stream ->
+                BitmapFactory.decodeStream(stream, null, opts)
+            } ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
+            return bitmap
+        }
+    }
+
+    override fun close() {
+        synchronized(lock) {
+            runCatching { zip.close() }
+        }
+    }
+
+    companion object {
+        private const val MAX_DECODE_HEIGHT = 16384
+    }
+}
+
+/**
  * Route wrapper: decides, from the stored file alone, whether this
- * book gets the native PDF viewer or the existing EPUB/WebView
+ * book gets the native page viewer or the existing EPUB/WebView
  * reader. This is the ONLY call site change for the old reader:
  * [ReaderScreen] itself is untouched, so EPUB, TXT, Markdown and
  * DOCX behaviour cannot regress through this change. A book whose
@@ -223,7 +309,27 @@ fun PdfReaderRoute(
             }
         }
         BookFormat.detect(File(entity!!.filePath)) == BookFormat.PDF -> {
-            PdfNativeViewer(book = entity!!, dao = dao, onClose = onClose)
+            val bookFile = File(entity!!.filePath)
+            NativeImageBookViewer(
+                book = entity!!,
+                dao = dao,
+                onClose = onClose,
+                sourceFactory = { PdfNativeRenderer(bookFile) },
+                loadingRes = R.string.pdf_native_loading,
+                errorRes = R.string.pdf_native_error
+            )
+        }
+        BookFormat.detect(File(entity!!.filePath)) == BookFormat.CBZ ||
+            BookFormat.detect(File(entity!!.filePath)) == BookFormat.ZIP -> {
+            val bookFile = File(entity!!.filePath)
+            NativeImageBookViewer(
+                book = entity!!,
+                dao = dao,
+                onClose = onClose,
+                sourceFactory = { CbzNativeSource(bookFile) },
+                loadingRes = R.string.cbz_native_loading,
+                errorRes = R.string.cbz_native_error
+            )
         }
         else -> {
             ReaderScreen(bookId = bookId, dao = dao, onClose = onClose, support = support)
@@ -232,55 +338,61 @@ fun PdfReaderRoute(
 }
 
 /**
- * The native viewer itself. Render width is the screen width times
- * the zoom factor (1x / 1.5x / 2x, fit-width is 1x); changing zoom
- * re-renders visible pages at the new width, it never scales a
- * stale bitmap up, so zoom stays sharp.
+ * The native viewer itself, for PDF and CBZ alike. Render width is
+ * the screen width times the zoom factor (1x / 1.5x / 2x, fit-width
+ * is 1x); changing zoom re-renders visible pages at the new width,
+ * it never scales a stale bitmap up, so zoom stays sharp.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PdfNativeViewer(
+private fun NativeImageBookViewer(
     book: BookEntity,
     dao: BookDao,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    sourceFactory: () -> NativePageSource,
+    loadingRes: Int,
+    errorRes: Int
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    val pdfFile = remember(book.filePath) { File(book.filePath) }
+    val prefs = remember(context.applicationContext) {
+        PrefsStore(context.applicationContext)
+    }
+    val savedModeKey by prefs.readingMode.collectAsState(initial = "paged")
+    val modeNow = ReadingMode.fromKey(savedModeKey)
+    val isPaged = modeNow == ReadingMode.PAGED_HORIZONTAL
 
-    var renderer by remember { mutableStateOf<PdfNativeRenderer?>(null) }
+    var source by remember { mutableStateOf<NativePageSource?>(null) }
     var openError by remember { mutableStateOf(false) }
     var totalChaptersFixed by remember { mutableStateOf(false) }
 
-    // Open on IO: PdfRenderer construction parses the file header
-    // and must never block the main thread on a big PDF.
+    // Open on IO: renderer/zip construction parses the file header
+    // and must never block the main thread on a big book.
     LaunchedEffect(book.id, book.filePath) {
         val opened = withContext(Dispatchers.IO) {
-            runCatching { PdfNativeRenderer(pdfFile) }.getOrNull()
+            runCatching { sourceFactory() }.getOrNull()
         }
         if (opened == null || opened.pageCount <= 0) {
             runCatching { opened?.close() }
             openError = true
         } else {
-            renderer = opened
+            source = opened
         }
     }
-    DisposableEffect(renderer) {
-        onDispose { renderer?.close() }
+    DisposableEffect(source) {
+        onDispose { source?.close() }
     }
 
-    val pageCount = renderer?.pageCount ?: 0
+    val pageCount = source?.pageCount ?: 0
     val savedPage = book.lastChapterIndex
-    // The list state is remembered before the renderer opens (so its
-    // initial index is always 0); the saved page is restored by the
-    // scroll below, once the real page count is known. Without it,
-    // every PDF reopen would land on page 1.
     var restoredPage by remember { mutableStateOf(false) }
     val initialPage = 0
 
     // Fill in the lazy-import placeholder (totalChapters == 0) the
     // first time the real page count is known, without touching the
-    // saved page index.
+    // saved page index. CBZ import already set the count, so this
+    // is a no-op there.
     LaunchedEffect(pageCount, totalChaptersFixed) {
         if (pageCount > 0 && !totalChaptersFixed && book.totalChapters != pageCount) {
             withContext(Dispatchers.IO) {
@@ -293,13 +405,31 @@ private fun PdfNativeViewer(
     }
 
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
+    val pagerState = rememberPagerState(
+        initialPage = initialPage,
+        pageCount = { pageCount }
+    )
     var currentPage by remember { mutableIntStateOf(initialPage) }
-    LaunchedEffect(pageCount) {
-        if (pageCount > 0 && !restoredPage) {
-            restoredPage = true
-            val target = savedPage.coerceIn(0, pageCount - 1)
-            if (target != 0) {
-                currentPage = target
+    // Page to land the newly-active state on when the mode flips.
+    // Set BEFORE the preference changes (the new state's tracking
+    // flow emits its own position 0 immediately on start, so the
+    // restore must not read currentPage after the flip — it would
+    // read 0 and lose the place).
+    var pendingModeTarget by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(pageCount, isPaged) {
+        if (pageCount <= 0) return@LaunchedEffect
+        val target = pendingModeTarget?.also { pendingModeTarget = null }
+            ?: if (!restoredPage) {
+                restoredPage = true
+                savedPage.coerceIn(0, pageCount - 1)
+            } else {
+                return@LaunchedEffect
+            }
+        if (target != 0) {
+            currentPage = target
+            if (isPaged) {
+                runCatching { pagerState.scrollToPage(target) }
+            } else {
                 runCatching { listState.scrollToItem(target) }
             }
         }
@@ -328,13 +458,24 @@ private fun PdfNativeViewer(
 
     // Visible-page tracking, throttled like the EPUB reader's
     // saveProgress (500ms): scrolling through pages must not cost
-    // a DB write per page.
-    LaunchedEffect(listState, pageCount) {
+    // a DB write per page. The effect restarts on a mode switch,
+    // so the pager flow replaces the list flow (and vice versa)
+    // instead of both tracking at once.
+    LaunchedEffect(listState, pagerState, pageCount, isPaged) {
         if (pageCount <= 0) return@LaunchedEffect
-        snapshotFlow { listState.firstVisibleItemIndex }.collect { page ->
-            if (page in 0 until pageCount) {
-                currentPage = page
-                savePage(page)
+        if (isPaged) {
+            snapshotFlow { pagerState.currentPage }.collect { page ->
+                if (page in 0 until pageCount) {
+                    currentPage = page
+                    savePage(page)
+                }
+            }
+        } else {
+            snapshotFlow { listState.firstVisibleItemIndex }.collect { page ->
+                if (page in 0 until pageCount) {
+                    currentPage = page
+                    savePage(page)
+                }
             }
         }
     }
@@ -346,12 +487,50 @@ private fun PdfNativeViewer(
         }
     }
 
+    fun toggleMode() {
+        val next = if (isPaged) {
+            ReadingMode.CONTINUOUS_VERTICAL
+        } else {
+            ReadingMode.PAGED_HORIZONTAL
+        }
+        pendingModeTarget = currentPage
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                prefs.setReadingMode(next.key)
+            }
+        }
+    }
+
+    /** Direct jump (slider, restore, zoom): never animates through pages. */
+    fun jumpTo(page: Int) {
+        scope.launch {
+            val target = page.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+            if (isPaged) {
+                runCatching { pagerState.scrollToPage(target) }
+            } else {
+                runCatching { listState.scrollToItem(target) }
+            }
+        }
+    }
+
+    /** Single-page step (prev/next buttons): animated in paged mode. */
+    fun stepTo(page: Int) {
+        scope.launch {
+            val target = page.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+            if (isPaged) {
+                runCatching { pagerState.animateScrollToPage(target) }
+            } else {
+                runCatching { listState.scrollToItem(target) }
+            }
+        }
+    }
+
     val density = LocalDensity.current
     val screenWidthPx = with(density) {
         LocalConfiguration.current.screenWidthDp.dp.toPx().toInt()
     }
-    // Zoom steps: fit-width, 1.5x, 2x. Never below fit-width: a PDF
-    // page smaller than the screen is a wasted screen, not a feature.
+    // Zoom steps: fit-width, 1.5x, 2x. Never below fit-width: a page
+    // smaller than the screen is a wasted screen, not a feature.
     val zoomFactors = remember { listOf(1f, 1.5f, 2f) }
     var zoomIndex by remember { mutableIntStateOf(0) }
     val renderWidthPx = (screenWidthPx * zoomFactors[zoomIndex]).toInt().coerceAtLeast(1)
@@ -359,7 +538,7 @@ private fun PdfNativeViewer(
     // same page instead of wherever the new heights dropped us.
     LaunchedEffect(zoomIndex) {
         if (pageCount > 0) {
-            runCatching { listState.scrollToItem(currentPage) }
+            jumpTo(currentPage)
         }
     }
 
@@ -384,6 +563,17 @@ private fun PdfNativeViewer(
                     }
                 },
                 actions = {
+                    TextButton(onClick = { toggleMode() }) {
+                        Text(
+                            stringResource(
+                                if (isPaged) {
+                                    R.string.mode_horizontal
+                                } else {
+                                    R.string.mode_vertical_continuous
+                                }
+                            )
+                        )
+                    }
                     TextButton(
                         enabled = zoomIndex > 0,
                         onClick = { zoomIndex-- }
@@ -404,11 +594,7 @@ private fun PdfNativeViewer(
                 BottomAppBar {
                     TextButton(
                         enabled = currentPage > 0,
-                        onClick = {
-                            scope.launch {
-                                listState.scrollToItem((currentPage - 1).coerceAtLeast(0))
-                            }
-                        }
+                        onClick = { stepTo(currentPage - 1) }
                     ) { Text(stringResource(R.string.pdf_prev_page)) }
                     Column(
                         modifier = Modifier.weight(1f),
@@ -428,9 +614,7 @@ private fun PdfNativeViewer(
                                 currentPage = v.toInt().coerceIn(0, pageCount - 1)
                             },
                             onValueChangeFinished = {
-                                scope.launch {
-                                    listState.scrollToItem(currentPage)
-                                }
+                                jumpTo(currentPage)
                             },
                             valueRange = 0f..(pageCount - 1).coerceAtLeast(0).toFloat(),
                             steps = (pageCount - 2).coerceIn(0, 1000)
@@ -438,11 +622,7 @@ private fun PdfNativeViewer(
                     }
                     TextButton(
                         enabled = currentPage < pageCount - 1,
-                        onClick = {
-                            scope.launch {
-                                listState.scrollToItem((currentPage + 1).coerceAtMost(pageCount - 1))
-                            }
-                        }
+                        onClick = { stepTo(currentPage + 1) }
                     ) { Text(stringResource(R.string.pdf_next_page)) }
                 }
             }
@@ -455,7 +635,7 @@ private fun PdfNativeViewer(
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(stringResource(R.string.pdf_native_error))
+                        Text(stringResource(errorRes))
                         Spacer(Modifier.height(12.dp))
                         TextButton(onClick = onClose) {
                             Text(stringResource(R.string.close))
@@ -463,7 +643,7 @@ private fun PdfNativeViewer(
                     }
                 }
             }
-            renderer == null -> {
+            source == null -> {
                 Box(
                     modifier = Modifier.fillMaxSize().padding(padding),
                     contentAlignment = Alignment.Center
@@ -471,12 +651,28 @@ private fun PdfNativeViewer(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
                         Spacer(Modifier.height(12.dp))
-                        Text(stringResource(R.string.pdf_native_loading))
+                        Text(stringResource(loadingRes))
                     }
                 }
             }
+            isPaged -> {
+                val activeSource = source!!
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize().padding(padding)
+                        .background(Color(0xFF1E1E1E)),
+                    beyondViewportPageCount = 1
+                ) { page ->
+                    NativePageItem(
+                        source = activeSource,
+                        page = page,
+                        renderWidthPx = renderWidthPx,
+                        paged = true
+                    )
+                }
+            }
             else -> {
-                val activeRenderer = renderer!!
+                val activeSource = source!!
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize().padding(padding)
@@ -485,10 +681,11 @@ private fun PdfNativeViewer(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(pageCount) { page ->
-                        PdfPageItem(
-                            renderer = activeRenderer,
+                        NativePageItem(
+                            source = activeSource,
                             page = page,
-                            renderWidthPx = renderWidthPx
+                            renderWidthPx = renderWidthPx,
+                            paged = false
                         )
                     }
                 }
@@ -502,14 +699,20 @@ private fun PdfNativeViewer(
  * IO when the item is composed, recycled when it leaves
  * composition. Sharing bitmaps through a cache was rejected on
  * purpose — a recycled bitmap still being drawn by another item
- * is a crash, and LazyColumn already bounds how many items are
- * alive at once, so a shared cache buys nothing here.
+ * is a crash, and the visible window already bounds how many
+ * items are alive at once, so a shared cache buys nothing here.
+ *
+ * In vertical mode a zoomed page pans horizontally (its displayed
+ * width is its bitmap width, which is larger than the screen at
+ * 1.5x/2x). In paged mode horizontal drag is the page turn, so
+ * the page is fit to the screen width and zoom only sharpens it.
  */
 @Composable
-private fun PdfPageItem(
-    renderer: PdfNativeRenderer,
+private fun NativePageItem(
+    source: NativePageSource,
     page: Int,
-    renderWidthPx: Int
+    renderWidthPx: Int,
+    paged: Boolean
 ) {
     var bitmap by remember(page, renderWidthPx) { mutableStateOf<Bitmap?>(null) }
     var failed by remember(page, renderWidthPx) { mutableStateOf(false) }
@@ -519,7 +722,7 @@ private fun PdfPageItem(
         bitmap = null
         failed = false
         val rendered = withContext(Dispatchers.IO) {
-            runCatching { renderer.renderPage(page, renderWidthPx) }.getOrNull()
+            runCatching { source.renderPage(page, renderWidthPx) }.getOrNull()
         }
         if (rendered == null) failed = true else bitmap = rendered
     }
@@ -529,23 +732,61 @@ private fun PdfPageItem(
         onDispose { bitmap?.recycle() }
     }
 
-    Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = Alignment.Center
-    ) {
-        when {
-            bitmap != null -> {
-                val bmp = bitmap!!
-                Image(
-                    bitmap = bmp.asImageBitmap(),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(bmp.width.toFloat() / bmp.height.toFloat())
-                        .background(Color.White)
-                )
+    val density = LocalDensity.current
+    when {
+        bitmap != null -> {
+            val bmp = bitmap!!
+            val ratio = bmp.width.toFloat() / bmp.height.toFloat()
+            if (paged) {
+                Column(
+                    modifier = Modifier.fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .background(Color(0xFF1E1E1E)),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(ratio)
+                            .background(Color.White)
+                    )
+                }
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .width(with(density) { bmp.width.toDp() })
+                            .aspectRatio(ratio)
+                            .background(Color.White)
+                    )
+                }
             }
-            failed -> {
+        }
+        failed -> {
+            if (paged) {
+                Column(
+                    modifier = Modifier.fillMaxSize().background(Color.White),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = stringResource(R.string.pdf_page_failed),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { retry++ }) {
+                        Text(stringResource(R.string.pdf_retry))
+                    }
+                }
+            } else {
                 Column(
                     modifier = Modifier.fillMaxWidth().height(200.dp)
                         .background(Color.White),
@@ -562,13 +803,17 @@ private fun PdfPageItem(
                     }
                 }
             }
-            else -> {
-                Box(
-                    modifier = Modifier.fillMaxWidth().height(200.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator()
-                }
+        }
+        else -> {
+            Box(
+                modifier = if (paged) {
+                    Modifier.fillMaxSize()
+                } else {
+                    Modifier.fillMaxWidth().height(200.dp)
+                },
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
             }
         }
     }

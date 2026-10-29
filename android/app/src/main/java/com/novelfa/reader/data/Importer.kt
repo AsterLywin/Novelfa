@@ -10,6 +10,7 @@ import com.novelfa.reader.R
 import com.novelfa.reader.model.ParsedBook
 import com.novelfa.reader.parser.BookConverter
 import com.novelfa.reader.parser.BookFormat
+import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.parser.CacheStamp
 import com.novelfa.reader.parser.EpubParser
 import com.novelfa.reader.parser.PdfParser
@@ -152,6 +153,10 @@ class Importer(private val context: Context, private val db: ReaderDb) {
         // Lazy-PDF chapter count from a saved reading record, when
         // one exists for this exact content (see the PDF branch).
         var recordChapters: Int? = null
+        // Native image-book page count (CBZ/ZIP): known at import
+        // from the archive listing alone, so unlike lazy PDFs the
+        // row carries the real count from the start.
+        var imageBookPages: Int? = null
         // Fail fast on absurd picks instead of filling internal storage with
         // the unbounded SAF copy below.
         val pickedSize = queryDisplaySize(sourceUri)
@@ -274,6 +279,39 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     chapters = emptyList(),
                     coverFile = null
                 )
+            } else if (format == BookFormat.CBZ || format == BookFormat.ZIP) {
+                // Native image book (manhwa/manga/comic): import only
+                // lists the archive — no extraction, no conversion,
+                // no per-page work. The viewer decodes pages on
+                // demand from the stored archive. A corrupt archive
+                // fails here via the generic catch (localized import
+                // error); an archive with no images fails cleanly
+                // with the no-readable-sections message, exactly
+                // like a text-less book used to.
+                ioCtx.ensureActive()
+                onStage?.invoke("validate")
+                val count = try {
+                    CbzBook.imageEntryNames(destFile).size
+                } catch (e: Exception) {
+                    throw ImportException(
+                        e.message ?: "invalid comic archive: $displayName",
+                        messageFa = context.getString(R.string.import_error_bad_structure),
+                        cause = e
+                    )
+                }
+                if (count <= 0) {
+                    throw ImportException(
+                        "Comic archive has no readable images",
+                        messageFa = context.getString(R.string.import_error_no_readable_sections)
+                    )
+                }
+                imageBookPages = count
+                ParsedBook(
+                    title = File(displayName).nameWithoutExtension
+                        .takeIf { it.isNotBlank() } ?: displayName,
+                    chapters = emptyList(),
+                    coverFile = null
+                )
             } else {
                 // Converted formats: parse errors get a format-aware
                 // user-facing message instead of the EPUB-only texts.
@@ -287,9 +325,13 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     )
                 }
             }
-            // Lazy PDFs deliberately have no chapters yet (they are
-            // built on first open); every other format must parse.
-            if (format != BookFormat.PDF && parsed.chapters.isEmpty()) {
+            // Lazy PDFs and native image books deliberately have no
+            // chapters yet (PDFs are built on first open; image
+            // books never have chapters, their pages ARE the book);
+            // every other format must parse.
+            val isNativeBook = format == BookFormat.PDF ||
+                format == BookFormat.CBZ || format == BookFormat.ZIP
+            if (!isNativeBook && parsed.chapters.isEmpty()) {
                 throw ImportException(
                     "Book has no readable chapters",
                     messageFa = context.getString(R.string.import_error_no_readable_sections)
@@ -333,7 +375,7 @@ class Importer(private val context: Context, private val db: ReaderDb) {
                     title = bookTitle,
                     filePath = destFile.absolutePath,
                     coverPath = coverPath,
-                    totalChapters = recordChapters ?: parsed.chapters.size,
+                    totalChapters = imageBookPages ?: recordChapters ?: parsed.chapters.size,
                     dateAdded = Instant.now().toString(),
                     originalFileName = displayName
                 )
@@ -342,8 +384,10 @@ class Importer(private val context: Context, private val db: ReaderDb) {
             // (decrypted PDFs were already rewritten): stamp it so the
             // first open trusts it instead of re-parsing. Lazy PDFs
             // have no cache to stamp — the missing stamp is exactly
-            // what makes the first open convert them.
-            if (format != BookFormat.PDF) CacheStamp.writeStamp(openCacheDir, destFile)
+            // what makes the first open convert them. Native image
+            // books likewise have no converted cache to stamp; the
+            // viewer opens the stored archive directly.
+            if (!isNativeBook) CacheStamp.writeStamp(openCacheDir, destFile)
             id
         } catch (e: CancellationException) {
             // Never swallow coroutine cancellation: clean up and rethrow so the

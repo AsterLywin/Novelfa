@@ -323,4 +323,6 @@
     <string name="pdf_next_page">Next page</string>
     <string name="pdf_page_failed">This page couldn\'t be rendered.</string>
     <string name="pdf_retry">Retry</string>
+    <string name="cbz_native_loading">Opening comic…</string>
+    <string name="cbz_native_error">Couldn\'t open this comic file.</string>
 </resources>
