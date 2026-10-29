@@ -67,11 +67,16 @@ import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
+import com.novelfa.reader.theme.PrefsStoreRankPrefs
+import com.novelfa.reader.theme.XpSessionTracker
+import com.novelfa.reader.theme.XpStore
 import java.io.Closeable
 import java.io.File
 import java.time.Instant
 import java.util.zip.ZipFile
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -410,6 +415,51 @@ private fun NativeImageBookViewer(
         pageCount = { pageCount }
     )
     var currentPage by remember { mutableIntStateOf(initialPage) }
+
+    // XP for native books (PDF/CBZ/ZIP pages): the EPUB reader had XP
+    // from the start, native books had none — a PDF novel or a manhwa
+    // earned nothing. Same rules as the EPUB path, with page = unit:
+    // visited-only (slider jumps never credit skipped pages),
+    // >= 5 s dwell via [XpSessionTracker], once per page per book
+    // (XpLedger), private books excluded, and the book bonus from
+    // XpStore (last page credited + >= 90% of pages) applies unchanged.
+    // Words are not extracted in the native viewer, so every page
+    // counts as words = 0, which the formula floors to 1 XP — the
+    // same result a typical ~500-word PDF page would give, and the
+    // only honest value for an image page.
+    val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
+    val xpTracker = remember(book.id) { XpSessionTracker() }
+    // Independent scope for the dispose safety net (ReaderScreen
+    // parity): the composition scope is cancelled on dispose.
+    val xpFlushScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+    suspend fun xpCreditPage(page: Int) {
+        if (book.isPrivate || pageCount <= 0 || page !in 0 until pageCount) return
+        runCatching {
+            rankPrefs.awaitLoaded()
+            XpStore(rankPrefs).creditUnit(book.id, page, 0, pageCount, book.isPrivate)
+        }
+    }
+    // Drive XP from currentPage, not from the pager/list tracking
+    // flows: those flows re-emit on a mode switch (and can emit 0
+    // first), which would credit the page the user is still on.
+    // currentPage only changes when the user actually moves, so a
+    // mode toggle, zoom change or restore never credits anything.
+    LaunchedEffect(currentPage, pageCount) {
+        if (pageCount <= 0) return@LaunchedEffect
+        val toCredit = xpTracker.enter(currentPage) ?: return@LaunchedEffect
+        xpCreditPage(toCredit)
+    }
+    DisposableEffect(book.id) {
+        onDispose {
+            val tracker = xpTracker
+            xpFlushScope.launch {
+                runCatching {
+                    val flushed = tracker.flush()
+                    if (flushed != null) xpCreditPage(flushed)
+                }
+            }
+        }
+    }
     // Page to land the newly-active state on when the mode flips.
     // Set BEFORE the preference changes (the new state's tracking
     // flow emits its own position 0 immediately on start, so the
@@ -482,6 +532,13 @@ private fun NativeImageBookViewer(
 
     fun closeViewer() {
         scope.launch {
+            // XP flush first, like ReaderScreen: the home celebration
+            // must see the final page, and the dispose safety net
+            // above is only a fallback (its flush then finds nothing).
+            runCatching {
+                val flushed = xpTracker.flush()
+                if (flushed != null) xpCreditPage(flushed)
+            }
             savePage(currentPage, force = true)
             onClose()
         }

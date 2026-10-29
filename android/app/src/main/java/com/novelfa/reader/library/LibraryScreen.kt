@@ -107,6 +107,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -133,6 +134,7 @@ import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
 import com.novelfa.reader.theme.CharacterTheme
 import com.novelfa.reader.theme.CharacterThemes
+import com.novelfa.reader.theme.CelebrationParticles
 import com.novelfa.reader.theme.CelebrationTier
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.XpLevel
@@ -1124,57 +1126,79 @@ fun LibraryScreen(
                 xpRankUp = null
             }
         }
-        AlertDialog(
-            onDismissRequest = { dismissXpUp() },
-            title = { Text(stringResource(tierTitleRes)) },
-            text = {
-                Column {
-                    Text(
-                        if (best != null) {
-                            val names = up.newThemes.joinToString(if (isEnglishUi) ", " else "، ") {
-                                it.displayName(isEnglishUi)
+        // Custom dialog (not AlertDialog) so the celebration burst
+        // can live behind the text: AlertDialog has no slot for a
+        // background canvas, and particles drawn outside it would
+        // sit behind the dialog scrim, invisible. The canvas is
+        // hit-test invisible, so the buttons stay tappable. Strings,
+        // acknowledge logic and theme activation are unchanged.
+        Dialog(onDismissRequest = { dismissXpUp() }) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Box {
+                    CelebrationParticles(
+                        tier = up.tier,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    Column(modifier = Modifier.padding(24.dp)) {
+                        Text(
+                            text = stringResource(tierTitleRes),
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            if (best != null) {
+                                val names = up.newThemes.joinToString(if (isEnglishUi) ", " else "، ") {
+                                    it.displayName(isEnglishUi)
+                                }
+                                stringResource(
+                                    R.string.xp_celebration_with_theme,
+                                    up.toLevel.title.displayName(isEnglishUi),
+                                    names,
+                                    best.displayName(isEnglishUi)
+                                )
+                            } else {
+                                stringResource(
+                                    R.string.xp_celebration_plain,
+                                    up.toLevel.title.displayName(isEnglishUi),
+                                    up.toLevel.xpToNext
+                                )
                             }
-                            stringResource(
-                                R.string.xp_celebration_with_theme,
-                                up.toLevel.title.displayName(isEnglishUi),
-                                names,
-                                best.displayName(isEnglishUi)
-                            )
-                        } else {
-                            stringResource(
-                                R.string.xp_celebration_plain,
-                                up.toLevel.title.displayName(isEnglishUi),
-                                up.toLevel.xpToNext
-                            )
+                        )
+                        // Drawn stars under the sentence (fractional fill,
+                        // like everywhere else) instead of glyph stars
+                        // embedded in the message text.
+                        Spacer(modifier = Modifier.height(10.dp))
+                        StarRow(fill = up.toLevel.starFill, starSize = 20.dp)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            if (best != null) {
+                                TextButton(onClick = { dismissXpUp() }) {
+                                    Text(stringResource(R.string.no))
+                                }
+                            }
+                            TextButton(onClick = {
+                                scope.launch {
+                                    if (best != null) prefs.setCharTheme(best.id)
+                                    RankHook.acknowledgeXpCelebration(rankPrefs, up.toXp)
+                                    xpRankUp = null
+                                }
+                            }) {
+                                Text(
+                                    if (best != null) stringResource(R.string.yes)
+                                    else stringResource(R.string.xp_celebration_ok)
+                                )
+                            }
                         }
-                    )
-                    // Drawn stars under the sentence (fractional fill,
-                    // like everywhere else) instead of glyph stars
-                    // embedded in the message text.
-                    Spacer(modifier = Modifier.height(10.dp))
-                    StarRow(fill = up.toLevel.starFill, starSize = 20.dp)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        if (best != null) prefs.setCharTheme(best.id)
-                        RankHook.acknowledgeXpCelebration(rankPrefs, up.toXp)
-                        xpRankUp = null
                     }
-                }) {
-                    Text(
-                        if (best != null) stringResource(R.string.yes)
-                        else stringResource(R.string.xp_celebration_ok)
-                    )
-                }
-            },
-            dismissButton = {
-                if (best != null) {
-                    TextButton(onClick = { dismissXpUp() }) { Text(stringResource(R.string.no)) }
                 }
             }
-        )
+        }
     }
 
     // Secret-code unlock celebration (WPF SecretTyped parity).
