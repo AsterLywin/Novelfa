@@ -512,6 +512,16 @@ fun LibraryScreen(
             Log.w("NovelfaXp", "XP celebration refresh failed", e)
         }
     }
+    // One-time XP ledger rekeying (UUID -> content key): runs in the
+    // background, never blocking home; a failure here must not break
+    // the library, and the flag stays unset so it retries next visit.
+    LaunchedEffect(Unit) {
+        runCatching {
+            RankHook.rekeyXpLedgerIfNeeded(viewModel.dao, rankPrefs)
+        }.onFailure { e ->
+            Log.w("NovelfaXp", "XP ledger rekeying failed", e)
+        }
+    }
     // Re-check XP on resume (gateTick): returning from the reader does not
     // change `tab`, so the effect above would not re-run — and the
     // celebration earned mid-reading would wait for a tab switch. This

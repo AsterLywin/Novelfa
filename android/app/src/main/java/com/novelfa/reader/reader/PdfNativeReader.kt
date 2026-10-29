@@ -63,11 +63,13 @@ import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.BookEntity
 import com.novelfa.reader.data.PrefsStore
+import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
+import com.novelfa.reader.theme.XpContentKeyResolver
 import com.novelfa.reader.theme.XpSessionTracker
 import com.novelfa.reader.theme.XpStore
 import java.io.Closeable
@@ -429,6 +431,12 @@ private fun NativeImageBookViewer(
     // only honest value for an image page.
     val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
     val xpTracker = remember(book.id) { XpSessionTracker() }
+    // Lazy content-key rekeying (same as the EPUB reader): the first
+    // page credit hashes the stored file once and moves the ledger
+    // entry from the import UUID to the file SHA-256 key. The
+    // resolver object is stable across recompositions, so the
+    // LaunchedEffect/close closures below never see a stale key.
+    val xpResolver = remember(book.id) { XpContentKeyResolver(XpStore(rankPrefs)) }
     // Independent scope for the dispose safety net (ReaderScreen
     // parity): the composition scope is cancelled on dispose.
     val xpFlushScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
@@ -436,7 +444,15 @@ private fun NativeImageBookViewer(
         if (book.isPrivate || pageCount <= 0 || page !in 0 until pageCount) return
         runCatching {
             rankPrefs.awaitLoaded()
-            XpStore(rankPrefs).creditUnit(book.id, page, 0, pageCount, book.isPrivate)
+            val hash = if (!xpResolver.resolved) {
+                withContext(Dispatchers.IO) {
+                    runCatching { sha256OfFile(File(book.filePath)) }.getOrNull()
+                }
+            } else {
+                null
+            }
+            val key = xpResolver.resolve(book.id, hash)
+            XpStore(rankPrefs).creditUnit(key, page, 0, pageCount, book.isPrivate)
         }
     }
     // Drive XP from currentPage, not from the pager/list tracking

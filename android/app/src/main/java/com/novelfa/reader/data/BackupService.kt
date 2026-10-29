@@ -57,6 +57,8 @@ data class BackupPreview(
     val finishedBooks: Int,
     /** XP total carried by the backup (-1 = old backup without XP). */
     val totalXp: Int = -1,
+    /** Portable (content-keyed) XP ledger ("" = old backup without it). */
+    val xpLedger: String = "",
     val secretThemes: List<String>,
     val avatar: File?,
     val fonts: List<BackupFont>,
@@ -323,6 +325,12 @@ class BackupService(
         // secrets + payload hashes, unchanged, so Windows imports still
         // verify byte-for-byte).
         val totalXp = XpStore(rankPrefs).totalXp
+        // Portable XP ledger: only content-keyed entries travel, so
+        // a restored backup can never re-earn units on a new device
+        // (UUID entries are device-local by definition and are left
+        // out). Additive like totalXp: old readers ignore the field,
+        // and computeIntegrity does not cover it.
+        val xpLedger = XpStore(rankPrefs).contentLedgerSerialized()
         val profileName = prefs.profileName.first()
 
         val avatarPayload = payloads.firstOrNull()
@@ -344,6 +352,7 @@ class BackupService(
                     .put("maxRank", maxRank)
                     .put("finishedBooks", finishedBooks)
                     .put("totalXp", totalXp)
+                    .put("xpLedger", xpLedger)
                     .put("secretThemes", JSONArray(secrets))
             )
             .put(
@@ -473,6 +482,12 @@ class BackupService(
             val maxRank = profile.optInt("maxRank", Int.MIN_VALUE)
             val finishedBooks = profile.optInt("finishedBooks", -1)
             val totalXp = profile.optInt("totalXp", -1)
+            // Auxiliary like records: a malformed ledger drops the
+            // ledger, never the whole backup (XpLedger.parse is
+            // lenient and skips bad entries anyway). Length-capped
+            // so a hostile backup cannot smuggle a huge string in.
+            val xpLedger = profile.optString("xpLedger", "")
+                .takeIf { it.length <= 1_000_000 } ?: ""
             if (maxRank !in -1..RankService.Ranks.lastIndex) {
                 return@withContext fail(BackupError.CORRUPT)
             }
@@ -664,6 +679,7 @@ class BackupService(
                     maxRank = maxRank,
                     finishedBooks = finishedBooks,
                     totalXp = totalXp,
+                    xpLedger = xpLedger,
                     secretThemes = secrets,
                     avatar = avatarFile,
                     fonts = fonts,
@@ -809,9 +825,15 @@ class BackupService(
             preview.secretThemes.forEach { service.secretUnlock(it) }
             // XP: max-merge only (see export). Celebrated XP is left alone
             // so a restored gain celebrates on the next home visit.
+            // The portable ledger merges alongside the total: units
+            // already credited on another device stay credited here,
+            // so restoring a backup can never re-earn them. Total XP
+            // itself is never summed from the ledger — it stays the
+            // max of the two totals, as before.
             if (preview.totalXp >= 0) {
                 val xpStore = XpStore(rankPrefs)
                 if (preview.totalXp > xpStore.totalXp) xpStore.totalXp = preview.totalXp
+                if (preview.xpLedger.isNotBlank()) xpStore.mergeContentLedger(preview.xpLedger)
             }
             prefs.raiseFinishedBooksRestored(finishedTotal)
 

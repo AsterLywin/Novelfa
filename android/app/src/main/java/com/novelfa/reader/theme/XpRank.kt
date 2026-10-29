@@ -273,6 +273,73 @@ class XpLedger {
         return true
     }
 
+    /**
+     * Merge one entry into another (used by [transfer] and by backup
+     * restore): units union, bonus flag union, bookXp = max. Max, not
+     * sum, for bookXp: per-unit XP is not stored, so a sum would
+     * double-count units present in both entries, while max never
+     * over-awards the book bonus (which is bookXp-derived). In normal
+     * flow both entries never hold distinct credited units at once —
+     * after a transfer the old key is gone, and later credits use
+     * only the new key — so max is exact there, and only a
+     * conservative undercount in the pathological overlap case.
+     */
+    private fun mergeEntryInto(target: BookLedger, source: BookLedger) {
+        if (source.upTo > target.upTo) target.upTo = source.upTo
+        target.extras += source.extras
+        target.extras.removeAll { it <= target.upTo }
+        while (target.upTo + 1 in target.extras) {
+            target.extras.remove(target.upTo + 1)
+            target.upTo++
+        }
+        if (source.bookXp > target.bookXp) target.bookXp = source.bookXp
+    }
+
+    /**
+     * Re-key one book's ledger entry from [oldKey] to [newKey]
+     * (UUID -> content key, see [XpStore]). Returns false when there
+     * was nothing to move (no old entry, or keys already equal).
+     * Idempotent: after a successful transfer the old key is gone,
+     * so a second call finds nothing and does nothing.
+     */
+    fun transfer(oldKey: String, newKey: String): Boolean {
+        if (oldKey == newKey) return false
+        val old = books.remove(oldKey) ?: return false
+        val wasBonus = oldKey in bonusAwarded
+        if (wasBonus) bonusAwarded.remove(oldKey)
+        val target = books.getOrPut(newKey) { BookLedger() }
+        mergeEntryInto(target, old)
+        if (wasBonus) bonusAwarded += newKey
+        return true
+    }
+
+    /**
+     * Merge another ledger's CONTENT-keyed entries into this one
+     * (backup restore across devices): UUID-keyed entries are
+     * device-local and are ignored, because a UUID from another
+     * device never matches a book on this device. Content keys
+     * (file SHA-256) are the same on every device for the same file.
+     */
+    fun mergeContentFrom(other: XpLedger) {
+        for ((key, entry) in other.books) {
+            if (!isContentKey(key)) continue
+            val target = books.getOrPut(key) { BookLedger() }
+            mergeEntryInto(target, entry)
+            if (key in other.bonusAwarded) bonusAwarded += key
+        }
+    }
+
+    /** Serialize only the portable (content-keyed) entries, for backup. */
+    fun serializeContentOnly(): String {
+        val filtered = XpLedger()
+        for ((key, entry) in books) {
+            if (!isContentKey(key)) continue
+            filtered.books[key] = BookLedger(entry.upTo, entry.extras.toMutableSet(), entry.bookXp)
+            if (key in bonusAwarded) filtered.bonusAwarded += key
+        }
+        return filtered.serialize()
+    }
+
     /** Legacy migration: units 0..unitsRead-1 credited, 1 XP each. */
     fun setLegacy(bookId: String, unitsRead: Int, bookXpValue: Int, bonus: Boolean) {
         if (unitsRead <= 0) return
@@ -293,6 +360,22 @@ class XpLedger {
     }
 
     companion object {
+        /**
+         * Content key for a book: "h" + lowercase SHA-256 hex of the
+         * stored file bytes. No separator characters (the ledger
+         * format splits on `:`, `;`, `|`), so it can never collide
+         * with a UUID key (which contains dashes) and parses cleanly.
+         * The same file always yields the same key, on any device
+         * and after any re-import — unlike the UUID assigned at
+         * import, which is new every time.
+         */
+        fun contentKeyFor(hash: String): String = "h$hash"
+
+        /** True for keys produced by [contentKeyFor] (65 chars: h + 64 hex). */
+        fun isContentKey(key: String): Boolean =
+            key.length == 65 && key[0] == 'h' &&
+                key.drop(1).all { it in '0'..'9' || it in 'a'..'f' }
+
         fun parse(raw: String): XpLedger {
             val out = XpLedger()
             if (raw.isBlank()) return out
@@ -380,6 +463,17 @@ class XpStore(private val prefs: RankPrefs) {
         const val LEDGER_KEY = "XpLedger"
         const val MIGRATED_KEY = "XpMigrated"
         const val CELEBRATED_XP_KEY = "XpCelebratedXp"
+        const val REKEYED_KEY = "XpRekeyed"
+
+        /**
+         * One lock for every ledger read-modify-write in the process
+         * (credits, transfers, backup merges, mass rekeying): without
+         * it, two concurrent writers could each read the old ledger
+         * and overwrite the other's credit or transfer. The lock is
+         * held only for the in-memory read-modify-cache-write; the
+         * DataStore persistence itself already runs in the background.
+         */
+        private val ledgerLock = Any()
     }
 
     var totalXp: Int
@@ -399,6 +493,39 @@ class XpStore(private val prefs: RankPrefs) {
         set(value) {
             prefs.setString(MIGRATED_KEY, if (value) "1" else "0")
         }
+
+    /** One-time mass rekeying (see RankHook) has run. */
+    var rekeyed: Boolean
+        get() = prefs.getString(REKEYED_KEY, "0") == "1"
+        set(value) {
+            prefs.setString(REKEYED_KEY, if (value) "1" else "0")
+        }
+
+    /**
+     * Re-key one book's ledger entry (UUID -> content key). Total XP
+     * is untouched: only the per-unit record moves, so a book can
+     * never gain or lose XP by being re-keyed.
+     */
+    fun transferLedger(oldKey: String, newKey: String): Boolean =
+        synchronized(ledgerLock) {
+            val led = ledger
+            if (!led.transfer(oldKey, newKey)) return false
+            ledger = led
+            true
+        }
+
+    /** Merge a backup's content-keyed ledger into this device's ledger. */
+    fun mergeContentLedger(serialized: String) {
+        if (serialized.isBlank()) return
+        synchronized(ledgerLock) {
+            val led = ledger
+            led.mergeContentFrom(XpLedger.parse(serialized))
+            ledger = led
+        }
+    }
+
+    /** Portable (content-keyed) ledger only, for backup export. */
+    fun contentLedgerSerialized(): String = ledger.serializeContentOnly()
 
     /** XP at the last celebration shown on the home screen (see spec §6). */
     var celebratedXp: Int
@@ -422,27 +549,60 @@ class XpStore(private val prefs: RankPrefs) {
         isPrivate: Boolean
     ): XpCreditResult? {
         if (isPrivate || unit < 0 || totalUnits <= 0) return null
-        val led = ledger
-        if (led.isCredited(bookId, unit)) return null
-        val unitXp = XpRank.xpForUnit(words)
-        if (!led.markCredited(bookId, unit, unitXp)) return null
-        var bonus = 0
-        val credited = led.creditedCount(bookId)
-        val finished = led.isCredited(bookId, totalUnits - 1)
-        if (finished && !led.isBonusAwarded(bookId) && credited * 10 >= totalUnits * 9) {
-            bonus = XpRank.bookBonus(led.bookXp(bookId))
-            led.markBonusAwarded(bookId)
+        return synchronized(ledgerLock) {
+            val led = ledger
+            if (led.isCredited(bookId, unit)) return@synchronized null
+            val unitXp = XpRank.xpForUnit(words)
+            if (!led.markCredited(bookId, unit, unitXp)) return@synchronized null
+            var bonus = 0
+            val credited = led.creditedCount(bookId)
+            val finished = led.isCredited(bookId, totalUnits - 1)
+            if (finished && !led.isBonusAwarded(bookId) && credited * 10 >= totalUnits * 9) {
+                bonus = XpRank.bookBonus(led.bookXp(bookId))
+                led.markBonusAwarded(bookId)
+            }
+            val newTotal = totalXp + unitXp + bonus
+            // Atomic pair write on the production bridge (single DataStore
+            // transaction); other RankPrefs implementations keep the two
+            // sequential writes they already had.
+            if (prefs is PrefsStoreRankPrefs) {
+                prefs.setXpState(led.serialize(), newTotal.toString())
+            } else {
+                ledger = led
+                totalXp = newTotal
+            }
+            XpCreditResult(unitXp, bonus, newTotal, credited)
         }
-        val newTotal = totalXp + unitXp + bonus
-        // Atomic pair write on the production bridge (single DataStore
-        // transaction); other RankPrefs implementations keep the two
-        // sequential writes they already had.
-        if (prefs is PrefsStoreRankPrefs) {
-            prefs.setXpState(led.serialize(), newTotal.toString())
-        } else {
-            ledger = led
-            totalXp = newTotal
+    }
+}
+
+/**
+ * Per-reader-session resolver from a book's import UUID to its
+ * content key. The caller computes the file hash once (on the first
+ * credit, on IO — never per unit, never on the main thread) and hands
+ * it here; this class transfers the old UUID entry to the content
+ * key BEFORE the first credit lands, then returns the same key for
+ * every later credit in the session. If the hash cannot be computed,
+ * the book keeps its UUID key (old behaviour, never a failure).
+ * One instance per reader session: its cached key must never leak
+ * across books.
+ */
+class XpContentKeyResolver(private val store: XpStore) {
+    var key: String? = null
+        private set
+    var resolved: Boolean = false
+        private set
+
+    /** Returns the credit key for [bookId]; [hash] is used only on first call. */
+    fun resolve(bookId: String, hash: String?): String {
+        if (!resolved) {
+            val contentKey = hash?.let { XpLedger.contentKeyFor(it) }
+            if (contentKey != null && contentKey != bookId) {
+                store.transferLedger(bookId, contentKey)
+            }
+            key = contentKey ?: bookId
+            resolved = true
         }
-        return XpCreditResult(unitXp, bonus, newTotal, credited)
+        return key!!
     }
 }

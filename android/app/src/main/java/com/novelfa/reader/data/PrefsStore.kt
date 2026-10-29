@@ -33,6 +33,7 @@ class PrefsStore(private val context: Context) {
         val XP_LEDGER = stringPreferencesKey("XpLedger")
         val XP_MIGRATED = stringPreferencesKey("XpMigrated")
         val XP_CELEBRATED = stringPreferencesKey("XpCelebratedXp")
+        val XP_REKEYED = stringPreferencesKey("XpRekeyed")
 
         // Task 8 additive keys (PIN hash, support counter, locale, reader defaults).
         val PIN_HASH = stringPreferencesKey("pinHash")

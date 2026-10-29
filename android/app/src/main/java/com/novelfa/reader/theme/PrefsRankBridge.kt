@@ -52,7 +52,8 @@ class PrefsStoreRankPrefs(
                     XpStore.TOTAL_XP_KEY to store.getString(PrefsStore.TOTAL_XP, "0"),
                     XpStore.LEDGER_KEY to store.getString(PrefsStore.XP_LEDGER, ""),
                     XpStore.MIGRATED_KEY to store.getString(PrefsStore.XP_MIGRATED, "0"),
-                    XpStore.CELEBRATED_XP_KEY to store.getString(PrefsStore.XP_CELEBRATED, "0")
+                    XpStore.CELEBRATED_XP_KEY to store.getString(PrefsStore.XP_CELEBRATED, "0"),
+                    XpStore.REKEYED_KEY to store.getString(PrefsStore.XP_REKEYED, "0")
                 )
                 for ((key, value) in fresh) cache.putIfAbsent(key, value)
             } finally {
@@ -83,6 +84,7 @@ class PrefsStoreRankPrefs(
                 XpStore.LEDGER_KEY -> store.setString(PrefsStore.XP_LEDGER, value)
                 XpStore.MIGRATED_KEY -> store.setString(PrefsStore.XP_MIGRATED, value)
                 XpStore.CELEBRATED_XP_KEY -> store.setString(PrefsStore.XP_CELEBRATED, value)
+                XpStore.REKEYED_KEY -> store.setString(PrefsStore.XP_REKEYED, value)
             }
         }
     }

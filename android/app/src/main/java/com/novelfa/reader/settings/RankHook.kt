@@ -2,16 +2,21 @@ package com.novelfa.reader.settings
 
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.isCompleted
+import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.theme.CelebrationTier
 import com.novelfa.reader.theme.CharacterTheme
 import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 import com.novelfa.reader.theme.RankPrefs
 import com.novelfa.reader.theme.RankService
+import com.novelfa.reader.theme.XpLedger
 import com.novelfa.reader.theme.XpLevel
 import com.novelfa.reader.theme.XpRank
 import com.novelfa.reader.theme.XpStore
+import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 /** A rank-up that unlocked fresh character themes (WPF CheckRankUp parity). */
 data class RankUp(
@@ -123,6 +128,37 @@ object RankHook {
         store.celebratedXp = total
         store.migrated = true
         return total
+    }
+
+    /**
+     * One-time mass rekeying of the XP ledger (UUID -> file SHA-256
+     * content key). Runs once, in the background, from the home
+     * screen — never blocking it: hashing is IO-bound and a large
+     * library can take a while, but the home UI does not wait for
+     * it. Books whose file is missing are skipped here and re-keyed
+     * lazily on first open (the reader resolver), so a partial run
+     * still ends with the flag set. Transfers are idempotent and
+     * total XP is never touched, so an interrupted run simply
+     * resumes harmlessly on the next home visit — except the flag
+     * is only set at the end, so an interrupted run re-runs from
+     * the start (already-transferred books are no-ops).
+     */
+    suspend fun rekeyXpLedgerIfNeeded(dao: BookDao, rankPrefs: RankPrefs) {
+        awaitPrefs(rankPrefs)
+        val store = XpStore(rankPrefs)
+        if (store.rekeyed) return
+        val books = withContext(Dispatchers.IO) { dao.allBooks().first() }
+        for (book in books) {
+            if (book.isPrivate) continue
+            val file = File(book.filePath)
+            if (!file.isFile) continue
+            val hash = withContext(Dispatchers.IO) {
+                runCatching { sha256OfFile(file) }.getOrNull()
+            } ?: continue
+            val contentKey = XpLedger.contentKeyFor(hash)
+            if (contentKey != book.id) store.transferLedger(book.id, contentKey)
+        }
+        store.rekeyed = true
     }
 
     /** Current XP level (migrates first; idempotent after the first run). */

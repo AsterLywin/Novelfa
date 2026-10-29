@@ -83,6 +83,7 @@ import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.PrefsStore
+import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.parser.BookConverter
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CacheStamp
@@ -114,6 +115,7 @@ import androidx.compose.material3.rememberDrawerState
 import com.novelfa.reader.theme.CharacterThemes
 import com.novelfa.reader.theme.ParticleLayer
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
+import com.novelfa.reader.theme.XpContentKeyResolver
 import com.novelfa.reader.theme.XpStore
 import com.novelfa.reader.theme.characterPages
 
@@ -346,13 +348,27 @@ fun ReaderScreen(
             // The bridge preload is awaited so a credit can never clobber
             // the stored total with a not-yet-loaded default.
             val xpPrefs = PrefsStoreRankPrefs(prefs)
+            // Lazy content-key rekeying: the first credit in this
+            // session hashes the stored file once (on IO, inside the
+            // withContext below) and moves the book's ledger entry
+            // from its import UUID to its file SHA-256 key, so a
+            // later re-import of the same file can never re-earn
+            // these units. Later credits reuse the cached key and
+            // never hash again. Hash failure = UUID key, old behaviour.
+            val xpResolver = XpContentKeyResolver(XpStore(xpPrefs))
             val xpCallback: (suspend (Int, Int) -> Unit)? =
                 if (entity.isPrivate) null else { unit, words ->
                     runCatching {
                         xpPrefs.awaitLoaded()
                         withContext(Dispatchers.IO) {
+                            val hash = if (!xpResolver.resolved) {
+                                runCatching { sha256OfFile(File(entity.filePath)) }.getOrNull()
+                            } else {
+                                null
+                            }
+                            val key = xpResolver.resolve(bookId, hash)
                             XpStore(xpPrefs).creditUnit(
-                                bookId, unit, words, parsed.chapters.size, false
+                                key, unit, words, parsed.chapters.size, false
                             )
                         }
                     }
