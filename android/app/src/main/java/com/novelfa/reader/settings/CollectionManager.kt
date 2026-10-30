@@ -106,7 +106,26 @@ class CollectionManager(
     suspend fun removeBook(id: String) {
         val book = dao.getById(id) ?: return
         dao.delete(book)
-        runCatching { File(book.filePath).takeIf { it.isFile }?.delete() }
+        // In-place safety rule: when the book's filePath IS the
+        // user's own file (in-place, picked by path), deleting the
+        // book must NEVER delete that file. Every other shape's
+        // filePath is app-owned — a stored copy, or a transient
+        // working copy in cacheDir — and is deleted as before.
+        // (The persistable permission for `content://` in-place
+        // books is released by the ViewModel, which owns the
+        // Context; this class is deliberately Context-free.)
+        if (!com.novelfa.reader.data.InPlaceSource.isExternalFile(book)) {
+            runCatching { File(book.filePath).takeIf { it.isFile }?.delete() }
+        }
+        // The transient working copy of a `content://` in-place
+        // book is cache, not the book itself — it goes with the
+        // book, and the next import of the same source rebuilds it.
+        cacheDir?.let { dir ->
+            runCatching {
+                com.novelfa.reader.data.InPlaceSource.workingDir(dir, id)
+                    .takeIf { it.isDirectory }?.deleteRecursively()
+            }
+        }
         // Drop this book's extracted chapter cache (ReaderScreen re-extracts on
         // demand; the startup prune in NovelfaApplication is the backstop).
         // The cache lives in filesDir now; the cacheDir path is the legacy

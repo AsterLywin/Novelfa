@@ -412,11 +412,26 @@ class LibraryViewModel(
         // restores its place; capture must run before the file goes.
         importer?.captureReadingRecord(book.id)
         collections.removeBook(book.id)
+        // The persistable permission of a `content://` in-place
+        // book dies with the book (see InPlaceSource); the file
+        // itself is never touched — that is CollectionManager's
+        // guard, not this call.
+        importer?.releaseInPlacePermission(book.sourceUri)
         // Per-book reader theme lived in prefs under readerTheme_<id> and
         // used to survive deletion forever (one orphaned key per book).
         // Blank = default theme, so clearing is just resetting it.
         runCatching { prefs?.setReaderTheme(book.id, "") }
     }
+
+    /**
+     * Re-points an in-place book at a new location of the same
+     * file (moved outside the app, or a lost permission). The
+     * book keeps its id, progress, and reading record — only its
+     * source changes, and its caches are dropped so the next
+     * open re-parses from the new location.
+     */
+    suspend fun relinkBook(bookId: String, uri: Uri): Boolean =
+        importer?.relinkBook(bookId, uri) ?: false
 
     /**
      * Deletes every private book (row, EPUB file, cover, chapter cache)

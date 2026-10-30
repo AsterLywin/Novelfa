@@ -5,7 +5,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [BookEntity::class], version = 3, exportSchema = true)
+@Database(entities = [BookEntity::class], version = 4, exportSchema = true)
 abstract class ReaderDb : RoomDatabase() {
     abstract fun bookDao(): BookDao
 }
@@ -33,5 +33,19 @@ val MIGRATION_1_2: Migration = object : Migration(1, 2) {
 val MIGRATION_2_3: Migration = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE books ADD COLUMN lastAnchor TEXT")
+    }
+}
+
+/**
+ * 3 → 4: adds the in-place import columns. `sourceUri` is nullable
+ * (copy-imported books have none); `importMode` defaults to "COPY"
+ * so every existing row keeps exactly the behaviour it had — the
+ * in-place mode only ever applies to books imported after the user
+ * flips the Settings switch.
+ */
+val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE books ADD COLUMN sourceUri TEXT")
+        db.execSQL("ALTER TABLE books ADD COLUMN importMode TEXT NOT NULL DEFAULT 'COPY'")
     }
 }

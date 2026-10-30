@@ -330,6 +330,12 @@
     <string name="import_section_title">ایمپورت</string>
     <string name="fast_import">ایمپورت سریع</string>
     <string name="fast_import_desc">هر کتاب موقع ایمپورت فقط یک بار خوانده می‌شود و جلدهای ساخته‌شده در پس‌زمینه می‌آیند. با خاموش‌کردن، رفتار قبلی ایمپورت برمی‌گردد.</string>
+    <string name="import_in_place">خواندن در جای خود (بدون کپی)</string>
+    <string name="import_in_place_desc">ایمپورت‌های جدید سر جایشان می‌مانند: برنامه فقط جای فایل را ثبت می‌کند و از روی همان فایل اصلی می‌خواند. فایل اصلی‌ات هیچ‌وقت پاک نمی‌شود. اگر فایل را بیرون از برنامه جابه‌جا یا پاک کنی، کتاب خراب می‌شود تا از منویش دوباره پیوندش بدهی. PDFهای رمزدار هنوز کپی می‌شوند. فقط روی ایمپورت‌های بعدی اثر دارد.</string>
+    <string name="import_in_place_encrypted_pdf">این PDF رمزدار است و نمی‌شود در جای خود ایمپورتش کرد. «خواندن در جای خود» را خاموش کن و دوباره ایمپورتش کن.</string>
+    <string name="relink_file">پیوند دوباره‌ی فایل</string>
+    <string name="relink_failed">پیوند این فایل نشد. همان کتاب را دوباره انتخاب کن.</string>
+    <string name="relink_done">فایل دوباره پیوند شد.</string>
     <string name="image_saved">عکس در گالری ذخیره شد: %1$s</string>
     <string name="image_save_failed">این عکس ذخیره نشد.</string>
     <string name="archive_choose_book">این آرشیو چند کتاب دارد. یکی را برای باز کردن انتخاب کنید:</string>

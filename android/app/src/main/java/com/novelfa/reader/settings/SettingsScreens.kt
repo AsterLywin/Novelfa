@@ -684,6 +684,7 @@ private fun SupportSection(viewModel: SettingsViewModel) {
 @Composable
 private fun ImportSection(viewModel: SettingsViewModel) {
     val enabled by viewModel.fastImport.collectAsState(initial = true)
+    val inPlace by viewModel.inPlaceImport.collectAsState(initial = false)
     val scope = rememberCoroutineScope()
     SectionCard(title = stringResource(R.string.import_section_title), icon = AppIconKind.File) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -699,6 +700,22 @@ private fun ImportSection(viewModel: SettingsViewModel) {
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = stringResource(R.string.fast_import_desc),
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.import_in_place),
+                modifier = Modifier.weight(1f)
+            )
+            Switch(
+                checked = inPlace,
+                onCheckedChange = { scope.launch { viewModel.setInPlaceImport(it) } }
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.import_in_place_desc),
             style = MaterialTheme.typography.bodyMedium
         )
     }

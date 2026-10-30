@@ -330,6 +330,12 @@
     <string name="import_section_title">Import</string>
     <string name="fast_import">Fast import</string>
     <string name="fast_import_desc">Read each book once during import and build missing covers in the background. Turn off to use the previous import behaviour.</string>
+    <string name="import_in_place">Read in place (no copy)</string>
+    <string name="import_in_place_desc">New imports stay where they are: the app only records their location and reads the original file. It never deletes your original. If you move or delete the file outside the app, the book breaks until you relink it from its menu. Encrypted PDFs are still copied. Applies only to future imports.</string>
+    <string name="import_in_place_encrypted_pdf">This PDF is encrypted, so it cannot be imported in place. Turn off “Read in place” and import it again.</string>
+    <string name="relink_file">Relink file</string>
+    <string name="relink_failed">Could not relink this file. Pick the same book again.</string>
+    <string name="relink_done">File relinked.</string>
     <string name="image_saved">Image saved to your gallery: %1$s</string>
     <string name="image_save_failed">Couldn\'t save this image.</string>
     <string name="archive_choose_book">This archive holds several books. Choose one to open:</string>

@@ -9,6 +9,7 @@ import com.novelfa.reader.data.CoverStore
 import com.novelfa.reader.data.GeneratedCover
 import com.novelfa.reader.data.MIGRATION_1_2
 import com.novelfa.reader.data.MIGRATION_2_3
+import com.novelfa.reader.data.MIGRATION_3_4
 import com.novelfa.reader.data.ReaderDb
 import com.novelfa.reader.data.RecommendedFonts
 import com.novelfa.reader.data.isUuidLikeTitle
@@ -35,7 +36,7 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
     /** Single Room instance for the whole app. */
     val db: ReaderDb by lazy {
         Room.databaseBuilder(this, ReaderDb::class.java, "reader.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
             .build()
     }
 
@@ -189,6 +190,14 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
                 // process kill in the middle orphans it permanently.
                 File(cacheDir, "epub_tmp").listFiles()
                     ?.filter { it.isDirectory && it.lastModified() < cutoff }
+                    ?.forEach { it.deleteRecursively() }
+                // In-place working copies (cacheDir/inplace/<id>) are
+                // cache, not library files, but they still must not
+                // outlive their book: a working copy belongs to a
+                // row, and a row-less one is rebuilt from the source
+                // on the next open anyway.
+                File(cacheDir, "inplace").listFiles()
+                    ?.filter { isStaleOrphan(it) }
                     ?.forEach { it.deleteRecursively() }
             }
         }

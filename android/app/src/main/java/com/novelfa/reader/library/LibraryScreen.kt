@@ -298,8 +298,19 @@ fun LibraryScreen(
     var missingIds by remember { mutableStateOf(emptySet<String>()) }
     LaunchedEffect(shown) {
         missingIds = withContext(Dispatchers.IO) {
-            shown.filter { it.filePath.isBlank() || !File(it.filePath).isFile }
-                .map { it.id }.toSet()
+            // In-place books are missing when their SOURCE is
+            // gone, not when their (possibly not-yet-built)
+            // working copy is absent — a content:// in-place book
+            // that was never opened has no working copy yet and
+            // must not be badged as missing. Copy books keep the
+            // old rule (the stored file itself is gone).
+            shown.filter {
+                if (it.importMode == "IN_PLACE") {
+                    !com.novelfa.reader.data.InPlaceSource.isSourceAvailable(context, it)
+                } else {
+                    it.filePath.isBlank() || !File(it.filePath).isFile
+                }
+            }.map { it.id }.toSet()
         }
     }
     var restartAsk by remember { mutableStateOf<BookEntity?>(null) }
@@ -440,6 +451,26 @@ fun LibraryScreen(
         if (uris.isNotEmpty()) {
             scope.launch {
                 importUris(uris)
+            }
+        }
+    }
+    // Relink picker: a single file, re-pointing an in-place book
+    // whose source moved or whose permission was lost. It is a
+    // separate launcher from the import picker because its result
+    // updates a row instead of creating one.
+    var relinkTargetId by remember { mutableStateOf<String?>(null) }
+    val relinkPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val targetId = relinkTargetId
+        relinkTargetId = null
+        if (uri != null && targetId != null) {
+            scope.launch {
+                val ok = viewModel.relinkBook(targetId, uri)
+                snackbar.showSnackbar(
+                    if (ok) context.getString(R.string.relink_done)
+                    else context.getString(R.string.relink_failed)
+                )
             }
         }
     }
@@ -1282,6 +1313,21 @@ fun LibraryScreen(
                 resetFor = target
                 menuFor = null
             },
+            onRelink = if (target.importMode == "IN_PLACE") {
+                {
+                    relinkTargetId = target.id
+                    menuFor = null
+                    relinkPicker.launch(
+                        arrayOf(
+                            "application/epub+zip", "application/pdf",
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            "text/plain", "text/markdown",
+                            "application/zip", "application/x-cbz",
+                            "application/vnd.comicbook+zip"
+                        )
+                    )
+                }
+            } else null,
             onRemove = {
                 removeFor = target
                 menuFor = null
@@ -2570,7 +2616,8 @@ private fun BookMenuDialog(
     onCollection: () -> Unit,
     onPrivate: () -> Unit,
     onReset: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    onRelink: (() -> Unit)? = null
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2600,6 +2647,11 @@ private fun BookMenuDialog(
                 }
                 TextButton(onClick = onReset) {
                     Text(stringResource(R.string.start_over))
+                }
+                if (onRelink != null) {
+                    TextButton(onClick = onRelink) {
+                        Text(stringResource(R.string.relink_file))
+                    }
                 }
                 TextButton(onClick = onRemove) {
                     Text(stringResource(R.string.remove_book))

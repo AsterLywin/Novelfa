@@ -32,7 +32,22 @@ data class BookEntity(
      * reload, so the reader lands on the same sentence even after
      * repagination changes every page boundary.
      */
-    val lastAnchor: String? = null
+    val lastAnchor: String? = null,
+    /**
+     * In-place import (Settings «در جای خود»): the Uri the book was
+     * picked from, kept so the reader can re-open the user's own
+     * file instead of a copy. Null for copy-imported books (the
+     * default) and for in-place books picked by path, where
+     * [filePath] itself IS the external file.
+     */
+    val sourceUri: String? = null,
+    /**
+     * How the book entered the library: "COPY" (the stored file in
+     * filesDir/books, the default for every existing book) or
+     * "IN_PLACE" (the user's own file, read where it lives).
+     * Stored as a plain string so Room needs no type converter.
+     */
+    val importMode: String = "COPY"
 )
 
 /**

@@ -84,6 +84,7 @@ import androidx.core.view.WindowInsetsCompat
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.FontStore
+import com.novelfa.reader.data.InPlaceSource
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.parser.BookFormat
@@ -336,13 +337,25 @@ fun ReaderScreen(
         try {
             val entity = withContext(Dispatchers.IO) { dao.getById(bookId) }
                 ?: throw IOException("book not found")
+            // Resolve the book to a File the engines can open FIRST:
+            // for copy books this is the stored file (unchanged);
+            // for in-place books it is the user's real file, or the
+            // transient working copy for `content://` sources (see
+            // InPlaceSource). Everything below — classification,
+            // parse, XP hashing, PDF background fill — uses the
+            // resolved file, never the raw entity path, so an
+            // in-place book whose working copy does not exist yet
+            // still opens instead of failing on a missing file.
+            val resolvedFile = withContext(Dispatchers.IO) {
+                InPlaceSource.resolve(context, entity)
+            }
             // Archive choice, before any parse: a ZIP holding several
             // books must not open the first one silently. The dialog
             // below sets zipCandidate, which re-runs this effect and
             // lands here with the choice made.
-            if (BookFormat.detect(File(entity.filePath)) == BookFormat.ZIP) {
+            if (BookFormat.detect(resolvedFile) == BookFormat.ZIP) {
                 val kind = withContext(Dispatchers.IO) {
-                    ZipEngine.classify(File(entity.filePath))
+                    ZipEngine.classify(resolvedFile)
                 }
                 if (kind is ZipKind.MultiBook && zipCandidate == null) {
                     zipCandidates = kind.candidates
@@ -351,7 +364,7 @@ fun ReaderScreen(
             }
             val parsed = withContext(Dispatchers.IO) {
                 openParsed(
-                    context, entity.filePath, bookId, entity.originalFileName,
+                    context, resolvedFile.absolutePath, bookId, entity.originalFileName,
                     onProgress = { done, total ->
                         val prev = convertProgress?.first ?: 0
                         if (done > prev) convertProgress = done to total
@@ -396,7 +409,7 @@ fun ReaderScreen(
                         xpPrefs.awaitLoaded()
                         withContext(Dispatchers.IO) {
                             val hash = if (!xpResolver.resolved) {
-                                runCatching { sha256OfFile(File(entity.filePath)) }.getOrNull()
+                                runCatching { sha256OfFile(resolvedFile) }.getOrNull()
                             } else {
                                 null
                             }
@@ -443,11 +456,11 @@ fun ReaderScreen(
             // cancels it; a failure here is best-effort only and must
             // never surface as an open error after the book already
             // opened (the next open resumes the fill).
-            if (BookFormat.detect(File(entity.filePath)) == BookFormat.PDF) {
+            if (BookFormat.detect(resolvedFile) == BookFormat.PDF) {
                 launch {
                     try {
                         PdfImageBook.renderMissing(
-                            File(entity.filePath),
+                            resolvedFile,
                             File(context.filesDir, "epub_open/$bookId")
                         )
                     } catch (e: Exception) {

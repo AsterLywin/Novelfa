@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.BookEntity
+import com.novelfa.reader.data.InPlaceSource
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.parser.BookFormat
@@ -320,21 +321,44 @@ fun PdfReaderRoute(
     onClose: () -> Unit,
     support: com.novelfa.reader.settings.SupportTracker? = null
 ) {
+    val context = LocalContext.current
     var entity by remember { mutableStateOf<BookEntity?>(null) }
     var missing by remember { mutableStateOf(false) }
+    var resolvedFile by remember { mutableStateOf<File?>(null) }
+    var resolveFailed by remember { mutableStateOf(false) }
     LaunchedEffect(bookId) {
         val found = withContext(Dispatchers.IO) { dao.getById(bookId) }
         if (found == null) missing = true else entity = found
     }
+    // Resolve before routing: for in-place books the entity path
+    // is a not-yet-materialized working copy (content://) or the
+    // user's real file (file://), so routing on the raw path
+    // would mis-detect format or fail outright. Copy books
+    // resolve to their stored file, unchanged.
+    LaunchedEffect(entity) {
+        val found = entity ?: return@LaunchedEffect
+        resolvedFile = withContext(Dispatchers.IO) {
+            runCatching { InPlaceSource.resolve(context, found) }.getOrNull()
+        }
+        if (resolvedFile == null) resolveFailed = true
+    }
     when {
-        missing -> {
+        missing || resolveFailed -> {
             Scaffold { padding ->
                 Box(
                     modifier = Modifier.fillMaxSize().padding(padding),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(stringResource(R.string.couldn_t_open_the_book))
+                        // A failed resolve is always an in-place
+                        // source that is gone (copy books resolve
+                        // to a plain File constructor), so it gets
+                        // the "file missing" message and its relink
+                        // path in the library, not a generic error.
+                        Text(
+                            if (resolveFailed) stringResource(R.string.book_file_missing)
+                            else stringResource(R.string.couldn_t_open_the_book)
+                        )
                         Spacer(Modifier.height(12.dp))
                         TextButton(onClick = onClose) {
                             Text(stringResource(R.string.close))
@@ -343,7 +367,7 @@ fun PdfReaderRoute(
                 }
             }
         }
-        entity == null -> {
+        entity == null || resolvedFile == null -> {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -363,8 +387,8 @@ fun PdfReaderRoute(
         // had a converted path. A ZIP carrying a book is NOT a
         // comic: it is classified below and routed to ReaderScreen,
         // where the archive engine opens the book inside it.
-        BookFormat.detect(File(entity!!.filePath)) == BookFormat.CBZ -> {
-            val bookFile = File(entity!!.filePath)
+        BookFormat.detect(resolvedFile!!) == BookFormat.CBZ -> {
+            val bookFile = resolvedFile!!
             NativeImageBookViewer(
                 book = entity!!,
                 dao = dao,
@@ -374,8 +398,11 @@ fun PdfReaderRoute(
                 errorRes = R.string.cbz_native_error
             )
         }
-        BookFormat.detect(File(entity!!.filePath)) == BookFormat.ZIP -> {
-            ZipReaderRoute(book = entity!!, dao = dao, onClose = onClose, support = support)
+        BookFormat.detect(resolvedFile!!) == BookFormat.ZIP -> {
+            ZipReaderRoute(
+                book = entity!!, resolvedFile = resolvedFile!!,
+                dao = dao, onClose = onClose, support = support
+            )
         }
         else -> {
             ReaderScreen(bookId = bookId, dao = dao, onClose = onClose, support = support)
@@ -394,15 +421,16 @@ fun PdfReaderRoute(
 @Composable
 private fun ZipReaderRoute(
     book: BookEntity,
+    resolvedFile: File,
     dao: BookDao,
     onClose: () -> Unit,
     support: com.novelfa.reader.settings.SupportTracker? = null
 ) {
     var kind by remember { mutableStateOf<ZipKind?>(null) }
     var failed by remember { mutableStateOf(false) }
-    LaunchedEffect(book.id, book.filePath) {
+    LaunchedEffect(book.id, resolvedFile) {
         kind = withContext(Dispatchers.IO) {
-            runCatching { ZipEngine.classify(File(book.filePath)) }.getOrNull()
+            runCatching { ZipEngine.classify(resolvedFile) }.getOrNull()
         }
         if (kind == null) failed = true
     }
@@ -436,7 +464,7 @@ private fun ZipReaderRoute(
                 book = book,
                 dao = dao,
                 onClose = onClose,
-                sourceFactory = { CbzNativeSource(File(book.filePath)) },
+                sourceFactory = { CbzNativeSource(resolvedFile) },
                 loadingRes = R.string.cbz_native_loading,
                 errorRes = R.string.cbz_native_error
             )

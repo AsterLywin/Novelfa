@@ -1,6 +1,7 @@
 package com.novelfa.reader.data
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
@@ -35,6 +36,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.CoroutineContext
 
 /**
  * MIME types the in-app pickers offer. Kept here (not in the UI files)
@@ -108,6 +110,62 @@ class Importer(
     private suspend fun fastImportEnabled(): Boolean =
         prefs?.fastImportNow() ?: true
 
+    /** In-place import toggle, read once per import (default OFF when no prefs). */
+    private suspend fun inPlaceImportEnabled(): Boolean =
+        prefs?.inPlaceImportNow() ?: false
+
+    /** Best-effort release of an in-place book's persistable permission (see InPlaceSource). */
+    fun releaseInPlacePermission(sourceUri: String?) {
+        InPlaceSource.releasePermission(context, sourceUri)
+    }
+
+    /**
+     * Re-points an in-place book at a new location of the same
+     * file. Returns false (and changes nothing) when the book is
+     * not in-place, the new Uri cannot be read, or a `content://`
+     * Uri refuses a persistable permission — the old source stays
+     * in place in all of those cases, so a failed relink never
+     * strands a book with a dead source. On success the old
+     * working copy and chapter cache are dropped, the old
+     * persistable permission is released, and the next open
+     * rebuilds everything from the new location.
+     */
+    suspend fun relinkBook(bookId: String, uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        val book = db.bookDao().getById(bookId) ?: return@withContext false
+        if (!book.isInPlace()) return@withContext false
+        if (uri.scheme == "content") {
+            val persisted = runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }.isSuccess
+            if (!persisted) return@withContext false
+        }
+        val newPath = when (uri.scheme) {
+            "file" -> uri.path ?: return@withContext false
+            "content" -> {
+                val ext = (displayNameOf(uri) ?: "").substringAfterLast('.', "")
+                InPlaceSource.workingFile(context.cacheDir, bookId, ext).absolutePath
+            }
+            else -> return@withContext false
+        }
+        val oldSource = book.sourceUri
+        db.bookDao().update(
+            book.copy(sourceUri = uri.toString(), filePath = newPath)
+        )
+        runCatching {
+            InPlaceSource.workingDir(context.cacheDir, bookId).deleteRecursively()
+        }
+        runCatching {
+            File(context.filesDir, "epub_open" + File.separatorChar + bookId)
+                .takeIf { it.isDirectory }?.deleteRecursively()
+        }
+        if (oldSource != null && oldSource != uri.toString()) {
+            InPlaceSource.releasePermission(context, oldSource)
+        }
+        true
+    }
+
     /**
      * Applies a stored reading record to a freshly imported book, if one
      * matches by file hash or EPUB identifier. Returns true when the
@@ -120,12 +178,20 @@ class Importer(
         val book = dao.getById(bookId) ?: return@withContext false
         if (book.isPrivate) return@withContext false
         val file = File(book.filePath)
-        if (!file.isFile) return@withContext false
+        // The import hash is consulted BEFORE the file check: a
+        // `content://` in-place book has no working copy yet (it is
+        // materialized on first open), so requiring the file here
+        // would silently drop its saved reading record on
+        // re-import. The file hash is only the fallback when no
+        // import hash exists; readEpubIdentifier is null-safe on
+        // a missing file (it catches the ZipFile failure).
         // Remove on use: the hash is only needed for the restore right
         // after import, so the map never grows past imports whose
         // restore has not run yet (normally zero or one).
+        val hash = importHashes.remove(bookId)
+            ?: if (!file.isFile) return@withContext false else sha256OfFile(file)
         val record = recordStore.find(
-            importHashes.remove(bookId) ?: sha256OfFile(file), readEpubIdentifier(file)
+            hash, readEpubIdentifier(file)
         ) ?: return@withContext false
         val updated = applyRecordTo(book, record) ?: return@withContext false
         dao.update(updated)
@@ -190,6 +256,9 @@ class Importer(
             }
         }
         val id = UUID.randomUUID().toString()
+        // In-place mode, read once per import like fastImport: the
+        // toggle only affects imports started after it changes.
+        val wantInPlace = inPlaceImportEnabled()
         val booksDir = File(context.filesDir, "books").apply { mkdirs() }
         val tmpDest = File(booksDir, "$id.tmp")
         // Reader-open cache. Only TXT/Markdown are filled HERE at
@@ -221,6 +290,48 @@ class Importer(
                 messageFa = context.getString(R.string.import_error_too_large)
             )
         }
+        // In-place `content://` import: take the persistable read
+        // permission FIRST, because the register-only path below
+        // stores the Uri and re-opens it on every future read.
+        // If the picker did not grant a persistable permission
+        // (some providers don't), this is not an error — the import
+        // simply falls through to the copy flow, so the book still
+        // imports, just as a stored copy.
+        if (wantInPlace && sourceUri.scheme == "content") {
+            val persisted = runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    sourceUri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }.isSuccess
+            if (persisted) {
+                return@withContext importInPlaceContent(sourceUri, id, fastImport, ioCtx, onStage)
+            }
+        }
+        // In-place `file://` import: the real file is the book.
+        // No copy is made at all — the branches below run against
+        // it directly (metadata only; they never write to it, with
+        // one guarded exception in the PDF branch). Encrypted PDFs
+        // are the exception: the reader has no password dialog at
+        // open time, so today they are stored decrypted — an
+        // in-place import of one falls back to the copy flow.
+        // The probe costs one full read for file:// PDFs; the PDF
+        // branch pays the same read again for its decrypt check,
+        // so this is one extra read, only for PDFs, in exchange
+        // for never writing decrypted bytes over the user's file.
+        var inPlaceFile: File? = null
+        var inPlacePdfBytes: ByteArray? = null
+        if (wantInPlace && sourceUri.scheme == "file") {
+            val realFile = sourceUri.path?.let { File(it) }?.takeIf { it.isFile }
+            if (realFile != null) {
+                val looksPdf = BookFormat.detectStrongContent(realFile) == BookFormat.PDF
+                val encrypted = if (looksPdf) {
+                    inPlacePdfBytes = runCatching { realFile.readBytes() }.getOrNull()
+                    inPlacePdfBytes?.let { PdfParser.maybeEncrypted(it) } ?: true
+                } else false
+                if (!encrypted) inPlaceFile = realFile
+                if (encrypted) inPlacePdfBytes = null
+            }
+        }
         // SHA-256 of the copied bytes (fast import only): computed
         // WHILE copying, so the duplicate/record/restore checks below
         // never re-read the file. OFF = null, preserving the old
@@ -228,61 +339,76 @@ class Importer(
         var copyHash: String? = null
         try {
             onStage?.invoke("copy")
-            val copyDigest = if (fastImport) MessageDigest.getInstance("SHA-256") else null
-            context.contentResolver.openInputStream(sourceUri)?.use { input ->
-                tmpDest.outputStream().use { output ->
-                    // Cap the copy even when the provider didn't report a size:
-                    // copyTo with a byte budget instead of unbounded.
-                    var remaining = MAX_BOOK_BYTES
-                    var zeroReads = 0
-                    val buf = ByteArray(8192)
-                    while (true) {
-                        ioCtx.ensureActive()
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        if (n == 0) {
-                            // A provider that returns 0 forever (never
-                            // data, never EOF) used to spin this loop
-                            // eternally with no progress at all.
-                            if (++zeroReads > 10000) {
-                                throw IOException("stalled input stream: $sourceUri")
+            if (inPlaceFile != null) {
+                // In-place file://: no copy at all. The hash (fast
+                // import only) is computed from the real file, for
+                // the same duplicate/record/restore checks the copy
+                // pass served — one read, no write.
+                copyHash = if (fastImport) {
+                    runCatching { sha256OfFile(inPlaceFile) }.getOrNull()
+                } else null
+                if (copyHash != null) importHashes[id] = copyHash
+            } else {
+                val copyDigest = if (fastImport) MessageDigest.getInstance("SHA-256") else null
+                context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                    tmpDest.outputStream().use { output ->
+                        // Cap the copy even when the provider didn't report a size:
+                        // copyTo with a byte budget instead of unbounded.
+                        var remaining = MAX_BOOK_BYTES
+                        var zeroReads = 0
+                        val buf = ByteArray(8192)
+                        while (true) {
+                            ioCtx.ensureActive()
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            if (n == 0) {
+                                // A provider that returns 0 forever (never
+                                // data, never EOF) used to spin this loop
+                                // eternally with no progress at all.
+                                if (++zeroReads > 10000) {
+                                    throw IOException("stalled input stream: $sourceUri")
+                                }
+                                continue
                             }
-                            continue
+                            zeroReads = 0
+                            remaining -= n
+                            if (remaining < 0) {
+                                throw ImportException(
+                                    "Book too large: exceeds $MAX_BOOK_BYTES bytes",
+                                    messageFa = context.getString(R.string.import_error_too_large)
+                                )
+                            }
+                            output.write(buf, 0, n)
+                            copyDigest?.update(buf, 0, n)
                         }
-                        zeroReads = 0
-                        remaining -= n
-                        if (remaining < 0) {
-                            throw ImportException(
-                                "Book too large: exceeds $MAX_BOOK_BYTES bytes",
-                                messageFa = context.getString(R.string.import_error_too_large)
-                            )
-                        }
-                        output.write(buf, 0, n)
-                        copyDigest?.update(buf, 0, n)
                     }
-                }
-            } ?: throw IOException("Cannot open input stream: $sourceUri")
-            copyHash = copyDigest?.digest()?.joinToString("") { "%02x".format(it) }
-            if (copyHash != null) importHashes[id] = copyHash
+                } ?: throw IOException("Cannot open input stream: $sourceUri")
+                copyHash = copyDigest?.digest()?.joinToString("") { "%02x".format(it) }
+                if (copyHash != null) importHashes[id] = copyHash
+            }
             // Keep the original file name: when a book has no internal
             // title, the parser falls back to the file name — the UUID
             // name would show up as the book title otherwise.
-            val displayName = queryDisplayName(sourceUri) ?: id
+            // (For file:// in-place books the real file name is
+            // known directly; the SAF query returns nothing for a
+            // file Uri, so the old code would have stored the UUID.)
+            val displayName = inPlaceFile?.name ?: queryDisplayName(sourceUri) ?: id
             // Strong content signatures win over the extension: a
             // mislabelled file (DOCX named .pdf, EPUB named .docx)
             // must parse as what it IS, not fail as what it claims.
             // Plain-text formats have no signature, so their extension
             // still decides (see BookFormat.detectStrongContent).
-            val format = BookFormat.detectStrongContent(tmpDest)
+            val sniffTarget = inPlaceFile ?: tmpDest
+            val format = BookFormat.detectStrongContent(sniffTarget)
                 ?: BookFormat.fromExtension(displayName)
-                ?: BookFormat.detect(tmpDest)
+                ?: BookFormat.detect(sniffTarget)
                 ?: throw ImportException(
                     "Unsupported book format: $displayName",
                     messageFa = context.getString(R.string.import_error_unsupported_format)
                 )
-            dest = File(booksDir, "$id.${format.extension}")
+            dest = inPlaceFile ?: File(booksDir, "$id.${format.extension}")
             val destFile = dest!!
-            if (!tmpDest.renameTo(destFile)) {
+            if (inPlaceFile == null && !tmpDest.renameTo(destFile)) {
                 tmpDest.copyTo(destFile, overwrite = true)
                 tmpDest.delete()
             }
@@ -349,9 +475,23 @@ class Importer(
                 ioCtx.ensureActive()
                 onStage?.invoke("decrypt")
                 val decrypted = resolvePdfDecryption(
-                    destFile.readBytes(), displayName, passwordProvider
+                    inPlacePdfBytes ?: destFile.readBytes(), displayName, passwordProvider
                 ) { ioCtx.ensureActive() }
-                if (decrypted != null) destFile.writeBytes(decrypted)
+                if (decrypted != null) {
+                    // The pre-check above guarantees this never fires
+                    // for in-place files (encrypted PDFs fall back
+                    // to the copy flow), but if it ever did, writing
+                    // decrypted bytes over the user's own file would
+                    // be silent data modification — fail loudly
+                    // instead of doing it.
+                    if (inPlaceFile != null) {
+                        throw ImportException(
+                            "Encrypted PDF cannot be read in place",
+                            messageFa = context.getString(R.string.import_in_place_encrypted_pdf)
+                        )
+                    }
+                    destFile.writeBytes(decrypted)
+                }
                 ioCtx.ensureActive()
                 onStage?.invoke("validate")
                 pdfPageCountOrThrow(destFile, displayName)
@@ -536,7 +676,9 @@ class Importer(
                     totalChapters = imageBookPages ?: recordChapters
                         ?: metadataChapterCount ?: parsed.chapters.size,
                     dateAdded = Instant.now().toString(),
-                    originalFileName = displayName
+                    originalFileName = displayName,
+                    sourceUri = inPlaceFile?.let { sourceUri.toString() },
+                    importMode = if (inPlaceFile != null) IMPORT_MODE_IN_PLACE else IMPORT_MODE_COPY
                 )
             )
             if (fastImport && coverPath == null) {
@@ -581,20 +723,24 @@ class Importer(
         } catch (e: CancellationException) {
             // Never swallow coroutine cancellation: clean up and rethrow so the
             // caller's scope cancels properly instead of faking an import error.
+            // The dest guard is the in-place safety rule: `dest` IS the
+            // user's own file for file:// in-place imports, and a failed
+            // import must never delete it. (tmpDest was never created
+            // for those imports, so deleting it is a harmless no-op.)
             openCacheDir.deleteRecursively()
-            dest?.delete()
+            if (inPlaceFile == null) dest?.delete()
             tmpDest.delete()
             throw e
         } catch (e: ImportException) {
             Log.e("NovelfaImporter", "import failed: ${e.message}", e)
             openCacheDir.deleteRecursively()
-            dest?.delete()
+            if (inPlaceFile == null) dest?.delete()
             tmpDest.delete()
             throw e
         } catch (e: Exception) {
             Log.e("NovelfaImporter", "import failed: ${e.message}", e)
             openCacheDir.deleteRecursively()
-            dest?.delete()
+            if (inPlaceFile == null) dest?.delete()
             tmpDest.delete()
             throw ImportException(
                 e.message ?: "import failed",
@@ -602,6 +748,119 @@ class Importer(
                 cause = e
             )
         }
+    }
+
+    /**
+     * Register-only import for `content://` in-place books: the
+     * persistable permission is already held (checked by the caller).
+     * One streaming pass hashes the file (duplicate/record checks)
+     * while keeping the head sample for [InPlaceSource.sniffFormat];
+     * nothing is copied, parsed, or covered here. The row's
+     * [BookEntity.filePath] is the transient working-copy path
+     * (see [InPlaceSource.resolve]), which does not exist yet —
+     * the first open materializes it, then parses through the
+     * format's engine exactly like a lazy PDF. Chapter count is
+     * unknown until then, except for PDFs with a saved record.
+     * The generated cover is still built in the background when
+     * fast import is on: [GeneratedCover] is typographic and
+     * needs only the title and the path key, not the file itself.
+     * Cancellation before the row is inserted releases nothing
+     * (the permission is released when the book is removed, and
+     * an uninserted row leaves no book to remove — the stale
+     * permission is harmless and reclaimed on the next import
+     * of the same Uri, which re-takes it).
+     */
+    private suspend fun importInPlaceContent(
+        sourceUri: Uri,
+        id: String,
+        fastImport: Boolean,
+        ioCtx: CoroutineContext,
+        onStage: ((String?) -> Unit)?
+    ): String = withContext(Dispatchers.IO) {
+        onStage?.invoke("validate")
+        val displayName = queryDisplayName(sourceUri) ?: id
+        val head = ByteArray(8192)
+        var headLen = 0
+        var total = 0L
+        var zeroReads = 0
+        val digest = MessageDigest.getInstance("SHA-256")
+        context.contentResolver.openInputStream(sourceUri)?.use { input ->
+            val buf = ByteArray(8192)
+            while (true) {
+                ioCtx.ensureActive()
+                val n = input.read(buf)
+                if (n < 0) break
+                if (n == 0) {
+                    if (++zeroReads > 10000) {
+                        throw IOException("stalled input stream: $sourceUri")
+                    }
+                    continue
+                }
+                zeroReads = 0
+                total += n
+                if (total > MAX_BOOK_BYTES) {
+                    throw ImportException(
+                        "Book too large: exceeds $MAX_BOOK_BYTES bytes",
+                        messageFa = context.getString(R.string.import_error_too_large)
+                    )
+                }
+                digest.update(buf, 0, n)
+                if (headLen < head.size) {
+                    val take = minOf(n, head.size - headLen)
+                    buf.copyInto(head, headLen, 0, take)
+                    headLen += take
+                }
+            }
+        } ?: throw IOException("Cannot open input stream: $sourceUri")
+        val hash = digest.digest().joinToString("") { "%02x".format(it) }
+        importHashes[id] = hash
+        val format = InPlaceSource.sniffFormat(head, headLen, displayName)
+            ?: throw ImportException(
+                "Unsupported book format: $displayName",
+                messageFa = context.getString(R.string.import_error_unsupported_format)
+            )
+        val recordChapters = if (format == BookFormat.PDF) {
+            recordStore.find(hash, null)?.totalChapters?.takeIf { it > 0 }
+        } else null
+        val workingPath = InPlaceSource.workingFile(context.cacheDir, id, format.extension).absolutePath
+        val bookTitle = File(displayName).nameWithoutExtension
+            .takeIf { it.isNotBlank() } ?: displayName
+        ioCtx.ensureActive()
+        onStage?.invoke("save")
+        db.bookDao().insert(
+            BookEntity(
+                id = id,
+                title = bookTitle,
+                filePath = workingPath,
+                coverPath = null,
+                totalChapters = recordChapters ?: 0,
+                dateAdded = Instant.now().toString(),
+                originalFileName = displayName,
+                sourceUri = sourceUri.toString(),
+                importMode = IMPORT_MODE_IN_PLACE
+            )
+        )
+        if (fastImport) {
+            val deferredTitle = bookTitle
+            val deferredPath = workingPath
+            backgroundScope.launch {
+                runCatching {
+                    val tmp = GeneratedCover.generate(context, deferredTitle, deferredPath)
+                        ?: return@runCatching
+                    try {
+                        val saved = CoverStore(context)
+                            .saveCover(tmp, deferredPath).absolutePath
+                        val current = db.bookDao().getById(id)
+                        if (current != null && current.coverPath == null) {
+                            db.bookDao().update(current.copy(coverPath = saved))
+                        }
+                    } finally {
+                        tmp.delete()
+                    }
+                }
+            }
+        }
+        id
     }
 
     /**

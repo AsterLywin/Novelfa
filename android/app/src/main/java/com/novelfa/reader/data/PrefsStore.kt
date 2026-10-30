@@ -60,6 +60,13 @@ class PrefsStore(private val context: Context) {
         // how import reads and when covers are built, never the book
         // itself, the reader, or books already in the library.
         val FAST_IMPORT = booleanPreferencesKey("fastImport")
+        // In-place import: ON = new imports are read where they
+        // live instead of copied into filesDir/books (see
+        // InPlaceSource). Default OFF: the copy behaviour is the
+        // safe one, and the switch only affects imports started
+        // after it changes; books already in the library keep
+        // their mode forever.
+        val IN_PLACE_IMPORT = booleanPreferencesKey("inPlaceImport")
         // Backup/restore: lifetime finished-books floor restored from a
         // backup (see BackupService). Effective finished count is
         // max(libraryFinished, floor) so a restored record survives an
@@ -98,6 +105,8 @@ class PrefsStore(private val context: Context) {
     val readingMode: Flow<String> = context.dataStore.data.map { it[READING_MODE] ?: "paged" }
     /** Safe import toggle (default ON; see FAST_IMPORT). */
     val fastImport: Flow<Boolean> = context.dataStore.data.map { it[FAST_IMPORT] ?: true }
+    /** In-place import toggle (default OFF; see IN_PLACE_IMPORT). */
+    val inPlaceImport: Flow<Boolean> = context.dataStore.data.map { it[IN_PLACE_IMPORT] ?: false }
 
     /** The appearance values the first frame is painted with. */
     data class Appearance(
@@ -204,6 +213,14 @@ class PrefsStore(private val context: Context) {
     suspend fun setFastImport(value: Boolean) {
         context.dataStore.edit { it[FAST_IMPORT] = value }
     }
+
+    suspend fun setInPlaceImport(value: Boolean) {
+        context.dataStore.edit { it[IN_PLACE_IMPORT] = value }
+    }
+
+    /** Sync read of the in-place import toggle (suspend: never blocks the main thread). */
+    suspend fun inPlaceImportNow(): Boolean =
+        context.dataStore.data.map { it[IN_PLACE_IMPORT] ?: false }.first()
 
     /** Sync read of the fast-import toggle (suspend: never blocks the main thread). */
     suspend fun fastImportNow(): Boolean =
