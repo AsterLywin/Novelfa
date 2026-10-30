@@ -2,7 +2,12 @@ package com.novelfa.reader.reader
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.graphics.drawable.Animatable
+import android.graphics.drawable.Drawable
 import android.graphics.pdf.PdfRenderer
+import android.widget.ImageView
+import java.nio.ByteBuffer
 import android.os.ParcelFileDescriptor
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -77,6 +82,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -179,6 +185,17 @@ internal interface NativePageSource : Closeable {
 
     /** Renders one page to a fresh bitmap the CALLER owns. */
     fun renderPage(index: Int, targetWidthPx: Int): Bitmap
+
+    /**
+     * An animated drawable for one page, or null. Only GIF pages
+     * have one: BitmapFactory decodes a GIF to its FIRST frame
+     * only, so an animated page needs its own path — decoded
+     * with ImageDecoder into an AnimatedImageDrawable that the
+     * viewer plays in an ImageView. Every other format returns
+     * null and renders through [renderPage] as before. Default
+     * null, so existing sources keep compiling unchanged.
+     */
+    fun animatedDrawable(index: Int): Drawable? = null
 
     /**
      * Native pixel size of one page (width to height), without
@@ -289,6 +306,23 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             }
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
             return bounds.outWidth to bounds.outHeight
+        }
+    }
+
+    override fun animatedDrawable(index: Int): Drawable? {
+        synchronized(lock) {
+            if (index < 0 || index >= entries.size) return null
+            // Extension check only: a GIF entry is the one case
+            // where the bitmap path loses information (all frames
+            // but the first), so it alone takes the drawable path.
+            if (!entries[index].endsWith(".gif", ignoreCase = true)) return null
+            val entry = zip.getEntry(entries[index]) ?: return null
+            return runCatching {
+                val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                ImageDecoder.decodeDrawable(
+                    ImageDecoder.createSource(ByteBuffer.wrap(bytes))
+                )
+            }.getOrNull()
         }
     }
 
@@ -1737,6 +1771,39 @@ private fun NativeImageBookViewer(
 private const val MAX_SOFTWARE_PIXELS = 8_000_000L
 
 /**
+ * An animated page (GIF) in a classic ImageView. Compose's Image
+ * cannot play an AnimatedImageDrawable, so the drawable lives in
+ * a View: update sets it and starts it, onRelease stops whatever
+ * the view currently holds (robust against the drawable state
+ * changing under it) and clears the view. The caller sizes the
+ * view with the same modifiers as the bitmap path, so fit modes,
+ * padding shrink and the unified-width slot behave identically —
+ * FIT_CENTER draws the drawable into its aspect-correct box,
+ * FIT_XY only for the stretch mode that ignores aspect.
+ */
+@Composable
+private fun AnimatedPageImage(
+    drawable: Drawable,
+    modifier: Modifier,
+    scaleType: ImageView.ScaleType
+) {
+    AndroidView(
+        factory = { context ->
+            ImageView(context).apply { this.scaleType = scaleType }
+        },
+        update = { view ->
+            view.setImageDrawable(drawable)
+            (drawable as? Animatable)?.start()
+        },
+        onRelease = { view ->
+            (view.drawable as? Animatable)?.stop()
+            view.setImageDrawable(null)
+        },
+        modifier = modifier.background(Color.White)
+    )
+}
+
+/**
  * One original page. The bitmap is owned by THIS item: rendered on
  * IO when the item is composed, recycled when it leaves
  * composition. Sharing bitmaps through a cache was rejected on
@@ -1769,6 +1836,11 @@ private fun NativePageItem(
     sharpenLevel: Int = 0
 ) {
     var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableStateOf<Bitmap?>(null) }
+    // An animated drawable (GIF pages only). When one is present
+    // the bitmap path is skipped entirely: the drawable IS the
+    // page, frames and all — a bitmap would freeze it on frame
+    // one, which is what the viewer did before this change.
+    var drawable by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableStateOf<Drawable?>(null) }
     var failed by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableStateOf(false) }
     // The render error itself, shown under the failure text: the
     // old code threw it away (getOrNull), so a phone-only tester
@@ -1781,8 +1853,23 @@ private fun NativePageItem(
 
     LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) {
         bitmap = null
+        drawable = null
         failed = false
         failMessage = null
+        // Animated path first: for a GIF page the drawable
+        // replaces the bitmap path wholesale. For every other
+        // format it returns null immediately (extension check)
+        // and the bitmap path below runs exactly as before.
+        // A drawable failure also falls through to the bitmap
+        // path, so a corrupt GIF still shows its first frame
+        // instead of a failure screen.
+        val animated = withContext(Dispatchers.IO) {
+            runCatching { source.animatedDrawable(page) }.getOrNull()
+        }
+        if (animated != null) {
+            drawable = animated
+            return@LaunchedEffect
+        }
         val rendered = withContext(Dispatchers.IO) {
             runCatching {
                 // The pipeline mirrors ComicScreen's per-page
@@ -1898,11 +1985,138 @@ private fun NativePageItem(
     // re-render already assigned. Capture it in a local val.
     DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) {
         val toRecycle = bitmap
-        onDispose { toRecycle?.recycle() }
+        val toStop = drawable
+        onDispose {
+            toRecycle?.recycle()
+            (toStop as? Animatable)?.stop()
+        }
     }
 
     val density = LocalDensity.current
     when {
+        drawable != null -> {
+            // Animated page: the drawable plays as-is. Crop,
+            // resize and sharpen are bitmap operations and do
+            // not apply here — cropping an animation would mean
+            // re-encoding the GIF frame by frame, which is out
+            // of scope; the page is shown whole, in the same fit
+            // modes and padding as a still page.
+            val anim = drawable!!
+            val ratio = if (anim.intrinsicWidth > 0 && anim.intrinsicHeight > 0) {
+                anim.intrinsicWidth.toFloat() / anim.intrinsicHeight.toFloat()
+            } else {
+                1f
+            }
+            val shrink = if (paddingRatio > 0f) {
+                (1f - 1.25f * paddingRatio).coerceAtLeast(0.5f)
+            } else {
+                1f
+            }
+            if (paged) {
+                when (fitMode) {
+                    "height" -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize()
+                                .horizontalScroll(rememberScrollState())
+                                .background(pageBg),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AnimatedPageImage(
+                                drawable = anim,
+                                scaleType = ImageView.ScaleType.FIT_CENTER,
+                                modifier = Modifier
+                                    .fillMaxHeight(shrink)
+                                    .aspectRatio(ratio)
+                            )
+                        }
+                    }
+                    "original" -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize()
+                                .horizontalScroll(rememberScrollState())
+                                .background(pageBg),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .verticalScroll(rememberScrollState()),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                val nativeWidthDp = with(density) {
+                                    (anim.intrinsicWidth * zoomFactor * shrink)
+                                        .toInt().toDp()
+                                }
+                                AnimatedPageImage(
+                                    drawable = anim,
+                                    scaleType = ImageView.ScaleType.FIT_CENTER,
+                                    modifier = Modifier
+                                        .width(nativeWidthDp)
+                                        .aspectRatio(ratio)
+                                )
+                            }
+                        }
+                    }
+                    "stretch" -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize()
+                                .background(pageBg),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AnimatedPageImage(
+                                drawable = anim,
+                                scaleType = ImageView.ScaleType.FIT_XY,
+                                modifier = Modifier.fillMaxSize(shrink)
+                            )
+                        }
+                    }
+                    else -> {
+                        Column(
+                            modifier = Modifier.fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .background(pageBg),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            AnimatedPageImage(
+                                drawable = anim,
+                                scaleType = ImageView.ScaleType.FIT_CENTER,
+                                modifier = Modifier
+                                    .fillMaxWidth(shrink)
+                                    .aspectRatio(ratio)
+                            )
+                        }
+                    }
+                }
+            } else {
+                val pageWidthDp = with(density) {
+                    (anim.intrinsicWidth * zoomFactor * shrink).toInt().toDp()
+                }
+                val slotWidthDp = if (unifiedWidthPx > 0) {
+                    with(density) {
+                        (unifiedWidthPx * zoomFactor).toInt().toDp()
+                    }
+                } else {
+                    pageWidthDp
+                }
+                Box(
+                    modifier = Modifier.fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier.width(slotWidthDp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AnimatedPageImage(
+                            drawable = anim,
+                            scaleType = ImageView.ScaleType.FIT_CENTER,
+                            modifier = Modifier
+                                .width(pageWidthDp)
+                                .aspectRatio(ratio)
+                        )
+                    }
+                }
+            }
+        }
         bitmap != null -> {
             val bmp = bitmap!!
             val ratio = bmp.width.toFloat() / bmp.height.toFloat()
