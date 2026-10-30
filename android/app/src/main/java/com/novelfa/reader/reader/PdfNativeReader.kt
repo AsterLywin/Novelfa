@@ -143,10 +143,12 @@ import kotlinx.coroutines.withContext
  * - One original page is never cut: each item is exactly one page
  *   at its own aspect ratio, fit to the screen width by default.
  *   Zoom re-renders that page at a larger width, it never reflows
- *   text. In vertical mode a zoomed page pans horizontally; in
- *   paged mode horizontal drag is the page turn, so zoom there
- *   only sharpens the render (the same trade-off ReadEra documents
- *   for its horizontal mode).
+ *   text. In vertical mode the strip is ComicScreen's: every page
+ *   fills the strip width, one below the other, no horizontal
+ *   scroll — zoom and pan live on the page itself (pinch, see
+ *   ZoomablePageContainer). In paged mode horizontal drag is the
+ *   page turn, so zoom there only sharpens the render (the same
+ *   trade-off ReadEra documents for its horizontal mode).
  * - A page that fails to render fails alone (placeholder + retry),
  *   it never kills the book.
  * - Progress reuses the existing book row: [BookEntity.lastChapterIndex]
@@ -704,29 +706,6 @@ private fun NativeImageBookViewer(
         }
     }
 
-    // Unified display width for continuous mode: the widest
-    // native page width in the book (device pixels). Pages of
-    // different widths are then shown in slots of this one
-    // width, each image centered at its own native size — no
-    // bitmap is ever resampled or stretched to fill the slot.
-    // Computed in the background once the source is open; 0
-    // means "not known yet" (or a source with no native sizes,
-    // like PDF), in which case items fall back to their own
-    // width. A width change never moves the reading position:
-    // only item widths change, never their heights or order.
-    var unifiedWidthPx by remember { mutableStateOf(0) }
-    LaunchedEffect(source) {
-        val src = source ?: return@LaunchedEffect
-        unifiedWidthPx = withContext(Dispatchers.IO) {
-            var max = 0
-            for (i in 0 until src.pageCount) {
-                val w = runCatching { src.nativePageSize(i)?.first ?: 0 }.getOrDefault(0)
-                if (w > max) max = w
-            }
-            max
-        }
-    }
-
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
     val pagerState = rememberPagerState(
         initialPage = initialPage,
@@ -1224,7 +1203,6 @@ private fun NativeImageBookViewer(
                         page = page,
                         renderWidthPx = renderWidthPx,
                         paged = true,
-                        unifiedWidthPx = unifiedWidthPx,
                         zoomFactor = zoomFactors[zoomIndex],
                         cropMargin = cutMargin,
                         cropPadH = cropPadH,
@@ -1254,7 +1232,6 @@ private fun NativeImageBookViewer(
                             page = page,
                             renderWidthPx = renderWidthPx,
                             paged = false,
-                            unifiedWidthPx = unifiedWidthPx,
                             zoomFactor = zoomFactors[zoomIndex],
                             cropMargin = cutMargin,
                             cropPadH = cropPadH,
@@ -1815,10 +1792,12 @@ private fun AnimatedPageImage(
  * is a crash, and the visible window already bounds how many
  * items are alive at once, so a shared cache buys nothing here.
  *
- * In vertical mode a zoomed page pans horizontally (its displayed
- * width is its bitmap width, which is larger than the screen at
- * 1.5x/2x). In paged mode horizontal drag is the page turn, so
- * the page is fit to the screen width and zoom only sharpens it.
+ * In vertical mode the strip is ComicScreen's: every page fills
+ * the strip width, one below the other, no horizontal scroll —
+ * zoom and pan live on the page itself (pinch, see
+ * ZoomablePageContainer). In paged mode horizontal drag is the
+ * page turn, so the page is fit to the screen width and zoom
+ * only sharpens it.
  */
 @Composable
 private fun NativePageItem(
@@ -1826,7 +1805,6 @@ private fun NativePageItem(
     page: Int,
     renderWidthPx: Int,
     paged: Boolean,
-    unifiedWidthPx: Int = 0,
     zoomFactor: Float = 1f,
     cropMargin: Boolean = false,
     cropPadH: Int = 0,
@@ -1897,8 +1875,13 @@ private fun NativePageItem(
                         current = cropped
                     }
                 }
-                // Resize to display size, in a fit mode that
-                // sizes the page to the screen (width or height).
+                // Resize to display size. Vertical mode sizes
+                // every page to the screen width (ComicScreen's
+                // vertical strip), so it resizes exactly like
+                // paged fit-width; paged fit-height resizes to
+                // the screen height; original/stretch never
+                // resample (original is native by definition,
+                // stretch is a GPU fill).
                 // Smaller than display: bicubic upscale (a small
                 // page stretched by the GPU goes soft). Larger
                 // than display: area-average downscale — the GPU
@@ -1908,15 +1891,12 @@ private fun NativePageItem(
                 // it was the remaining softness for PNG/WebP/GIF
                 // (their decodes are already pixel-exact; the
                 // quality decode flag only changes JPEG).
-                // Continuous mode and original/stretch never
-                // resample: continuous shows native pixels,
-                // original is native by definition, stretch is
-                // a GPU fill. Padding's shrink is ignored here
-                // on purpose: resizing to the full screen size
-                // and letting the GPU shave the padding off is
-                // still far sharper than resampling from the
-                // wrong size, and it keeps the padding slider
-                // from re-rendering on every drag.
+                // Padding's shrink is ignored here on purpose:
+                // resizing to the full screen size and letting
+                // the GPU shave the padding off is still far
+                // sharper than resampling from the wrong size,
+                // and it keeps the padding slider from
+                // re-rendering on every drag.
                 // MEMORY BUDGET: every software step below
                 // materializes 2-3 full-size IntArray copies
                 // beside the bitmap itself. On a tall manhwa
@@ -1931,32 +1911,29 @@ private fun NativePageItem(
                 // did. The budget is re-checked per step, on
                 // the current size: a page resized down first
                 // is small by the time sharpen runs.
-                if (paged && current.width.toLong() * current.height <= MAX_SOFTWARE_PIXELS) {
-                    if (fitMode == "width" && screenWidthPx > 0 &&
-                        current.width != screenWidthPx
-                    ) {
-                        val targetH =
+                val resizeTarget: Pair<Int, Int>? = when {
+                    !paged && screenWidthPx > 0 ->
+                        screenWidthPx to
                             (screenWidthPx * current.height / current.width)
                                 .coerceAtLeast(1)
-                        val resized = if (current.width < screenWidthPx) {
-                            upscaleBicubic(current, screenWidthPx, targetH)
-                        } else {
-                            resizeBox(current, screenWidthPx, targetH)
-                        }
-                        if (resized !== current) {
-                            current.recycle()
-                            current = resized
-                        }
-                    } else if (fitMode == "height" && screenHeightPx > 0 &&
-                        current.height != screenHeightPx
-                    ) {
-                        val targetW =
-                            (screenHeightPx * current.width / current.height)
+                    paged && fitMode == "width" && screenWidthPx > 0 ->
+                        screenWidthPx to
+                            (screenWidthPx * current.height / current.width)
                                 .coerceAtLeast(1)
-                        val resized = if (current.height < screenHeightPx) {
-                            upscaleBicubic(current, targetW, screenHeightPx)
+                    paged && fitMode == "height" && screenHeightPx > 0 ->
+                        (screenHeightPx * current.width / current.height)
+                            .coerceAtLeast(1) to screenHeightPx
+                    else -> null
+                }
+                if (resizeTarget != null &&
+                    current.width.toLong() * current.height <= MAX_SOFTWARE_PIXELS
+                ) {
+                    val (targetW, targetH) = resizeTarget
+                    if (current.width != targetW) {
+                        val resized = if (current.width < targetW) {
+                            upscaleBicubic(current, targetW, targetH)
                         } else {
-                            resizeBox(current, targetW, screenHeightPx)
+                            resizeBox(current, targetW, targetH)
                         }
                         if (resized !== current) {
                             current.recycle()
@@ -2091,33 +2068,21 @@ private fun NativePageItem(
                     }
                 }
             } else {
-                val pageWidthDp = with(density) {
-                    (anim.intrinsicWidth * zoomFactor * shrink).toInt().toDp()
-                }
-                val slotWidthDp = if (unifiedWidthPx > 0) {
-                    with(density) {
-                        (unifiedWidthPx * zoomFactor).toInt().toDp()
-                    }
-                } else {
-                    pageWidthDp
-                }
-                Box(
-                    modifier = Modifier.fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    contentAlignment = Alignment.Center
+                // Vertical mode, ComicScreen's strip: the page
+                // fills the strip width, pages stack one below
+                // the other, no horizontal scroll at all. Zoom
+                // and pan live on the page itself (see
+                // ZoomablePageContainer): the sheet's zoom steps
+                // no longer change this display, pinch does.
+                ZoomablePageContainer(
+                    modifier = Modifier.fillMaxWidth(shrink)
+                        .aspectRatio(ratio)
                 ) {
-                    Box(
-                        modifier = Modifier.width(slotWidthDp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AnimatedPageImage(
-                            drawable = anim,
-                            scaleType = ImageView.ScaleType.FIT_CENTER,
-                            modifier = Modifier
-                                .width(pageWidthDp)
-                                .aspectRatio(ratio)
-                        )
-                    }
+                    AnimatedPageImage(
+                        drawable = anim,
+                        scaleType = ImageView.ScaleType.FIT_CENTER,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
         }
@@ -2227,56 +2192,25 @@ private fun NativePageItem(
                     }
                 }
             } else {
-                // Continuous mode: the image is shown at its
-                // native pixel size (times the zoom factor —
-                // an explicit user enlargement, drawn by the
-                // GPU, not a re-decode), centered in a slot of
-                // the book's unified width. A narrower page
-                // therefore sits centered in the same-width
-                // frame as the widest page, with empty space
-                // at its sides — never stretched, never
-                // resampled, never cropped. Its height stays
-                // its own native height, so the column keeps
-                // each page's proportions. Until the unified
-                // width is computed the slot is the page's own
-                // width (the old behaviour); the slot then
-                // snaps to the unified width once, without
-                // moving the reading position.
-                val pageWidthDp = with(density) {
-                    (bmp.width * zoomFactor * shrink).toInt().toDp()
-                }
-                val slotWidthDp = if (unifiedWidthPx > 0) {
-                    with(density) {
-                        (unifiedWidthPx * zoomFactor).toInt().toDp()
-                    }
-                } else {
-                    pageWidthDp
-                }
-                // Two boxes, deliberately: the outer one is
-                // the screen-wide scroll viewport (a page wider
-                // than the screen must stay pannable), the
-                // inner one is the unified-width slot the image
-                // is centered in. A single slot-wide box would
-                // clip a wide page at the list viewport with no
-                // way to pan to its sides.
-                Box(
-                    modifier = Modifier.fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    contentAlignment = Alignment.Center
+                // Vertical mode, ComicScreen's strip: the page
+                // fills the strip width, pages stack one below
+                // the other, no horizontal scroll at all. Zoom
+                // and pan live on the page itself (see
+                // ZoomablePageContainer): the sheet's zoom steps
+                // no longer change this display, pinch does.
+                // The bitmap was already resized to the screen
+                // width by the pipeline above, so fillMaxWidth
+                // draws it 1:1 (up to the padding shrink).
+                ZoomablePageContainer(
+                    modifier = Modifier.fillMaxWidth(shrink)
+                        .aspectRatio(ratio)
                 ) {
-                    Box(
-                        modifier = Modifier.width(slotWidthDp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Image(
-                            bitmap = bmp.asImageBitmap(),
-                            contentDescription = null,
-                            modifier = Modifier
-                                .width(pageWidthDp)
-                                .aspectRatio(ratio)
-                                .background(Color.White)
-                        )
-                    }
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize()
+                            .background(Color.White)
+                    )
                 }
             }
         }
