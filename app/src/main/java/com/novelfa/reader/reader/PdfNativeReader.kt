@@ -980,6 +980,42 @@ private fun NativeImageBookViewer(
                                 size = 19.dp
                             )
                         }
+                        // Quick toggles, ComicScreen's top-bar
+                        // btn4/btn8 pattern: the icon itself is
+                        // the switch, and the selected state is
+                        // the primary tint (its setSelected).
+                        // Fine-tuning (kept margins, ratio)
+                        // stays in the settings sheet.
+                        IconButton(onClick = {
+                            scope.launch {
+                                prefs.setComicCutMargin(!cutMargin)
+                            }
+                        }) {
+                            AppIcon(
+                                AppIconKind.Crop,
+                                tint = if (cutMargin) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    LocalContentColor.current
+                                },
+                                size = 19.dp
+                            )
+                        }
+                        IconButton(onClick = {
+                            scope.launch {
+                                prefs.setComicPaddingEnabled(!paddingEnabled)
+                            }
+                        }) {
+                            AppIcon(
+                                AppIconKind.Padding,
+                                tint = if (paddingEnabled) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    LocalContentColor.current
+                                },
+                                size = 19.dp
+                            )
+                        }
                         IconButton(onClick = { showViewSettings = true }) {
                             AppIcon(
                                 AppIconKind.Gear,
@@ -1234,20 +1270,50 @@ private fun NativeImageBookViewer(
                     TextButton(
                         enabled = !isPaged,
                         onClick = { toggleMode() }
-                    ) { Text(stringResource(R.string.mode_horizontal)) }
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AppIcon(
+                                AppIconKind.Pages,
+                                tint = LocalContentColor.current,
+                                size = 15.dp
+                            )
+                            Text(stringResource(R.string.mode_horizontal))
+                        }
+                    }
                     TextButton(
                         enabled = isPaged,
                         onClick = { toggleMode() }
-                    ) { Text(stringResource(R.string.mode_vertical_continuous)) }
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AppIcon(
+                                AppIconKind.Scroll,
+                                tint = LocalContentColor.current,
+                                size = 15.dp
+                            )
+                            Text(stringResource(R.string.mode_vertical_continuous))
+                        }
+                    }
                 }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(
+                    IconButton(
                         enabled = zoomIndex > 0,
                         onClick = { zoomIndex-- }
-                    ) { Text(stringResource(R.string.pdf_zoom_out)) }
+                    ) {
+                        AppIcon(
+                            AppIconKind.Minus,
+                            tint = LocalContentColor.current,
+                            size = 18.dp
+                        )
+                    }
                     Text(
                         text = when (zoomFactors[zoomIndex]) {
                             1.5f -> "1.5×"
@@ -1256,14 +1322,26 @@ private fun NativeImageBookViewer(
                         },
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    TextButton(
+                    IconButton(
                         enabled = zoomIndex < zoomFactors.lastIndex,
                         onClick = { zoomIndex++ }
-                    ) { Text(stringResource(R.string.pdf_zoom_in)) }
-                    TextButton(
+                    ) {
+                        AppIcon(
+                            AppIconKind.Plus,
+                            tint = LocalContentColor.current,
+                            size = 18.dp
+                        )
+                    }
+                    IconButton(
                         enabled = zoomIndex != 0,
                         onClick = { zoomIndex = 0 }
-                    ) { Text(stringResource(R.string.pdf_fit_width)) }
+                    ) {
+                        AppIcon(
+                            AppIconKind.Fullscreen,
+                            tint = LocalContentColor.current,
+                            size = 18.dp
+                        )
+                    }
                 }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -1321,10 +1399,20 @@ private fun NativeImageBookViewer(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = stringResource(R.string.comic_cut_margin),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AppIcon(
+                            AppIconKind.Crop,
+                            tint = LocalContentColor.current,
+                            size = 16.dp
+                        )
+                        Text(
+                            text = stringResource(R.string.comic_cut_margin),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                     Switch(
                         checked = cutMargin,
                         onCheckedChange = { checked ->
@@ -1342,10 +1430,20 @@ private fun NativeImageBookViewer(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = stringResource(R.string.comic_crop_pad_h),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AppIcon(
+                                AppIconKind.Crop,
+                                tint = LocalContentColor.current,
+                                size = 16.dp
+                            )
+                            Text(
+                                text = stringResource(R.string.comic_crop_pad_h),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                         Text(
                             text = "$cropPadH%",
                             style = MaterialTheme.typography.bodyMedium
@@ -1364,10 +1462,20 @@ private fun NativeImageBookViewer(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = stringResource(R.string.comic_crop_pad_v),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AppIcon(
+                                AppIconKind.Crop,
+                                tint = LocalContentColor.current,
+                                size = 16.dp
+                            )
+                            Text(
+                                text = stringResource(R.string.comic_crop_pad_v),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                         Text(
                             text = "$cropPadV%",
                             style = MaterialTheme.typography.bodyMedium
@@ -1390,10 +1498,20 @@ private fun NativeImageBookViewer(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = stringResource(R.string.comic_page_margin),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AppIcon(
+                            AppIconKind.Padding,
+                            tint = LocalContentColor.current,
+                            size = 16.dp
+                        )
+                        Text(
+                            text = stringResource(R.string.comic_page_margin),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                     Switch(
                         checked = paddingEnabled,
                         onCheckedChange = { checked ->
@@ -1406,10 +1524,20 @@ private fun NativeImageBookViewer(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = stringResource(R.string.comic_page_margin),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AppIcon(
+                                AppIconKind.Padding,
+                                tint = LocalContentColor.current,
+                                size = 16.dp
+                            )
+                            Text(
+                                text = stringResource(R.string.comic_page_margin),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                         Text(
                             text = if (pageMarginPct == 0) {
                                 "0%"
