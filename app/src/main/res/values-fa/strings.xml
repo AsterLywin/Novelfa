@@ -345,4 +345,6 @@
     <string name="comic_bg_dark">خاکستری تیره</string>
     <string name="comic_bg_black">مشکی</string>
     <string name="comic_bg_white">سفید</string>
+    <string name="comic_cut_margin">برش حاشیه</string>
+    <string name="comic_page_margin">فاصله از حاشیه</string>
 </resources>

@@ -58,6 +58,12 @@ class PrefsStore(private val context: Context) {
         // Native comic viewer page background: "dark" (default, the
         // old 0xFF1E1E1E letterbox), "black" or "white".
         val COMIC_BACKGROUND = stringPreferencesKey("comicBackground")
+        // Native comic viewer cut margin (default off): trim the
+        // uniform border around each page at display time.
+        val COMIC_CUT_MARGIN = booleanPreferencesKey("comicCutMargin")
+        // Native comic viewer page margin in dp (default 0): the
+        // gap kept between the page and the screen edge.
+        val COMIC_PAGE_MARGIN = intPreferencesKey("comicPageMargin")
         // Safe (fast) import: single-read copy + deferred generated
         // covers, toggled from Settings. Default ON: it only changes
         // how import reads and when covers are built, never the book
@@ -109,6 +115,12 @@ class PrefsStore(private val context: Context) {
     /** Native comic viewer page background: "dark" (default), "black" or "white". */
     val comicBackground: Flow<String> =
         context.dataStore.data.map { it[COMIC_BACKGROUND] ?: "dark" }
+    /** Native comic viewer cut margin (default off). */
+    val comicCutMargin: Flow<Boolean> =
+        context.dataStore.data.map { it[COMIC_CUT_MARGIN] ?: false }
+    /** Native comic viewer page margin in dp (default 0). */
+    val comicPageMargin: Flow<Int> =
+        context.dataStore.data.map { it[COMIC_PAGE_MARGIN] ?: 0 }
     /** Safe import toggle (default ON; see FAST_IMPORT). */
     val fastImport: Flow<Boolean> = context.dataStore.data.map { it[FAST_IMPORT] ?: true }
     /** In-place import toggle (default OFF; see IN_PLACE_IMPORT). */
@@ -218,6 +230,14 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setComicBackground(value: String) {
         context.dataStore.edit { it[COMIC_BACKGROUND] = value }
+    }
+
+    suspend fun setComicCutMargin(value: Boolean) {
+        context.dataStore.edit { it[COMIC_CUT_MARGIN] = value }
+    }
+
+    suspend fun setComicPageMargin(value: Int) {
+        context.dataStore.edit { it[COMIC_PAGE_MARGIN] = value }
     }
 
     suspend fun setFastImport(value: Boolean) {
