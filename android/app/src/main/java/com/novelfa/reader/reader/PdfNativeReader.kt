@@ -4,12 +4,21 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,6 +34,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
@@ -32,13 +43,16 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -52,8 +66,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -233,21 +251,18 @@ internal class PdfNativeRenderer(pdfFile: File) : NativePageSource {
 
 /**
  * CBZ/ZIP page source: decodes one archive image on demand, at
- * the image's NATIVE size — no sampling down to the screen
- * width (see renderPage). Manhwa pages are tall and mostly
- * opaque, so they decode as RGB_565 (half the memory of
- * ARGB_8888) and are allowed up to 16384px tall / 8192px wide
- * before sampling down — a tall strip must stay readable, not
- * be shrunk to a thumbnail by a PDF-sized cap. Sampling is a
- * power of two (the decoder's efficient path).
+ * the image's NATIVE size and FULL colour — no sampling down
+ * to the screen width and no 16-bit colour quantisation (see
+ * renderPage). Pages are allowed up to 16384px tall / 8192px
+ * wide before sampling down — a tall strip must stay readable,
+ * not be shrunk to a thumbnail by a PDF-sized cap. Sampling is
+ * a power of two (the decoder's efficient path).
  *
- * RGB_565 is a FIRST try only, not the only try: some decoders
- * (notably WebP, the format most manhwa archives use today)
- * refuse a 565 output and return null, which used to surface as
- * a bare "page couldn't be rendered" for every page of the book
- * even though the archive itself was fine. A null 565 decode
- * therefore falls back to ARGB_8888 before giving up — JPEG/PNG
- * pages keep the memory saving, WebP pages still render.
+ * Colour: ARGB_8888 first (the image's own depth). RGB_565 is
+ * only the fallback for a decoder refusing a config (WebP in
+ * particular used to return null for 565) or an out-of-memory
+ * on a giant page — never the happy path, because 565's
+ * banding on gradients is plainly visible on manhwa art.
  */
 internal class CbzNativeSource(zipFile: File) : NativePageSource {
     private val lock = Any()
@@ -309,26 +324,41 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             ) {
                 sample *= 2
             }
-            val opts = BitmapFactory.Options().apply {
-                inSampleSize = sample
-                inPreferredConfig = Bitmap.Config.RGB_565
-            }
-            // First try: RGB_565 (half memory). Some decoders
-            // return null for this config instead of converting
-            // (WebP in particular), so a null result is NOT a
-            // verdict on the image — retry as ARGB_8888 on a fresh
-            // stream before reporting the page unreadable.
-            val bitmap = zip.getInputStream(entry).use { stream ->
-                BitmapFactory.decodeStream(stream, null, opts)
-            } ?: zip.getInputStream(entry).use { stream ->
-                BitmapFactory.decodeStream(
-                    stream, null,
-                    BitmapFactory.Options().apply {
-                        inSampleSize = sample
-                        inPreferredConfig = Bitmap.Config.ARGB_8888
+            // Full-colour decode first: RGB_565 (16-bit: 5/6/5
+            // bits per channel) used to be the first try for
+            // half the memory, but it visibly degrades the art
+            // — colour banding on gradients and washed-out
+            // pastels, exactly the "much worse than the
+            // original" a device report showed on manhwa pages.
+            // A JPEG/PNG that decodes fine as 565 stays 565, so
+            // the old order never even reached the ARGB
+            // fallback. Now ARGB_8888 (8 bits per channel, the
+            // image's own colour depth) is the decode, and
+            // RGB_565 is only the fallback: a null result (a
+            // decoder refusing a config, WebP in particular) or
+            // an out-of-memory on a giant page retries as 565
+            // on a fresh stream before giving up. Each attempt
+            // needs its own stream — a consumed stream cannot
+            // be decoded twice. The extra memory is bounded:
+            // page bitmaps are owned per visible item and
+            // recycled when the item leaves composition, so
+            // only the visible window's pages are alive.
+            fun decodeAs(config: Bitmap.Config): Bitmap? {
+                return runCatching {
+                    zip.getInputStream(entry).use { stream ->
+                        BitmapFactory.decodeStream(
+                            stream, null,
+                            BitmapFactory.Options().apply {
+                                inSampleSize = sample
+                                inPreferredConfig = config
+                            }
+                        )
                     }
-                )
-            } ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
+                }.getOrNull()
+            }
+            val bitmap = decodeAs(Bitmap.Config.ARGB_8888)
+                ?: decodeAs(Bitmap.Config.RGB_565)
+                ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
             return bitmap
         }
     }
@@ -849,117 +879,261 @@ private fun NativeImageBookViewer(
         }
     }
 
+    // ComicScreen-style chrome. The old bars were always visible
+    // and crowded: five text buttons up top, two more below, on a
+    // phone that is mostly page. Now a tap anywhere on the page
+    // hides both bars (reading goes full-screen) and the next tap
+    // brings them back. Tap only: a swipe still turns or scrolls
+    // the page, because the pager/list consumes the drag before
+    // this detector's up-event can fire — so hiding never eats a
+    // page turn. The top bar keeps only icons (chapters, mode,
+    // settings); zoom and fit-width moved into the settings sheet,
+    // where text buttons have room.
+    var chromeVisible by remember { mutableStateOf(true) }
+    var showViewSettings by remember { mutableStateOf(false) }
+    val viewSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Scrub preview, not a live move (ComicScreen's page move
+    // preview, number-only: a thumbnail would decode a page per
+    // scrub step). While the thumb is dragged the indicator shows
+    // the page it WOULD land on and nothing else moves — no page
+    // flips, no progress saves, no XP entries for skipped pages.
+    // Releasing the thumb jumps there through the same jump the
+    // buttons use.
+    var sliderPreview by remember { mutableStateOf<Int?>(null) }
+    // Page background (letterbox around narrower pages): the old
+    // dark grey, black, or white — persisted like the reading
+    // mode, so the choice survives reopening the book.
+    val savedBgKey by prefs.comicBackground.collectAsState(initial = "dark")
+    val pageBg = when (savedBgKey) {
+        "black" -> Color.Black
+        "white" -> Color.White
+        else -> Color(0xFF1E1E1E)
+    }
+    val cutMargin by prefs.comicCutMargin.collectAsState(initial = false)
+    val cropPadH by prefs.comicCropPadH.collectAsState(initial = 0)
+    val cropPadV by prefs.comicCropPadV.collectAsState(initial = 0)
+    val paddingEnabled by prefs.comicPaddingEnabled.collectAsState(initial = false)
+    // Percent 0..40 (ComicScreen's SeekBar max 400 -> ratio
+    // 0..0.4); the effective ratio is 0 when the switch is off.
+    val pageMarginPct by prefs.comicPageMargin.collectAsState(initial = 0)
+    val paddingRatio = if (paddingEnabled) pageMarginPct / 100f else 0f
+    val currentChapterIndex = chapters.indexOfLast { it.firstPageIndex <= currentPage }
+    val currentChapter = chapters.getOrNull(currentChapterIndex)
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = book.title,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = { closeViewer() }) {
-                        AppIcon(
-                            AppIconKind.ArrowBack,
-                            tint = LocalContentColor.current,
-                            size = 18.dp
-                        )
-                    }
-                },
-                actions = {
-                    if (showChapterList) {
-                        TextButton(onClick = { showChapters = true }) {
-                            Text(stringResource(R.string.chapters))
+            AnimatedVisibility(
+                visible = chromeVisible,
+                enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+            ) {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(
+                                text = book.title,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (currentChapter != null) {
+                                Text(
+                                    text = currentChapter.title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = LocalContentColor.current.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = { closeViewer() }) {
+                            AppIcon(
+                                AppIconKind.ArrowBack,
+                                tint = LocalContentColor.current,
+                                size = 18.dp
+                            )
+                        }
+                    },
+                    actions = {
+                        if (showChapterList) {
+                            IconButton(onClick = { showChapters = true }) {
+                                AppIcon(
+                                    AppIconKind.List,
+                                    tint = LocalContentColor.current,
+                                    size = 19.dp
+                                )
+                            }
+                        }
+                        // Icon shows the mode the tap SWITCHES to:
+                        // a scroll glyph while paged, a pages glyph
+                        // while continuous.
+                        IconButton(onClick = { toggleMode() }) {
+                            AppIcon(
+                                if (isPaged) {
+                                    AppIconKind.Scroll
+                                } else {
+                                    AppIconKind.Pages
+                                },
+                                tint = LocalContentColor.current,
+                                size = 19.dp
+                            )
+                        }
+                        // Quick toggles, ComicScreen's top-bar
+                        // btn4/btn8 pattern: the icon itself is
+                        // the switch, and the selected state is
+                        // the primary tint (its setSelected).
+                        // Fine-tuning (kept margins, ratio)
+                        // stays in the settings sheet.
+                        IconButton(onClick = {
+                            scope.launch {
+                                prefs.setComicCutMargin(!cutMargin)
+                            }
+                        }) {
+                            AppIcon(
+                                AppIconKind.Crop,
+                                tint = if (cutMargin) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    LocalContentColor.current
+                                },
+                                size = 19.dp
+                            )
+                        }
+                        IconButton(onClick = {
+                            scope.launch {
+                                prefs.setComicPaddingEnabled(!paddingEnabled)
+                            }
+                        }) {
+                            AppIcon(
+                                AppIconKind.Padding,
+                                tint = if (paddingEnabled) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    LocalContentColor.current
+                                },
+                                size = 19.dp
+                            )
+                        }
+                        IconButton(onClick = { showViewSettings = true }) {
+                            AppIcon(
+                                AppIconKind.Gear,
+                                tint = LocalContentColor.current,
+                                size = 19.dp
+                            )
                         }
                     }
-                    TextButton(onClick = { toggleMode() }) {
-                        Text(
-                            stringResource(
-                                if (isPaged) {
-                                    R.string.mode_horizontal
-                                } else {
-                                    R.string.mode_vertical_continuous
-                                }
-                            )
-                        )
-                    }
-                    TextButton(
-                        enabled = zoomIndex > 0,
-                        onClick = { zoomIndex-- }
-                    ) { Text(stringResource(R.string.pdf_zoom_out)) }
-                    TextButton(
-                        enabled = zoomIndex < zoomFactors.lastIndex,
-                        onClick = { zoomIndex++ }
-                    ) { Text(stringResource(R.string.pdf_zoom_in)) }
-                    TextButton(
-                        enabled = zoomIndex != 0,
-                        onClick = { zoomIndex = 0 }
-                    ) { Text(stringResource(R.string.pdf_fit_width)) }
-                }
-            )
+                )
+            }
         },
         bottomBar = {
-            if (pageCount > 0) {
+            AnimatedVisibility(
+                visible = chromeVisible && pageCount > 0,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+            ) {
                 BottomAppBar {
-                    TextButton(
+                    // Arrows follow the reading flow, not the Latin
+                    // alphabet: in this RTL layout the previous page
+                    // sits to the right and the next page to the
+                    // left, so prev points right and next left.
+                    IconButton(
                         enabled = currentPage > 0,
                         onClick = { stepTo(currentPage - 1) }
-                    ) { Text(stringResource(R.string.pdf_prev_page)) }
+                    ) {
+                        AppIcon(
+                            AppIconKind.ArrowForward,
+                            tint = if (currentPage > 0) {
+                                LocalContentColor.current
+                            } else {
+                                LocalContentColor.current.copy(alpha = 0.38f)
+                            },
+                            size = 19.dp
+                        )
+                    }
                     Column(
                         modifier = Modifier.weight(1f),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        val preview = sliderPreview
                         Text(
                             text = stringResource(
                                 R.string.page_indicator,
-                                currentPage + 1, pageCount
+                                (preview ?: currentPage) + 1, pageCount
                             ),
                             style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Center,
+                            color = if (preview != null) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                LocalContentColor.current
+                            }
                         )
                         Slider(
-                            value = currentPage.toFloat(),
+                            value = (sliderPreview ?: currentPage).toFloat(),
                             onValueChange = { v ->
-                                currentPage = v.toInt().coerceIn(0, pageCount - 1)
+                                sliderPreview =
+                                    v.toInt().coerceIn(0, pageCount - 1)
                             },
                             onValueChangeFinished = {
-                                jumpTo(currentPage)
+                                val target = sliderPreview
+                                sliderPreview = null
+                                if (target != null) jumpTo(target)
                             },
                             valueRange = 0f..(pageCount - 1).coerceAtLeast(0).toFloat(),
                             steps = (pageCount - 2).coerceIn(0, 1000)
                         )
                     }
-                    TextButton(
+                    IconButton(
                         enabled = currentPage < pageCount - 1,
                         onClick = { stepTo(currentPage + 1) }
-                    ) { Text(stringResource(R.string.pdf_next_page)) }
+                    ) {
+                        AppIcon(
+                            AppIconKind.ArrowBack,
+                            tint = if (currentPage < pageCount - 1) {
+                                LocalContentColor.current
+                            } else {
+                                LocalContentColor.current.copy(alpha = 0.38f)
+                            },
+                            size = 19.dp
+                        )
+                    }
                 }
             }
         }
     ) { padding ->
-        when {
-            openError -> {
-                Box(
-                    modifier = Modifier.fillMaxSize().padding(padding),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(stringResource(errorRes))
-                        Spacer(Modifier.height(12.dp))
-                        TextButton(onClick = onClose) {
-                            Text(stringResource(R.string.close))
+        // The tap surface for the chrome toggle: the whole page
+        // area, padded by the Scaffold's bars while they are
+        // visible, full-screen once they hide. Buttons inside
+        // (retry, close) consume their own taps, so a tap on one
+        // never toggles the chrome by accident.
+        Box(
+            modifier = Modifier.fillMaxSize().padding(padding)
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { chromeVisible = !chromeVisible })
+                }
+        ) {
+            when {
+                openError -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(stringResource(errorRes))
+                            Spacer(Modifier.height(12.dp))
+                            TextButton(onClick = onClose) {
+                                Text(stringResource(R.string.close))
+                            }
                         }
                     }
                 }
-            }
-            source == null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize().padding(padding),
-                    contentAlignment = Alignment.Center
-                ) {
+                source == null -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
                         Spacer(Modifier.height(12.dp))
@@ -971,8 +1145,8 @@ private fun NativeImageBookViewer(
                 val activeSource = source!!
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.fillMaxSize().padding(padding)
-                        .background(Color(0xFF1E1E1E)),
+                    modifier = Modifier.fillMaxSize()
+                        .background(pageBg),
                     beyondViewportPageCount = 1
                 ) { page ->
                     NativePageItem(
@@ -981,7 +1155,12 @@ private fun NativeImageBookViewer(
                         renderWidthPx = renderWidthPx,
                         paged = true,
                         unifiedWidthPx = unifiedWidthPx,
-                        zoomFactor = zoomFactors[zoomIndex]
+                        zoomFactor = zoomFactors[zoomIndex],
+                        cropMargin = cutMargin,
+                        cropPadH = cropPadH,
+                        cropPadV = cropPadV,
+                        paddingRatio = paddingRatio,
+                        pageBg = pageBg
                     )
                 }
             }
@@ -989,8 +1168,8 @@ private fun NativeImageBookViewer(
                 val activeSource = source!!
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize().padding(padding)
-                        .background(Color(0xFF1E1E1E)),
+                    modifier = Modifier.fillMaxSize()
+                        .background(pageBg),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -1001,10 +1180,16 @@ private fun NativeImageBookViewer(
                             renderWidthPx = renderWidthPx,
                             paged = false,
                             unifiedWidthPx = unifiedWidthPx,
-                            zoomFactor = zoomFactors[zoomIndex]
+                            zoomFactor = zoomFactors[zoomIndex],
+                            cropMargin = cutMargin,
+                            cropPadH = cropPadH,
+                            cropPadV = cropPadV,
+                            paddingRatio = paddingRatio,
+                            pageBg = pageBg
                         )
                     }
                 }
+            }
             }
         }
     }
@@ -1056,6 +1241,333 @@ private fun NativeImageBookViewer(
             }
         )
     }
+
+    // View settings sheet (the gear in the top bar): everything
+    // that used to crowd the top bar as text buttons, plus the
+    // page background. It stays open while adjusting, so zoom,
+    // mode and background can be tried in one visit; the close
+    // button or a drag dismisses it. Nothing here touches the
+    // reading position: mode keeps pendingModeTarget, zoom
+    // re-lands on the same page, background only repaints the
+    // letterbox.
+    if (showViewSettings) {
+        ModalBottomSheet(
+            onDismissRequest = { showViewSettings = false },
+            sheetState = viewSheetState
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.comic_view_settings),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        enabled = !isPaged,
+                        onClick = { toggleMode() }
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AppIcon(
+                                AppIconKind.Pages,
+                                tint = LocalContentColor.current,
+                                size = 15.dp
+                            )
+                            Text(stringResource(R.string.mode_horizontal))
+                        }
+                    }
+                    TextButton(
+                        enabled = isPaged,
+                        onClick = { toggleMode() }
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AppIcon(
+                                AppIconKind.Scroll,
+                                tint = LocalContentColor.current,
+                                size = 15.dp
+                            )
+                            Text(stringResource(R.string.mode_vertical_continuous))
+                        }
+                    }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        enabled = zoomIndex > 0,
+                        onClick = { zoomIndex-- }
+                    ) {
+                        AppIcon(
+                            AppIconKind.Minus,
+                            tint = LocalContentColor.current,
+                            size = 18.dp
+                        )
+                    }
+                    Text(
+                        text = when (zoomFactors[zoomIndex]) {
+                            1.5f -> "1.5×"
+                            2f -> "2×"
+                            else -> "1×"
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    IconButton(
+                        enabled = zoomIndex < zoomFactors.lastIndex,
+                        onClick = { zoomIndex++ }
+                    ) {
+                        AppIcon(
+                            AppIconKind.Plus,
+                            tint = LocalContentColor.current,
+                            size = 18.dp
+                        )
+                    }
+                    IconButton(
+                        enabled = zoomIndex != 0,
+                        onClick = { zoomIndex = 0 }
+                    ) {
+                        AppIcon(
+                            AppIconKind.Fullscreen,
+                            tint = LocalContentColor.current,
+                            size = 18.dp
+                        )
+                    }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.comic_background),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    val bgOptions = listOf(
+                        Triple("dark", Color(0xFF1E1E1E), R.string.comic_bg_dark),
+                        Triple("black", Color.Black, R.string.comic_bg_black),
+                        Triple("white", Color.White, R.string.comic_bg_white)
+                    )
+                    bgOptions.forEach { (key, color, labelRes) ->
+                        val selected = savedBgKey == key
+                        val bgLabel = stringResource(labelRes)
+                        Box(
+                            modifier = Modifier.size(36.dp)
+                                .clip(CircleShape)
+                                .semantics { contentDescription = bgLabel }
+                                .background(color)
+                                .border(
+                                    width = if (selected) 2.dp else 1.dp,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        LocalContentColor.current.copy(alpha = 0.4f)
+                                    },
+                                    shape = CircleShape
+                                )
+                                .clickable {
+                                    scope.launch {
+                                        prefs.setComicBackground(key)
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (selected) {
+                                AppIcon(
+                                    AppIconKind.Check,
+                                    tint = if (key == "white") {
+                                        Color.Black
+                                    } else {
+                                        Color.White
+                                    },
+                                    size = 16.dp
+                                )
+                            }
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AppIcon(
+                            AppIconKind.Crop,
+                            tint = LocalContentColor.current,
+                            size = 16.dp
+                        )
+                        Text(
+                            text = stringResource(R.string.comic_cut_margin),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Switch(
+                        checked = cutMargin,
+                        onCheckedChange = { checked ->
+                            scope.launch { prefs.setComicCutMargin(checked) }
+                        }
+                    )
+                }
+                // Kept margins after auto-cropping (ComicScreen's
+                // set_img_crop_auto_pad_h/v, 0..100): each side
+                // grows by this percent of the larger margin on
+                // that axis. 0 = crop exactly to the detected
+                // content box, the ComicScreen default.
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AppIcon(
+                                AppIconKind.Crop,
+                                tint = LocalContentColor.current,
+                                size = 16.dp
+                            )
+                            Text(
+                                text = stringResource(R.string.comic_crop_pad_h),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        Text(
+                            text = "$cropPadH%",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Slider(
+                        value = cropPadH.toFloat(),
+                        onValueChange = { v ->
+                            scope.launch { prefs.setComicCropPadH(v.toInt()) }
+                        },
+                        valueRange = 0f..100f
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AppIcon(
+                                AppIconKind.Crop,
+                                tint = LocalContentColor.current,
+                                size = 16.dp
+                            )
+                            Text(
+                                text = stringResource(R.string.comic_crop_pad_v),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        Text(
+                            text = "$cropPadV%",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Slider(
+                        value = cropPadV.toFloat(),
+                        onValueChange = { v ->
+                            scope.launch { prefs.setComicCropPadV(v.toInt()) }
+                        },
+                        valueRange = 0f..100f
+                    )
+                }
+                // Padding (ComicScreen's img_btn8 dialog): a
+                // switch plus a ratio SeekBar, 0..40, displayed
+                // as "- X%" because the image SHRINKS by that
+                // much and the freed space becomes the margin.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AppIcon(
+                            AppIconKind.Padding,
+                            tint = LocalContentColor.current,
+                            size = 16.dp
+                        )
+                        Text(
+                            text = stringResource(R.string.comic_page_margin),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Switch(
+                        checked = paddingEnabled,
+                        onCheckedChange = { checked ->
+                            scope.launch { prefs.setComicPaddingEnabled(checked) }
+                        }
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AppIcon(
+                                AppIconKind.Padding,
+                                tint = LocalContentColor.current,
+                                size = 16.dp
+                            )
+                            Text(
+                                text = stringResource(R.string.comic_page_margin),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        Text(
+                            text = if (pageMarginPct == 0) {
+                                "0%"
+                            } else {
+                                "− $pageMarginPct%"
+                            },
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Slider(
+                        value = pageMarginPct.toFloat(),
+                        onValueChange = { v ->
+                            scope.launch { prefs.setComicPageMargin(v.toInt()) }
+                        },
+                        valueRange = 0f..40f,
+                        steps = 39,
+                        enabled = paddingEnabled
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = { showViewSettings = false }) {
+                        Text(stringResource(R.string.close))
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -1078,25 +1590,51 @@ private fun NativePageItem(
     renderWidthPx: Int,
     paged: Boolean,
     unifiedWidthPx: Int = 0,
-    zoomFactor: Float = 1f
+    zoomFactor: Float = 1f,
+    cropMargin: Boolean = false,
+    cropPadH: Int = 0,
+    cropPadV: Int = 0,
+    paddingRatio: Float = 0f,
+    pageBg: Color = Color(0xFF1E1E1E)
 ) {
-    var bitmap by remember(page, renderWidthPx) { mutableStateOf<Bitmap?>(null) }
-    var failed by remember(page, renderWidthPx) { mutableStateOf(false) }
+    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableStateOf<Bitmap?>(null) }
+    var failed by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableStateOf(false) }
     // The render error itself, shown under the failure text: the
     // old code threw it away (getOrNull), so a phone-only tester
     // could only ever report "it failed" and the cause stayed
     // invisible. The message names the entry and the reason
     // (unreadable image, missing entry, unsupported compression),
     // which is what a screenshot of this screen needs to carry.
-    var failMessage by remember(page, renderWidthPx) { mutableStateOf<String?>(null) }
-    var retry by remember(page, renderWidthPx) { mutableIntStateOf(0) }
+    var failMessage by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableStateOf<String?>(null) }
+    var retry by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableIntStateOf(0) }
 
-    LaunchedEffect(page, renderWidthPx, retry) {
+    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV) {
         bitmap = null
         failed = false
         failMessage = null
         val rendered = withContext(Dispatchers.IO) {
-            runCatching { source.renderPage(page, renderWidthPx) }
+            runCatching {
+                val raw = source.renderPage(page, renderWidthPx)
+                if (cropMargin) {
+                    val rect = detectContentRect(raw, cropPadH, cropPadV)
+                    if (rect != null) {
+                        // createBitmap copies: the uncropped
+                        // original must go now, or every cropped
+                        // page leaks a full-size bitmap beside
+                        // its crop.
+                        val cropped = Bitmap.createBitmap(
+                            raw, rect.left, rect.top,
+                            rect.width(), rect.height()
+                        )
+                        raw.recycle()
+                        cropped
+                    } else {
+                        raw
+                    }
+                } else {
+                    raw
+                }
+            }
         }
         rendered.onSuccess { bitmap = it }
         rendered.onFailure {
@@ -1109,7 +1647,7 @@ private fun NativePageItem(
     // Same trap as the source close above: `bitmap` is state, so
     // reading it in onDispose could recycle a NEWER bitmap that a
     // re-render already assigned. Capture it in a local val.
-    DisposableEffect(page, renderWidthPx, retry) {
+    DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV) {
         val toRecycle = bitmap
         onDispose { toRecycle?.recycle() }
     }
@@ -1119,18 +1657,30 @@ private fun NativePageItem(
         bitmap != null -> {
             val bmp = bitmap!!
             val ratio = bmp.width.toFloat() / bmp.height.toFloat()
+            // Padding ratio (ComicScreen's set_img_padding_ratio):
+            // the displayed page shrinks — horizontally by
+            // ratio * 1.25, the 1.25 compensating a portrait
+            // screen so the inset looks even — and the freed
+            // space becomes the margin. Aspect is preserved:
+            // the width drives, the height follows the ratio.
+            // 0 means off, exactly the old behaviour.
+            val shrink = if (paddingRatio > 0f) {
+                (1f - 1.25f * paddingRatio).coerceAtLeast(0.5f)
+            } else {
+                1f
+            }
             if (paged) {
                 Column(
                     modifier = Modifier.fillMaxSize()
                         .verticalScroll(rememberScrollState())
-                        .background(Color(0xFF1E1E1E)),
+                        .background(pageBg),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Image(
                         bitmap = bmp.asImageBitmap(),
                         contentDescription = null,
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .fillMaxWidth(shrink)
                             .aspectRatio(ratio)
                             .background(Color.White)
                     )
@@ -1152,7 +1702,7 @@ private fun NativePageItem(
                 // snaps to the unified width once, without
                 // moving the reading position.
                 val pageWidthDp = with(density) {
-                    (bmp.width * zoomFactor).toInt().toDp()
+                    (bmp.width * zoomFactor * shrink).toInt().toDp()
                 }
                 val slotWidthDp = if (unifiedWidthPx > 0) {
                     with(density) {

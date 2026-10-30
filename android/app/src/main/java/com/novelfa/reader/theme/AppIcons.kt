@@ -62,6 +62,33 @@ enum class AppIconKind(val data: String, val duo: Boolean = false) {
     Trash("M2.5,4.5 H13.5 M6,4.5 V2.5 H10 V4.5 M4,4.5 L4.8,14 H11.2 L12,4.5 M6.5,7 V11.5 M9.5,7 V11.5", duo = true),
 
     // No WPF counterpart — drawn in the same 16-unit / 1.6-round style.
+    // ComicScreen viewer set, metaphors learned from its icons
+    // (crop corners, outward padding arrows, bookmark, camera,
+    // expand corners, circular arrow) and redrawn here — never
+    // its path data. Crop / Padding / Minus are wired into the
+    // native comic viewer; Bookmark, BookmarkAdd, Capture,
+    // PinchZoom and Rotate complete the set for features the
+    // native viewer does not have yet (page bookmarks, page
+    // capture, rotation lock, pinch-zoom toggle) and are
+    // intentionally unwired until those features exist.
+    Crop("M6,2 H2 V6 M10,14 H14 V10"),
+    Padding("M7,8 H2 M4.5,5.5 L2,8 L4.5,10.5 M9,8 H14 M11.5,5.5 L14,8 L11.5,10.5"),
+    Minus("M2.5,8 H13.5"),
+    Bookmark("M4,2 H12 V14 L8,11 L4,14 Z", duo = true),
+    BookmarkAdd(
+        "M3.5,2 H11.5 V14 L7.5,11 L3.5,14 Z M9.5,4.5 V7.5 M8,6 H11"
+    , duo = true),
+    Capture(
+        "M2,6 H4 L5.5,4 H10.5 L12,6 H14 V13 H2 Z " +
+            "M8,7.5 A2,2 0 1 1 7.99,7.5 Z"
+    , duo = true),
+    PinchZoom(
+        "M6,6 L2.5,2.5 M2.5,2.5 H5.5 M2.5,2.5 V5.5 " +
+            "M10,10 L13.5,13.5 M13.5,13.5 H10.5 M13.5,13.5 V10.5 " +
+            "M10,6 L13.5,2.5 M13.5,2.5 H10.5 M13.5,2.5 V5.5 " +
+            "M6,10 L2.5,13.5 M2.5,13.5 H5.5 M2.5,13.5 V10.5"
+    ),
+    Rotate("M13.2,8 A5.2,5.2 0 1 1 8,2.8 M8,2.8 L10.2,4.6 M8,2.8 L10.2,1.2"),
     Gear(
         "M6.34,3.98 L6.98,2.19 L9.02,2.19 L9.66,3.98 L11.38,3.17 L12.83,4.62 " +
             "L12.02,6.34 L13.81,6.98 L13.81,9.02 L12.02,9.66 L12.83,11.38 L11.38,12.83 " +

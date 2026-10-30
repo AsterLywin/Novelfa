@@ -340,4 +340,13 @@
     <string name="image_saved">عکس در گالری ذخیره شد: %1$s</string>
     <string name="image_save_failed">این عکس ذخیره نشد.</string>
     <string name="archive_choose_book">این آرشیو چند کتاب دارد. یکی را برای باز کردن انتخاب کنید:</string>
+    <string name="comic_view_settings">تنظیمات نمایش</string>
+    <string name="comic_background">پس‌زمینه</string>
+    <string name="comic_bg_dark">خاکستری تیره</string>
+    <string name="comic_bg_black">مشکی</string>
+    <string name="comic_bg_white">سفید</string>
+    <string name="comic_cut_margin">برش حاشیه</string>
+    <string name="comic_page_margin">فاصله از حاشیه</string>
+    <string name="comic_crop_pad_h">حاشیه‌ی نگه‌داشته‌شده، افقی</string>
+    <string name="comic_crop_pad_v">حاشیه‌ی نگه‌داشته‌شده، عمودی</string>
 </resources>

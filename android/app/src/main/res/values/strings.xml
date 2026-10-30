@@ -340,4 +340,13 @@
     <string name="image_saved">Image saved to your gallery: %1$s</string>
     <string name="image_save_failed">Couldn\'t save this image.</string>
     <string name="archive_choose_book">This archive holds several books. Choose one to open:</string>
+    <string name="comic_view_settings">View settings</string>
+    <string name="comic_background">Background</string>
+    <string name="comic_bg_dark">Dark grey</string>
+    <string name="comic_bg_black">Black</string>
+    <string name="comic_bg_white">White</string>
+    <string name="comic_cut_margin">Cut margin</string>
+    <string name="comic_page_margin">Page margin</string>
+    <string name="comic_crop_pad_h">Kept margin, horizontal</string>
+    <string name="comic_crop_pad_v">Kept margin, vertical</string>
 </resources>
