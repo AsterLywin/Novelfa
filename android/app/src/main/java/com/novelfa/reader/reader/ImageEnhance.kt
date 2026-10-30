@@ -19,9 +19,17 @@ import kotlin.math.floor
  *   phone-cheap cousin (4 taps per axis instead of 8) and still
  *   visibly beats the GPU's bilinear stretch on line art, which
  *   is what a small page upscaled to screen size otherwise gets.
- *   It runs only when a page is SMALLER than its display size —
- *   a big page is never resampled in software, it is drawn
- *   from its own pixels.
+ *   It runs only when a page is SMALLER than its display size.
+ * - [resizeBox]: area-average downsampling to an exact display
+ *   size. This is the other half of "resize to display size":
+ *   a big page shown fit-width used to be downscaled by the GPU
+ *   with plain bilinear filtering and no mipmaps, which drops
+ *   thin lines and shimmers on line art — and that display
+ *   downscale is format-blind, so it was the remaining softness
+ *   for PNG/WebP/GIF, whose decodes are already pixel-exact
+ *   (the quality decode flag only changes JPEG decoding).
+ *   Averaging each output pixel over its full source footprint
+ *   preserves thin lines where bilinear sampling loses them.
  * - [sharpenUnsharp]: unsharp masking in the same form as
  *   ComicScreen's sharpen step — a blurred copy is subtracted
  *   from an amplified original: out = src * (1.4 + f) -
@@ -114,6 +122,119 @@ fun upscaleBicubic(src: Bitmap, targetWidth: Int, targetHeight: Int): Bitmap {
                     b.toInt().coerceIn(0, 255)
         }
     }
+    out.setPixels(outPixels, 0, targetWidth, 0, 0, targetWidth, targetHeight)
+    return out
+}
+
+/**
+ * Area-average resize to an exact size, separable: a horizontal
+ * pass to (targetWidth x srcHeight), then a vertical pass to
+ * (targetWidth x targetHeight). Each output pixel averages the
+ * source pixels its footprint covers, with fractional weights on
+ * the footprint edges — so a 1600px page downscaled to 1080px
+ * keeps its thin lines instead of sampling every ~1.5th pixel.
+ * Returns the input itself when the size already matches.
+ */
+fun resizeBox(src: Bitmap, targetWidth: Int, targetHeight: Int): Bitmap {
+    if (targetWidth <= 0 || targetHeight <= 0 ||
+        (targetWidth == src.width && targetHeight == src.height)
+    ) {
+        return src
+    }
+    val sw = src.width
+    val sh = src.height
+    val srcPixels = IntArray(sw * sh)
+    src.getPixels(srcPixels, 0, sw, 0, 0, sw, sh)
+
+    // One axis of area-average resampling: out[o] averages
+    // src pixels over [o * scale, (o + 1) * scale).
+    fun resampleAxis(
+        input: IntArray, inSize: Int, outSize: Int,
+        rowCount: Int, rowStride: Int
+    ): IntArray {
+        val scale = inSize.toFloat() / outSize
+        val out = IntArray(outSize * rowCount)
+        for (row in 0 until rowCount) {
+            for (o in 0 until outSize) {
+                val start = o * scale
+                val end = (o + 1) * scale
+                val first = start.toInt()
+                val last = (end - 0.0001f).toInt()
+                var a = 0f
+                var r = 0f
+                var g = 0f
+                var b = 0f
+                var wSum = 0f
+                for (p in first..last) {
+                    val weight =
+                        minOf((p + 1).toFloat(), end) - maxOf(p.toFloat(), start)
+                    if (weight <= 0f) continue
+                    val px = input[row * rowStride + p.coerceIn(0, inSize - 1)]
+                    a += ((px ushr 24) and 0xFF) * weight
+                    r += ((px ushr 16) and 0xFF) * weight
+                    g += ((px ushr 8) and 0xFF) * weight
+                    b += (px and 0xFF) * weight
+                    wSum += weight
+                }
+                if (wSum > 0f) {
+                    a /= wSum
+                    r /= wSum
+                    g /= wSum
+                    b /= wSum
+                }
+                out[row * outSize + o] =
+                    (a.toInt().coerceIn(0, 255) shl 24) or
+                        (r.toInt().coerceIn(0, 255) shl 16) or
+                        (g.toInt().coerceIn(0, 255) shl 8) or
+                        b.toInt().coerceIn(0, 255)
+            }
+        }
+        return out
+    }
+
+    // Horizontal pass: each source row becomes a row of
+    // targetWidth. Vertical pass: each column of the
+    // intermediate (targetWidth x sh) is averaged the same way,
+    // walking the column directly.
+    val mid = resampleAxis(srcPixels, sw, targetWidth, sh, sw)
+    val outPixels = IntArray(targetWidth * targetHeight)
+    val yScale = sh.toFloat() / targetHeight
+    for (x in 0 until targetWidth) {
+        for (o in 0 until targetHeight) {
+            val start = o * yScale
+            val end = (o + 1) * yScale
+            val first = start.toInt()
+            val last = (end - 0.0001f).toInt()
+            var a = 0f
+            var r = 0f
+            var g = 0f
+            var b = 0f
+            var wSum = 0f
+            for (p in first..last) {
+                val weight =
+                    minOf((p + 1).toFloat(), end) - maxOf(p.toFloat(), start)
+                if (weight <= 0f) continue
+                val px = mid[p.coerceIn(0, sh - 1) * targetWidth + x]
+                a += ((px ushr 24) and 0xFF) * weight
+                r += ((px ushr 16) and 0xFF) * weight
+                g += ((px ushr 8) and 0xFF) * weight
+                b += (px and 0xFF) * weight
+                wSum += weight
+            }
+            if (wSum > 0f) {
+                a /= wSum
+                r /= wSum
+                g /= wSum
+                b /= wSum
+            }
+            outPixels[o * targetWidth + x] =
+                (a.toInt().coerceIn(0, 255) shl 24) or
+                    (r.toInt().coerceIn(0, 255) shl 16) or
+                    (g.toInt().coerceIn(0, 255) shl 8) or
+                    b.toInt().coerceIn(0, 255)
+        }
+    }
+    val out = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
     out.setPixels(outPixels, 0, targetWidth, 0, 0, targetWidth, targetHeight)
     return out
 }

@@ -1801,43 +1801,56 @@ private fun NativePageItem(
                         current = cropped
                     }
                 }
-                // Upscale: only when the page is SMALLER than its
-                // display size in a fit mode that sizes the page
-                // to the screen (width or height). A bigger page
-                // is never resampled in software — it is drawn
-                // from its own pixels, and the GPU handles the
-                // downscale. Padding's shrink is ignored here on
-                // purpose: upscaling to the full screen size and
-                // letting the GPU shave the padding off is still
-                // far sharper than a bilinear stretch from the
-                // small original, and it keeps the padding slider
+                // Resize to display size, in a fit mode that
+                // sizes the page to the screen (width or height).
+                // Smaller than display: bicubic upscale (a small
+                // page stretched by the GPU goes soft). Larger
+                // than display: area-average downscale — the GPU
+                // downscales with plain bilinear filtering and no
+                // mipmaps, which drops thin lines on line art,
+                // and that display downscale is format-blind, so
+                // it was the remaining softness for PNG/WebP/GIF
+                // (their decodes are already pixel-exact; the
+                // quality decode flag only changes JPEG).
+                // Continuous mode and original/stretch never
+                // resample: continuous shows native pixels,
+                // original is native by definition, stretch is
+                // a GPU fill. Padding's shrink is ignored here
+                // on purpose: resizing to the full screen size
+                // and letting the GPU shave the padding off is
+                // still far sharper than resampling from the
+                // wrong size, and it keeps the padding slider
                 // from re-rendering on every drag.
                 if (paged) {
                     if (fitMode == "width" && screenWidthPx > 0 &&
-                        current.width < screenWidthPx
+                        current.width != screenWidthPx
                     ) {
                         val targetH =
                             (screenWidthPx * current.height / current.width)
                                 .coerceAtLeast(1)
-                        val up = upscaleBicubic(
-                            current, screenWidthPx, targetH
-                        )
-                        if (up !== current) {
+                        val resized = if (current.width < screenWidthPx) {
+                            upscaleBicubic(current, screenWidthPx, targetH)
+                        } else {
+                            resizeBox(current, screenWidthPx, targetH)
+                        }
+                        if (resized !== current) {
                             current.recycle()
-                            current = up
+                            current = resized
                         }
                     } else if (fitMode == "height" && screenHeightPx > 0 &&
-                        current.height < screenHeightPx
+                        current.height != screenHeightPx
                     ) {
                         val targetW =
                             (screenHeightPx * current.width / current.height)
                                 .coerceAtLeast(1)
-                        val up = upscaleBicubic(
-                            current, targetW, screenHeightPx
-                        )
-                        if (up !== current) {
+                        val resized = if (current.height < screenHeightPx) {
+                            upscaleBicubic(current, targetW, screenHeightPx)
+                        } else {
+                            resizeBox(current, targetW, screenHeightPx)
+                        }
+                        if (resized !== current) {
                             current.recycle()
-                            current = up
+                            current = resized
                         }
                     }
                 }
