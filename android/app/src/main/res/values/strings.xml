@@ -332,4 +332,5 @@
     <string name="fast_import_desc">Read each book once during import and build missing covers in the background. Turn off to use the previous import behaviour.</string>
     <string name="image_saved">Image saved to your gallery: %1$s</string>
     <string name="image_save_failed">Couldn\'t save this image.</string>
+    <string name="archive_choose_book">This archive holds several books. Choose one to open:</string>
 </resources>

@@ -8,12 +8,15 @@ import android.provider.OpenableColumns
 import android.util.Log
 import com.novelfa.reader.R
 import com.novelfa.reader.model.ParsedBook
-import com.novelfa.reader.parser.BookConverter
 import com.novelfa.reader.parser.BookFormat
-import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.parser.CacheStamp
-import com.novelfa.reader.parser.EpubParser
 import com.novelfa.reader.parser.PdfParser
+import com.novelfa.reader.parser.engine.CbzEngine
+import com.novelfa.reader.parser.engine.DocxEngine
+import com.novelfa.reader.parser.engine.EpubEngine
+import com.novelfa.reader.parser.engine.TxtEngine
+import com.novelfa.reader.parser.engine.ZipEngine
+import com.novelfa.reader.parser.engine.ZipKind
 import com.novelfa.reader.parser.PdfPasswordRequiredException
 import com.novelfa.reader.parser.PdfPasswordWrongException
 import com.novelfa.reader.parser.PdfUnsupportedEncryptionException
@@ -23,7 +26,6 @@ import java.security.MessageDigest
 import java.time.Instant
 import java.util.UUID
 import java.util.zip.ZipException
-import java.util.zip.ZipFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -148,9 +150,13 @@ class Importer(
 
     /**
      * Imports one book in any supported format (EPUB, TXT, PDF, Markdown,
-     * DOCX). EPUB keeps its zip path; the rest are converted to chapter
-     * files by [BookConverter] (into a throwaway dir here — the reader
-     * re-converts on open into its own cache). The ORIGINAL file is what
+     * DOCX, CBZ, ZIP). Every format is imported through its own
+     * rendering engine (see parser/engine): EPUB, DOCX and book-carrying
+     * ZIPs contribute metadata only at import (title, a chapter count
+     * carried by the container, a single-entry cover) and are fully
+     * parsed at first open; TXT/Markdown are parsed here because their
+     * single-pass text parse IS the reader's open cache; PDF and
+     * image archives were already lazy. The ORIGINAL file is what
      * gets stored, with its real extension, so backups and re-opens keep
      * working from the source format, not from a lossy conversion.
      */
@@ -186,13 +192,15 @@ class Importer(
         val id = UUID.randomUUID().toString()
         val booksDir = File(context.filesDir, "books").apply { mkdirs() }
         val tmpDest = File(booksDir, "$id.tmp")
-        // Reader-open cache, filled HERE at import time (not thrown
-        // away): the first open reuses these chapters/extraction via
-        // the stamp instead of re-parsing the whole book — the DOCX
-        // "render takes forever on first open" was this second parse.
-        // A failed import deletes it again (see the catch blocks);
-        // a successful import leaves it for openParsed, and the
-        // startup prune removes it if the book row ever disappears.
+        // Reader-open cache. Only TXT/Markdown are filled HERE at
+        // import time (their parse output IS this cache, so the first
+        // open reuses it via the stamp). For EPUB, DOCX and
+        // book-carrying ZIPs this directory is only scratch for a
+        // single-entry cover at import; the first open fills it by
+        // parsing through the format's engine, and the stamp is
+        // written by openParsed, not here. A failed import deletes
+        // it again (see the catch blocks); the startup prune removes
+        // it if the book row ever disappears.
         val openCacheDir = File(context.filesDir, "epub_open/$id")
         // Assigned inside the try (extension known only after sniffing);
         // the failure paths below delete whichever file got created.
@@ -282,19 +290,37 @@ class Importer(
             val chapterFallback: (Int) -> String = { n ->
                 context.getString(R.string.chapter_fallback, n)
             }
+            // Chapter count carried by a metadata-only engine
+            // (EPUB spine count, DOCX heading estimate). Null means
+            // the count is unknown until first open, as for lazy PDFs.
+            var metadataChapterCount: Int? = null
+            // True when a ZIP carries a book (not images): it is
+            // neither a native image book nor a converted-cache book
+            // at import — its first open extracts the chosen book
+            // inside and parses it through that book's engine.
+            var zipIsBook = false
             val parsed = if (format == BookFormat.EPUB) {
-                // "parse" is the stage the dialog used to skip: the
-                // unzip + EPUB parse is the long step for big EPUBs,
-                // and the dialog sat on the stale "copy" stage all
-                // through it. The per-entry check inside unzip and
-                // the per-spine check inside the parser are what
-                // make Cancel land here at all (both used to be
-                // plain blocking loops with no check).
+                // Engine metadata only: title + spine count + one
+                // cover entry, straight out of the ZIP. The old path
+                // unzipped the whole book and parsed every spine
+                // item's title here; that was the long step for big
+                // EPUBs, and the dialog sat on "copy" all through
+                // it. The full parse now happens at first open,
+                // where the reader already unzipped on a cache miss.
                 onStage?.invoke("parse")
-                unzip(destFile, openCacheDir) { ioCtx.ensureActive() }
-                EpubParser.parse(
-                    openCacheDir, displayName, chapterFallback
-                ) { ioCtx.ensureActive() }
+                val meta = try {
+                    EpubEngine.metadata(destFile, displayName, openCacheDir) {
+                        ioCtx.ensureActive()
+                    }
+                } catch (e: Exception) {
+                    throw ImportException(
+                        e.message ?: "invalid EPUB: $displayName",
+                        messageFa = context.getString(R.string.import_error_bad_structure),
+                        cause = e
+                    )
+                }
+                metadataChapterCount = meta.chapterCount
+                ParsedBook(title = meta.title, chapters = emptyList(), coverFile = meta.coverFile)
             } else if (format == BookFormat.PDF) {
                 // LAZY import (the ReadEra/ComicScreen rule): import
                 // time must not grow with the book. The old path ran
@@ -351,19 +377,22 @@ class Importer(
                     chapters = emptyList(),
                     coverFile = null
                 )
-            } else if (format == BookFormat.CBZ || format == BookFormat.ZIP) {
+            } else if (format == BookFormat.CBZ) {
                 // Native image book (manhwa/manga/comic): import only
-                // lists the archive — no extraction, no conversion,
-                // no per-page work. The viewer decodes pages on
-                // demand from the stored archive. A corrupt archive
-                // fails here via the generic catch (localized import
+                // lists the archive and extracts the first page as
+                // the cover — no full extraction, no conversion, no
+                // per-page work. The viewer decodes pages on demand
+                // from the stored archive. A corrupt archive fails
+                // here via the generic catch (localized import
                 // error); an archive with no images fails cleanly
                 // with the no-readable-sections message, exactly
                 // like a text-less book used to.
                 ioCtx.ensureActive()
                 onStage?.invoke("validate")
-                val count = try {
-                    CbzBook.imageEntryNames(destFile).size
+                val meta = try {
+                    CbzEngine.metadata(destFile, displayName, openCacheDir) {
+                        ioCtx.ensureActive()
+                    }
                 } catch (e: Exception) {
                     throw ImportException(
                         e.message ?: "invalid comic archive: $displayName",
@@ -371,29 +400,67 @@ class Importer(
                         cause = e
                     )
                 }
-                if (count <= 0) {
+                imageBookPages = meta.chapterCount
+                ParsedBook(title = meta.title, chapters = emptyList(), coverFile = meta.coverFile)
+            } else if (format == BookFormat.ZIP) {
+                // Archive engine: a ZIP is classified before any
+                // row is written. Image-only ZIPs are comics (same
+                // as CBZ above, first page as cover). ZIPs carrying
+                // a book are that book: the row is created with an
+                // unknown chapter count and the first open extracts
+                // the book inside through its own engine. ZIPs with
+                // several books keep the archive title; the reader
+                // asks which book to open instead of guessing.
+                ioCtx.ensureActive()
+                onStage?.invoke("validate")
+                val meta = try {
+                    ZipEngine.metadata(destFile, displayName, openCacheDir) {
+                        ioCtx.ensureActive()
+                    }
+                } catch (e: Exception) {
                     throw ImportException(
-                        "Comic archive has no readable images",
-                        messageFa = context.getString(R.string.import_error_no_readable_sections)
+                        e.message ?: "invalid archive: $displayName",
+                        messageFa = context.getString(R.string.import_error_no_readable_sections),
+                        cause = e
                     )
                 }
-                imageBookPages = count
-                ParsedBook(
-                    title = File(displayName).nameWithoutExtension
-                        .takeIf { it.isNotBlank() } ?: displayName,
-                    chapters = emptyList(),
-                    coverFile = null
-                )
+                when (ZipEngine.classify(destFile)) {
+                    is ZipKind.ImageOnly -> imageBookPages = meta.chapterCount
+                    else -> zipIsBook = true
+                }
+                ParsedBook(title = meta.title, chapters = emptyList(), coverFile = meta.coverFile)
+            } else if (format == BookFormat.DOCX) {
+                // Engine metadata only: title from core.xml and a
+                // section estimate from a single scan of
+                // document.xml for Heading1/Heading2 styles. The old
+                // path unzipped every media file and DOM-parsed the
+                // whole body here; the full parse now happens at
+                // first open and corrects the row then.
+                onStage?.invoke("parse")
+                val meta = try {
+                    DocxEngine.metadata(destFile, displayName, openCacheDir) {
+                        ioCtx.ensureActive()
+                    }
+                } catch (e: Exception) {
+                    throw ImportException(
+                        e.message ?: "parse failed",
+                        messageFa = context.getString(parseErrorMessageRes(e)),
+                        cause = e
+                    )
+                }
+                metadataChapterCount = meta.chapterCount
+                ParsedBook(title = meta.title, chapters = emptyList(), coverFile = null)
             } else {
-                // Converted formats: parse errors get a format-aware
-                // user-facing message instead of the EPUB-only texts.
+                // TXT/Markdown through their engine: a single-pass
+                // text parse whose output IS the reader's open
+                // cache, so parsing here is not double work.
                 // Cancellation must NOT be wrapped into an import
                 // error here: it used to be, so pressing Cancel
-                // mid-DOCX-parse showed a failure snackbar instead
-                // of just stopping the import.
+                // mid-parse showed a failure snackbar instead of
+                // just stopping the import.
                 onStage?.invoke("parse")
                 try {
-                    BookConverter.parse(destFile, openCacheDir, chapterFallback, displayName)
+                    TxtEngine.open(destFile, openCacheDir, chapterFallback, displayName)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -404,13 +471,16 @@ class Importer(
                     )
                 }
             }
-            // Lazy PDFs and native image books deliberately have no
-            // chapters yet (PDFs are built on first open; image
-            // books never have chapters, their pages ARE the book);
-            // every other format must parse.
+            // Lazy PDFs, native image books and metadata-only books
+            // deliberately have no chapters yet (PDFs and EPUB/DOCX/
+            // book-ZIPs are built on first open; image books never
+            // have chapters, their pages ARE the book). Only the
+            // TXT/Markdown path must have parsed chapters here.
             val isNativeBook = format == BookFormat.PDF ||
                 format == BookFormat.CBZ || format == BookFormat.ZIP
-            if (!isNativeBook && parsed.chapters.isEmpty()) {
+            val isMetadataOnly = format == BookFormat.EPUB ||
+                format == BookFormat.DOCX || zipIsBook
+            if (!isNativeBook && !isMetadataOnly && parsed.chapters.isEmpty()) {
                 throw ImportException(
                     "Book has no readable chapters",
                     messageFa = context.getString(R.string.import_error_no_readable_sections)
@@ -463,7 +533,8 @@ class Importer(
                     title = bookTitle,
                     filePath = destFile.absolutePath,
                     coverPath = coverPath,
-                    totalChapters = imageBookPages ?: recordChapters ?: parsed.chapters.size,
+                    totalChapters = imageBookPages ?: recordChapters
+                        ?: metadataChapterCount ?: parsed.chapters.size,
                     dateAdded = Instant.now().toString(),
                     originalFileName = displayName
                 )
@@ -495,14 +566,17 @@ class Importer(
                     }
                 }
             }
-            // The cache above is complete and the stored file is final
-            // (decrypted PDFs were already rewritten): stamp it so the
-            // first open trusts it instead of re-parsing. Lazy PDFs
-            // have no cache to stamp — the missing stamp is exactly
-            // what makes the first open convert them. Native image
-            // books likewise have no converted cache to stamp; the
-            // viewer opens the stored archive directly.
-            if (!isNativeBook) CacheStamp.writeStamp(openCacheDir, destFile)
+            // Only TXT/Markdown have a complete converted cache at
+            // import: stamp it so the first open trusts it instead of
+            // re-parsing. Every other format is lazy at import — the
+            // missing stamp is exactly what makes the first open
+            // parse it through its engine. (Previously EPUB and DOCX
+            // were stamped here because they were fully parsed at
+            // import; stamping their metadata-only cache would make
+            // the first open trust an empty cache and fail.)
+            if (format == BookFormat.TXT || format == BookFormat.MARKDOWN) {
+                CacheStamp.writeStamp(openCacheDir, destFile)
+            }
             id
         } catch (e: CancellationException) {
             // Never swallow coroutine cancellation: clean up and rethrow so the
@@ -759,100 +833,7 @@ class Importer(
         }
     }.getOrNull()
 
-    private fun unzip(
-        zip: File,
-        outDir: File,
-        checkCancelled: (() -> Unit)? = null
-    ) {
-        // Zip-bomb guard: read the entry count from the End-of-Central-Directory
-        // record BEFORE ZipFile() materializes the whole central directory.
-        if (centralDirectoryEntryCount(zip) > MAX_ZIP_ENTRIES) {
-            throw IOException("Zip entry count exceeds limit")
-        }
-        ZipFile(zip).use { zf ->
-            val entries = zf.entries()
-            var entryCount = 0
-            var totalBytes = 0L
-            while (entries.hasMoreElements()) {
-                checkCancelled?.invoke()
-                val entry = entries.nextElement()
-                // Zip-bomb guard: cap entry count and total uncompressed size.
-                if (++entryCount > MAX_ZIP_ENTRIES) {
-                    throw IOException("Zip entry count exceeds limit: ${entry.name}")
-                }
-                val out = File(outDir, entry.name)
-                val canonicalOut = out.canonicalPath
-                val canonicalDir = outDir.canonicalPath
-                // Trailing separator: without it, a sibling dir sharing the
-                // string prefix (e.g. "<uuid>-evil") would pass the check.
-                if (!canonicalOut.startsWith(canonicalDir + File.separatorChar)) {
-                    throw IOException("Zip entry outside target dir: ${entry.name}")
-                }
-                if (entry.isDirectory) {
-                    out.mkdirs()
-                } else {
-                    out.parentFile?.mkdirs()
-                    zf.getInputStream(entry).use { input ->
-                        out.outputStream().use { output ->
-                            totalBytes += input.copyTo(output)
-                            if (totalBytes > MAX_ZIP_BYTES) {
-                                throw IOException("Zip uncompressed size exceeds limit")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Reads the total entry count from the ZIP End-of-Central-Directory
-     * record. The EOCD is NOT necessarily in the last 22 bytes: a zip
-     * comment (up to 64 KiB) sits after it, so the tail is scanned
-     * backwards for the signature. Returns 0 when the EOCD can't be
-     * found or the count is 0xFFFF (zip64) — 0 defers to the in-loop
-     * guard, which is the correct check there. The old code returned
-     * Int.MAX_VALUE in exactly these cases, so the pre-check above
-     * rejected EVERY commented or zip64 EPUB as "too many entries".
-     */
-    private fun centralDirectoryEntryCount(zip: File): Int {
-        if (zip.length() < 22) return 0
-        return try {
-            val tailSize = minOf(zip.length(), 22L + 65535L).toInt()
-            val buf = ByteArray(tailSize)
-            java.io.RandomAccessFile(zip, "r").use { raf ->
-                raf.seek(zip.length() - tailSize)
-                raf.readFully(buf)
-            }
-            // Scan backwards for the EOCD signature 0x06054b50. A
-            // signature found inside the comment itself must not win:
-            // the real EOCD is the one whose comment-length field ends
-            // exactly at the end of the file.
-            var i = tailSize - 22
-            while (i >= 0) {
-                if (buf[i] == 0x50.toByte() && buf[i + 1] == 0x4b.toByte() &&
-                    buf[i + 2] == 0x05.toByte() && buf[i + 3] == 0x06.toByte()
-                ) {
-                    val commentLen = ((buf[i + 21].toInt() and 0xFF) shl 8) or
-                        (buf[i + 20].toInt() and 0xFF)
-                    if (i + 22 + commentLen == tailSize) {
-                        val count = ((buf[i + 11].toInt() and 0xFF) shl 8) or
-                            (buf[i + 10].toInt() and 0xFF)
-                        // zip64: the real count lives in the zip64 EOCD.
-                        return if (count == 0xFFFF) 0 else count
-                    }
-                }
-                i--
-            }
-            0
-        } catch (e: Exception) {
-            0
-        }
-    }
 }
 
-/** Zip-bomb guardrails for EPUB/DOCX extraction (generous: real books are far smaller). */
-private const val MAX_ZIP_ENTRIES = 10_000
-private const val MAX_ZIP_BYTES = 500L * 1024 * 1024
 /** Upper bound for the initial SAF copy, before unzip/parse get a say. */
 private const val MAX_BOOK_BYTES = 500L * 1024 * 1024

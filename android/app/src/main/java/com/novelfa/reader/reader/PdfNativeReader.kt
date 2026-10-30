@@ -69,6 +69,8 @@ import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.parser.CbzBook.CbzChapter
+import com.novelfa.reader.parser.engine.ZipEngine
+import com.novelfa.reader.parser.engine.ZipKind
 import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
@@ -351,15 +353,17 @@ fun PdfReaderRoute(
         }
         // PDF routing REVERTED 2026-10-29 at the user's instruction:
         // PDF books go back to ReaderScreen (the converted
-        // text/image path via BookConverter), where the user's chosen
-        // font applies to the text — the native PdfRenderer viewer
-        // renders fixed PDF bitmaps, so it could never apply the
-        // user's font, and the user reports its rendering as broken.
-        // PdfNativeRenderer below is kept (currently unused) in case
-        // native PDF is ever wanted again; CBZ/ZIP keep the native
-        // viewer, since they never had a converted path.
-        BookFormat.detect(File(entity!!.filePath)) == BookFormat.CBZ ||
-            BookFormat.detect(File(entity!!.filePath)) == BookFormat.ZIP -> {
+        // text/image path via the PDF engine), where the user's
+        // chosen font applies to the text — the native PdfRenderer
+        // viewer renders fixed PDF bitmaps, so it could never apply
+        // the user's font, and the user reports its rendering as
+        // broken. PdfNativeRenderer below is kept (currently unused)
+        // in case native PDF is ever wanted again; CBZ and
+        // image-only ZIPs keep the native viewer, since they never
+        // had a converted path. A ZIP carrying a book is NOT a
+        // comic: it is classified below and routed to ReaderScreen,
+        // where the archive engine opens the book inside it.
+        BookFormat.detect(File(entity!!.filePath)) == BookFormat.CBZ -> {
             val bookFile = File(entity!!.filePath)
             NativeImageBookViewer(
                 book = entity!!,
@@ -370,8 +374,75 @@ fun PdfReaderRoute(
                 errorRes = R.string.cbz_native_error
             )
         }
+        BookFormat.detect(File(entity!!.filePath)) == BookFormat.ZIP -> {
+            ZipReaderRoute(book = entity!!, dao = dao, onClose = onClose, support = support)
+        }
         else -> {
             ReaderScreen(bookId = bookId, dao = dao, onClose = onClose, support = support)
+        }
+    }
+}
+
+/**
+ * Routing for a `.zip` book, decided by the archive engine — not by
+ * the extension. Image-only archives go to the native comic viewer;
+ * archives carrying a book go to the HTML reader, where the engine
+ * opens the book inside (asking first when there are several).
+ * Previously every ZIP went to the comic viewer, so a ZIP
+ * containing an EPUB opened as an empty comic.
+ */
+@Composable
+private fun ZipReaderRoute(
+    book: BookEntity,
+    dao: BookDao,
+    onClose: () -> Unit,
+    support: com.novelfa.reader.settings.SupportTracker? = null
+) {
+    var kind by remember { mutableStateOf<ZipKind?>(null) }
+    var failed by remember { mutableStateOf(false) }
+    LaunchedEffect(book.id, book.filePath) {
+        kind = withContext(Dispatchers.IO) {
+            runCatching { ZipEngine.classify(File(book.filePath)) }.getOrNull()
+        }
+        if (kind == null) failed = true
+    }
+    when {
+        failed -> {
+            Scaffold { padding ->
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(stringResource(R.string.cbz_native_error))
+                        Spacer(Modifier.height(12.dp))
+                        TextButton(onClick = onClose) {
+                            Text(stringResource(R.string.close))
+                        }
+                    }
+                }
+            }
+        }
+        kind == null -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        }
+        kind is ZipKind.ImageOnly -> {
+            NativeImageBookViewer(
+                book = book,
+                dao = dao,
+                onClose = onClose,
+                sourceFactory = { CbzNativeSource(File(book.filePath)) },
+                loadingRes = R.string.cbz_native_loading,
+                errorRes = R.string.cbz_native_error
+            )
+        }
+        else -> {
+            ReaderScreen(bookId = book.id, dao = dao, onClose = onClose, support = support)
         }
     }
 }

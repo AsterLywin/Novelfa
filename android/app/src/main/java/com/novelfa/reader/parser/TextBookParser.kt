@@ -135,8 +135,24 @@ object TextBookParser {
                 .decode(java.nio.ByteBuffer.wrap(bytes)).toString()
         }.getOrNull()
         if (strict != null) return strict
-        return runCatching {
+        // Not valid UTF-8: pick the single-byte encoding by evidence,
+        // not by habit. The old code always fell back to Windows-1256,
+        // which mangles Western-European bytes (the two encodings
+        // disagree in the 0x80-0x9F range). Windows-1256 wins only
+        // when the decoded text actually contains Arabic-script
+        // characters; otherwise Windows-1252 is the honest fallback
+        // for Latin text, mirroring the multi-encoding tables of
+        // mature readers instead of a one-encoding guess.
+        val decoded1256 = runCatching {
             String(bytes, java.nio.charset.Charset.forName("windows-1256"))
+        }.getOrNull()
+        if (decoded1256 != null && decoded1256.any {
+                it in '\u0600'..'\u06FF' || it in '\uFB50'..'\uFDFF' || it in '\uFE80'..'\uFEFF'
+            }) {
+            return decoded1256
+        }
+        return runCatching {
+            String(bytes, java.nio.charset.Charset.forName("windows-1252"))
         }.getOrDefault(String(bytes, Charsets.UTF_8))
     }
 

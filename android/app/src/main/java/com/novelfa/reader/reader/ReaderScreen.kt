@@ -86,12 +86,16 @@ import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.sha256OfFile
-import com.novelfa.reader.parser.BookConverter
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CacheStamp
 import com.novelfa.reader.parser.ConvertedBook
 import com.novelfa.reader.parser.EpubParser
 import com.novelfa.reader.parser.PdfImageBook
+import com.novelfa.reader.parser.engine.ArchiveCandidate
+import com.novelfa.reader.parser.engine.EngineRegistry
+import com.novelfa.reader.parser.engine.EpubEngine
+import com.novelfa.reader.parser.engine.ZipEngine
+import com.novelfa.reader.parser.engine.ZipKind
 import com.novelfa.reader.settings.SupportDialog
 import com.novelfa.reader.settings.SupportTracker
 import androidx.compose.foundation.shape.CircleShape
@@ -114,7 +118,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
-import java.util.zip.ZipFile
 import androidx.compose.material3.rememberDrawerState
 import coil.compose.AsyncImage
 import com.novelfa.reader.theme.CharacterThemes
@@ -183,6 +186,13 @@ fun ReaderScreen(
         }
     }
     var loadError by remember { mutableStateOf(false) }
+    // Multi-book ZIP archives: the candidates the archive engine
+    // found, and the one the user picked. Null candidates = not a
+    // multi-book archive (or not checked yet); a null pick with
+    // non-null candidates = the choice dialog is showing and the
+    // load below is waiting for it, instead of guessing a book.
+    var zipCandidates by remember { mutableStateOf<List<ArchiveCandidate>?>(null) }
+    var zipCandidate by remember { mutableStateOf<ArchiveCandidate?>(null) }
     var pageHtml by remember { mutableStateOf("") }
     var pendingLastPage by remember { mutableStateOf(false) }
     // Pager-recovery guard (see recoverPagerTurn): the chapter index
@@ -322,17 +332,31 @@ fun ReaderScreen(
     }
 
 
-    LaunchedEffect(bookId) {
+    LaunchedEffect(bookId, zipCandidate) {
         try {
             val entity = withContext(Dispatchers.IO) { dao.getById(bookId) }
                 ?: throw IOException("book not found")
+            // Archive choice, before any parse: a ZIP holding several
+            // books must not open the first one silently. The dialog
+            // below sets zipCandidate, which re-runs this effect and
+            // lands here with the choice made.
+            if (BookFormat.detect(File(entity.filePath)) == BookFormat.ZIP) {
+                val kind = withContext(Dispatchers.IO) {
+                    ZipEngine.classify(File(entity.filePath))
+                }
+                if (kind is ZipKind.MultiBook && zipCandidate == null) {
+                    zipCandidates = kind.candidates
+                    return@LaunchedEffect
+                }
+            }
             val parsed = withContext(Dispatchers.IO) {
                 openParsed(
                     context, entity.filePath, bookId, entity.originalFileName,
                     onProgress = { done, total ->
                         val prev = convertProgress?.first ?: 0
                         if (done > prev) convertProgress = done to total
-                    }
+                    },
+                    zipCandidate = zipCandidate
                 )
             }
             val store = FontStore(context)
@@ -1660,6 +1684,34 @@ fun ReaderScreen(
         SupportDialog(onDismiss = { supportOpen = false })
     }
 
+    // Archive choice for a ZIP holding several books (ReadEra's
+    // ARCHIVE_COLLISION, as a choice instead of an error): the
+    // candidate names are book data from inside the archive, never
+    // translated text, so only the dialog title needs a string.
+    // Dismissing without a choice closes the reader — there is no
+    // book to show until one is chosen.
+    if (zipCandidates != null && zipCandidate == null) {
+        AlertDialog(
+            onDismissRequest = { closeReader() },
+            title = { Text(stringResource(R.string.archive_choose_book)) },
+            text = {
+                Column {
+                    zipCandidates!!.forEach { candidate ->
+                        TextButton(onClick = { zipCandidate = candidate }) {
+                            Text(candidate.displayName)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { closeReader() }) {
+                    Text(stringResource(R.string.close))
+                }
+            }
+        )
+    }
+
     // Reading-mode picker (manga-reader style popup): horizontal paging
     // (bidirectional arrow; direction follows the book language) vs
     // vertical-continuous (up-down arrow).
@@ -2061,15 +2113,17 @@ private fun SpacingDialog(
 }
 
 /**
- * Opens a stored book into its chapter files. EPUBs are extracted (once
- * per source change, guarded by the stamp) and parsed from the tree;
- * TXT / Markdown / PDF / DOCX are converted by [BookConverter] into
+ * Opens a stored book into its chapter files. Each format is opened
+ * through its own rendering engine (see parser/engine): EPUBs are
+ * extracted (once per source change, guarded by the stamp) and parsed
+ * from the tree; TXT / Markdown / PDF / DOCX are converted into
  * chapter files in the same cache directory, and a valid stamp lets the
  * next open rebuild the book from those files without re-converting.
  * The stamp ([CacheStamp]) covers mtime, length AND a first/last-bytes
  * fingerprint, so a replaced file with an unchanged mtime and the same
- * length still re-converts. The importer fills this cache at import
- * time, so the first open is normally a cache hit, not a re-parse.
+ * length still re-converts. TXT/Markdown caches are filled at import
+ * time, so their first open is normally a cache hit; EPUB, DOCX and
+ * book-carrying ZIPs are parsed at first open instead.
  */
 @Throws(IOException::class)
 private suspend fun openParsed(
@@ -2079,7 +2133,11 @@ private suspend fun openParsed(
     /** Original file name, when known: title fallback instead of the "$uuid.<ext>" storage name. */
     titleFallback: String? = null,
     /** PDF conversion progress for the loading UI: (pages done, pages total). */
-    onProgress: ((Int, Int) -> Unit)? = null
+    onProgress: ((Int, Int) -> Unit)? = null,
+    /** For a multi-book ZIP archive: the book the user chose from
+     *  the archive-choice dialog. Null for every other format, and
+     *  for single-book ZIPs (the engine picks the only candidate). */
+    zipCandidate: ArchiveCandidate? = null
 ): com.novelfa.reader.model.ParsedBook {
     val book = File(bookPath)
     if (!book.exists()) {
@@ -2130,44 +2188,26 @@ private suspend fun openParsed(
     }
     outDir.deleteRecursively()
     outDir.mkdirs()
-    val parsed = if (format == BookFormat.EPUB) {
-        ZipFile(book).use { zf ->
-            val entries = zf.entries()
-            var entryCount = 0
-            var totalBytes = 0L
-            while (entries.hasMoreElements()) {
-                currentCoroutineContext().ensureActive()
-                val entry = entries.nextElement()
-                // Zip-bomb guard: cap entry count and total uncompressed size.
-                if (++entryCount > MAX_ZIP_ENTRIES) {
-                    throw IOException("Zip entry count exceeds limit: " + entry.name)
-                }
-                val out = File(outDir, entry.name)
-                val canonicalOut = out.canonicalPath
-                val canonicalDir = outDir.canonicalPath
-                // Trailing separator: without it, a sibling dir sharing the
-                // string prefix would pass the check.
-                if (!canonicalOut.startsWith(canonicalDir + File.separatorChar)) {
-                    throw IOException("Zip entry outside target dir: " + entry.name)
-                }
-                if (entry.isDirectory) {
-                    out.mkdirs()
-                } else {
-                    out.parentFile?.mkdirs()
-                    zf.getInputStream(entry).use { input ->
-                        out.outputStream().use { output ->
-                            totalBytes += input.copyTo(output)
-                            if (totalBytes > MAX_ZIP_BYTES) {
-                                throw IOException("Zip uncompressed size exceeds limit")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        EpubParser.parse(outDir, titleFallback ?: book.name, chapterFallback)
-    } else {
-        BookConverter.parse(book, outDir, chapterFallback, titleFallback, onProgress)
+    // Rendering is engine-owned now: each format's engine parses
+    // (or, for a book inside a ZIP, extracts + parses) through its
+    // own path. The old code branched here on EPUB vs. one shared
+    // dispatch for everything else; a format's rendering change
+    // could no longer be reasoned about in isolation.
+    // Capture the coroutine context once: currentCoroutineContext()
+    // is itself suspend, so it cannot be called inside the plain
+    // cancel-check lambda the engines receive.
+    val openCtx = currentCoroutineContext()
+    val cancelCheck = { openCtx.ensureActive() }
+    val parsed = when {
+        format == BookFormat.EPUB -> EpubEngine.open(
+            book, outDir, chapterFallback, titleFallback, onProgress, cancelCheck
+        )
+        format == BookFormat.ZIP && zipCandidate != null -> ZipEngine.openCandidate(
+            book, zipCandidate, outDir, chapterFallback, titleFallback, onProgress, cancelCheck
+        )
+        else -> EngineRegistry.engineFor(format).open(
+            book, outDir, chapterFallback, titleFallback, onProgress, cancelCheck
+        )
     }
     CacheStamp.writeStamp(outDir, book)
     return parsed
@@ -2236,8 +2276,6 @@ private fun detectBookIsLtr(chapters: List<com.novelfa.reader.model.Chapter>): B
 }
 
 /** Zip-bomb guardrails for EPUB extraction (generous: real books are far smaller). */
-private const val MAX_ZIP_ENTRIES = 10_000
-private const val MAX_ZIP_BYTES = 500L * 1024 * 1024
 
 /**
  * One row of the diagnostic dialog: a localized label on one side

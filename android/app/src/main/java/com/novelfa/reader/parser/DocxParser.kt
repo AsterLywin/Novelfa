@@ -34,9 +34,9 @@ object DocxParser {
         docxFile: File,
         outDir: File,
         chapterFallback: (Int) -> String,
-        /** Original file name (see [BookConverter.parse]): the stored file is "$uuid.docx". */
+        /** Original file name (see the DOCX engine): the stored file is "$uuid.docx". */
         titleFallback: String? = null,
-        // Cancellation hook (BookConverter injects it): both the
+        // Cancellation hook (the DOCX engine injects it): both the
         // unzip and the body walk below are plain blocking loops,
         // so without it Cancel could not interrupt a big DOCX at all.
         checkCancelled: (() -> Unit)? = null
@@ -200,8 +200,10 @@ object DocxParser {
             val notesHtml = StringBuilder("<hr/>")
             if (state.referencedFootnotes.isNotEmpty()) {
                 notesHtml.append("<ol>")
-                for (id in state.referencedFootnotes) {
-                    notesHtml.append("<li>")
+                for ((index, id) in state.referencedFootnotes.withIndex()) {
+                    val num = index + 1
+                    notesHtml.append("<li id=\"novelfa-fn-").append(num).append("\">")
+                        .append("<a href=\"#novelfa-fnref-").append(num).append("\">↩</a> ")
                         .append(ConvertedBook.escape(state.footnoteTexts[id] ?: ""))
                         .append("</li>")
                 }
@@ -209,8 +211,10 @@ object DocxParser {
             }
             if (state.referencedEndnotes.isNotEmpty()) {
                 notesHtml.append("<ol>")
-                for (id in state.referencedEndnotes) {
-                    notesHtml.append("<li>")
+                for ((index, id) in state.referencedEndnotes.withIndex()) {
+                    val num = index + 1
+                    notesHtml.append("<li id=\"novelfa-en-").append(num).append("\">")
+                        .append("<a href=\"#novelfa-enref-").append(num).append("\">↩</a> ")
                         .append(ConvertedBook.escape(state.endnoteTexts[id] ?: ""))
                         .append("</li>")
                 }
@@ -377,7 +381,14 @@ object DocxParser {
                             state.referencedFootnotes += id
                         }
                         val num = state.referencedFootnotes.indexOf(id) + 1
-                        html.append("<sup>[").append(num).append("]</sup>")
+                        // Two-way link, not a bare number: the
+                        // reference jumps to the note, and the note
+                        // (appended below) jumps back. In an HTML
+                        // reader this is the closest faithful form
+                        // of a page-bottom footnote link.
+                        html.append("<sup><a href=\"#novelfa-fn-").append(num)
+                            .append("\" id=\"novelfa-fnref-").append(num)
+                            .append("\">[").append(num).append("]</a></sup>")
                     }
                 }
                 "endnoteReference" -> {
@@ -389,7 +400,9 @@ object DocxParser {
                             state.referencedEndnotes += id
                         }
                         val num = state.referencedEndnotes.indexOf(id) + 1
-                        html.append("<sup>[").append(num).append("]</sup>")
+                        html.append("<sup><a href=\"#novelfa-en-").append(num)
+                            .append("\" id=\"novelfa-enref-").append(num)
+                            .append("\">[").append(num).append("]</a></sup>")
                     }
                 }
                 "drawing", "pict" -> {
