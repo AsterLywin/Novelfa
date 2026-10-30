@@ -149,6 +149,7 @@
     <string name="import_stage_decrypt">Checking PDF encryption…</string>
     <string name="import_stage_validate">Validating PDF…</string>
     <string name="reader_convert_progress">Preparing book… %1$d of %2$d pages</string>
+    <string name="reader_preparing_file">Preparing the file for reading…</string>
     <string name="import_stage_save">Saving book…</string>
     <string name="import_stage_parse">Reading the book…</string>
     <string name="import_progress_file">File %1$d of %2$d</string>

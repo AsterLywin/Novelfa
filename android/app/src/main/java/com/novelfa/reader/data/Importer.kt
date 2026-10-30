@@ -825,6 +825,29 @@ class Importer(
         val workingPath = InPlaceSource.workingFile(context.cacheDir, id, format.extension).absolutePath
         val bookTitle = File(displayName).nameWithoutExtension
             .takeIf { it.isNotBlank() } ?: displayName
+        // Asymmetry fix (found from a device report: in-place
+        // TXT/MD books had no cover at all): the copy flow builds
+        // a generated cover synchronously when fast import is OFF,
+        // but this register-only path only ever built one in the
+        // background when fast import is ON — so with the toggle
+        // OFF, a `content://` in-place book never got a cover from
+        // anywhere. Mirror the copy flow: OFF builds it here, ON
+        // defers it below. (GeneratedCover is typographic and
+        // needs only the title and the path key, not the file
+        // itself, so it works before the working copy exists.)
+        var syncCoverPath: String? = null
+        if (!fastImport) {
+            ioCtx.ensureActive()
+            syncCoverPath = runCatching {
+                val tmp = GeneratedCover.generate(context, bookTitle, workingPath)
+                    ?: return@runCatching null
+                try {
+                    CoverStore(context).saveCover(tmp, workingPath).absolutePath
+                } finally {
+                    tmp.delete()
+                }
+            }.getOrNull()
+        }
         ioCtx.ensureActive()
         onStage?.invoke("save")
         db.bookDao().insert(
@@ -832,7 +855,7 @@ class Importer(
                 id = id,
                 title = bookTitle,
                 filePath = workingPath,
-                coverPath = null,
+                coverPath = syncCoverPath,
                 totalChapters = recordChapters ?: 0,
                 dateAdded = Instant.now().toString(),
                 originalFileName = displayName,

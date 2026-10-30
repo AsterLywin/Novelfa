@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.BookEntity
+import com.novelfa.reader.data.CoverBackfill
 import com.novelfa.reader.data.InPlaceSource
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.sha256OfFile
@@ -341,6 +342,22 @@ fun PdfReaderRoute(
             runCatching { InPlaceSource.resolve(context, found) }.getOrNull()
         }
         if (resolvedFile == null) resolveFailed = true
+    }
+    // First-open cover backfill for native books (CBZ and
+    // image-only ZIPs), the counterpart of ReaderScreen's call
+    // for text books: a register-only `content://` in-place
+    // import never extracted the first page as a cover, so the
+    // row still shows a generated cover or none. Restricted to
+    // CBZ/ZIP here so text books are not backfilled twice (the
+    // reader does those); the helper itself is idempotent, so
+    // a ZIP that also reaches the reader is still safe.
+    LaunchedEffect(entity, resolvedFile) {
+        val found = entity ?: return@LaunchedEffect
+        val file = resolvedFile ?: return@LaunchedEffect
+        if (found.importMode != "IN_PLACE") return@LaunchedEffect
+        val format = BookFormat.detect(file) ?: return@LaunchedEffect
+        if (format != BookFormat.CBZ && format != BookFormat.ZIP) return@LaunchedEffect
+        CoverBackfill.backfill(context, dao, found, file)
     }
     when {
         missing || resolveFailed -> {

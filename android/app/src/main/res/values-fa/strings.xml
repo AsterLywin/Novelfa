@@ -149,6 +149,7 @@
     <string name="import_stage_decrypt">در حال بررسی رمز PDF…</string>
     <string name="import_stage_validate">در حال اعتبارسنجی PDF…</string>
     <string name="reader_convert_progress">در حال آماده‌سازی کتاب… %1$d از %2$d صفحه</string>
+    <string name="reader_preparing_file">در حال آماده‌سازی فایل برای خواندن…</string>
     <string name="import_stage_save">در حال ذخیره کتاب…</string>
     <string name="import_stage_parse">در حال خواندن کتاب…</string>
     <string name="import_progress_file">فایل %1$d از %2$d</string>

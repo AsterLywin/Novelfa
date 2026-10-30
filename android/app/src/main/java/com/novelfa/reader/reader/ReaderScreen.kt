@@ -83,6 +83,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
+import com.novelfa.reader.data.CoverBackfill
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.InPlaceSource
 import com.novelfa.reader.data.PrefsStore
@@ -160,6 +161,13 @@ fun ReaderScreen(
     // text phase and the render phase each count from zero, and a
     // backward jump would look like the bar rewinding.
     var convertProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    // True while an in-place book's source is being prepared
+    // (working-copy materialization for `content://` sources):
+    // for a big file this is a long phase with otherwise zero
+    // feedback — a bare spinner that cannot be told apart from
+    // a stuck reader. Copy books resolve instantly, so this
+    // flag is never visible for them.
+    var preparingFile by remember { mutableStateOf(false) }
     // XP flush on reader exit: the close button flushes first and only
     // then navigates home (so the home celebration sees the final unit);
     // system-back/gesture exits hit the DisposableEffect safety net below
@@ -346,9 +354,11 @@ fun ReaderScreen(
             // resolved file, never the raw entity path, so an
             // in-place book whose working copy does not exist yet
             // still opens instead of failing on a missing file.
+            preparingFile = true
             val resolvedFile = withContext(Dispatchers.IO) {
                 InPlaceSource.resolve(context, entity)
             }
+            preparingFile = false
             // Archive choice, before any parse: a ZIP holding several
             // books must not open the first one silently. The dialog
             // below sets zipCandidate, which re-runs this effect and
@@ -449,6 +459,18 @@ fun ReaderScreen(
             vm = v
             pageHtml = v.html
             pageBase = v.baseUrl
+            // First-open cover backfill for `content://`
+            // in-place books (see CoverBackfill): a register-only
+            // import never extracted the real cover, so the row
+            // still shows a generated cover or none at all. This
+            // runs after the open already succeeded, on a child
+            // of this effect — leaving the reader cancels it, and
+            // the next open retries, because the job is idempotent.
+            if (entity.importMode == "IN_PLACE") {
+                launch {
+                    CoverBackfill.backfill(context, dao, entity, resolvedFile)
+                }
+            }
             // Background fill for lazily-opened PDFs: the open phase
             // rendered only the first pages, so the rest render now,
             // in reading order, while the user reads. This launch is
@@ -481,6 +503,7 @@ fun ReaderScreen(
             // Navigation away: don't show a spurious error.
             throw e
         } catch (e: Exception) {
+            preparingFile = false
             loadError = true
             snackbar.showSnackbar(openErr)
         }
@@ -1421,6 +1444,10 @@ fun ReaderScreen(
                     }
                     pageHtml.isEmpty() -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
+                        if (preparingFile) {
+                            Spacer(Modifier.height(16.dp))
+                            Text(stringResource(R.string.reader_preparing_file))
+                        }
                         // A bare spinner cannot tell "slow" from
                         // "stuck": show the live conversion progress
                         // whenever the open path reports it.
