@@ -226,6 +226,14 @@ internal class PdfNativeRenderer(pdfFile: File) : NativePageSource {
  * Sampling is a power of two (the decoder's efficient path), so
  * the decoded width is the closest power-of-two sample at or
  * below the requested width, never an exact-width stretch.
+ *
+ * RGB_565 is a FIRST try only, not the only try: some decoders
+ * (notably WebP, the format most manhwa archives use today)
+ * refuse a 565 output and return null, which used to surface as
+ * a bare "page couldn't be rendered" for every page of the book
+ * even though the archive itself was fine. A null 565 decode
+ * therefore falls back to ARGB_8888 before giving up — JPEG/PNG
+ * pages keep the memory saving, WebP pages still render.
  */
 internal class CbzNativeSource(zipFile: File) : NativePageSource {
     private val lock = Any()
@@ -262,8 +270,21 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
                 inSampleSize = sample
                 inPreferredConfig = Bitmap.Config.RGB_565
             }
+            // First try: RGB_565 (half memory). Some decoders
+            // return null for this config instead of converting
+            // (WebP in particular), so a null result is NOT a
+            // verdict on the image — retry as ARGB_8888 on a fresh
+            // stream before reporting the page unreadable.
             val bitmap = zip.getInputStream(entry).use { stream ->
                 BitmapFactory.decodeStream(stream, null, opts)
+            } ?: zip.getInputStream(entry).use { stream ->
+                BitmapFactory.decodeStream(
+                    stream, null,
+                    BitmapFactory.Options().apply {
+                        inSampleSize = sample
+                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                    }
+                )
             } ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
             return bitmap
         }
@@ -863,15 +884,27 @@ private fun NativePageItem(
 ) {
     var bitmap by remember(page, renderWidthPx) { mutableStateOf<Bitmap?>(null) }
     var failed by remember(page, renderWidthPx) { mutableStateOf(false) }
+    // The render error itself, shown under the failure text: the
+    // old code threw it away (getOrNull), so a phone-only tester
+    // could only ever report "it failed" and the cause stayed
+    // invisible. The message names the entry and the reason
+    // (unreadable image, missing entry, unsupported compression),
+    // which is what a screenshot of this screen needs to carry.
+    var failMessage by remember(page, renderWidthPx) { mutableStateOf<String?>(null) }
     var retry by remember(page, renderWidthPx) { mutableIntStateOf(0) }
 
     LaunchedEffect(page, renderWidthPx, retry) {
         bitmap = null
         failed = false
+        failMessage = null
         val rendered = withContext(Dispatchers.IO) {
-            runCatching { source.renderPage(page, renderWidthPx) }.getOrNull()
+            runCatching { source.renderPage(page, renderWidthPx) }
         }
-        if (rendered == null) failed = true else bitmap = rendered
+        rendered.onSuccess { bitmap = it }
+        rendered.onFailure {
+            failed = true
+            failMessage = it.message ?: it.javaClass.simpleName
+        }
     }
     // Recycle exactly the bitmap this item rendered, and only when
     // this item (page + width + retry generation) leaves composition.
@@ -918,6 +951,12 @@ private fun NativePageItem(
             }
         }
         failed -> {
+            // The placeholder sits on a WHITE background, so its
+            // text must be dark explicitly: with the app's dark
+            // reader theme the default onSurface colour is light,
+            // which used to render this message almost invisible
+            // (the screenshot that reported this bug showed it as
+            // faint grey on white).
             if (paged) {
                 Column(
                     modifier = Modifier.fillMaxSize().background(Color.White),
@@ -926,8 +965,19 @@ private fun NativePageItem(
                 ) {
                     Text(
                         text = stringResource(R.string.pdf_page_failed),
-                        textAlign = TextAlign.Center
+                        textAlign = TextAlign.Center,
+                        color = Color(0xFF1E1E1E)
                     )
+                    failMessage?.let { message ->
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = message,
+                            textAlign = TextAlign.Center,
+                            color = Color(0xFF555555),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = { retry++ }) {
                         Text(stringResource(R.string.pdf_retry))
@@ -942,8 +992,19 @@ private fun NativePageItem(
                 ) {
                     Text(
                         text = stringResource(R.string.pdf_page_failed),
-                        textAlign = TextAlign.Center
+                        textAlign = TextAlign.Center,
+                        color = Color(0xFF1E1E1E)
                     )
+                    failMessage?.let { message ->
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = message,
+                            textAlign = TextAlign.Center,
+                            color = Color(0xFF555555),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = { retry++ }) {
                         Text(stringResource(R.string.pdf_retry))
