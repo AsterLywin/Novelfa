@@ -20,7 +20,12 @@ object EpubParser {
     fun parse(
         extractDir: File,
         epubFileName: String,
-        chapterFallback: (Int) -> String
+        chapterFallback: (Int) -> String,
+        // Cancellation hook (the importer injects it): the spine
+        // loop below reads one XHTML title per chapter with no
+        // suspension point, so without it Cancel could not interrupt
+        // a many-chapter EPUB parse at all.
+        checkCancelled: (() -> Unit)? = null
     ): ParsedBook {
         val dbf = secureDocumentBuilderFactory()
         val opfFile = findOpfFile(dbf, extractDir)
@@ -98,6 +103,7 @@ object EpubParser {
         val seenFiles = mutableSetOf<String>()
         var idx = 1
         for (i in 0 until spine.length) {
+            checkCancelled?.invoke()
             val idref = spine.item(i).attributes.getNamedItem("idref")?.nodeValue?.trim() ?: continue
             if (idref.isEmpty()) continue
             val (href, mediaType) = manifest[idref] ?: continue

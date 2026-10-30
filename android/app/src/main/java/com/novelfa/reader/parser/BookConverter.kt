@@ -35,6 +35,14 @@ object BookConverter {
         onProgress: ((Int, Int) -> Unit)? = null
     ): ParsedBook {
         val fallbackName = titleFallback?.takeIf { it.isNotBlank() } ?: source.name
+        // Cancellation hook for the blocking parsers (see PdfParser):
+        // without it, Cancel could not interrupt a big DOCX parse
+        // at all — the job was cancelled but the parse ran on to
+        // completion regardless. Captured once here (this function
+        // is suspend); the hook itself just throws when that job
+        // is cancelled.
+        val ctx = currentCoroutineContext()
+        val cancelCheck = { ctx.ensureActive() }
         return when (BookFormat.detect(source)) {
             BookFormat.TXT -> TextBookParser.parseText(
                 source.readBytes(), fallbackName, outDir, chapterFallback
@@ -42,8 +50,8 @@ object BookConverter {
             BookFormat.MARKDOWN -> TextBookParser.parseMarkdown(
                 source.readBytes(), fallbackName, outDir, chapterFallback
             )
-            BookFormat.PDF -> parsePdf(source, outDir, chapterFallback, fallbackName, onProgress)
-            BookFormat.DOCX -> DocxParser.parseFile(source, outDir, chapterFallback, fallbackName)
+            BookFormat.PDF -> parsePdf(source, outDir, chapterFallback, fallbackName, onProgress, cancelCheck)
+            BookFormat.DOCX -> DocxParser.parseFile(source, outDir, chapterFallback, fallbackName, cancelCheck)
             else -> throw IllegalArgumentException(
                 "Unsupported book format: ${source.name}"
             )
@@ -67,14 +75,9 @@ object BookConverter {
         outDir: File,
         chapterFallback: (Int) -> String,
         fallbackName: String,
-        onProgress: ((Int, Int) -> Unit)? = null
+        onProgress: ((Int, Int) -> Unit)? = null,
+        cancelCheck: (() -> Unit)? = null
     ): ParsedBook {
-        // Cancellation hook for the blocking text parse (see PdfParser):
-        // without it, Cancel could not interrupt a big text PDF. The
-        // context is captured once here (this function is suspend);
-        // the hook itself just throws when that job is cancelled.
-        val ctx = currentCoroutineContext()
-        val cancelCheck = { ctx.ensureActive() }
         val text = runCatching {
             PdfParser.parseDetailed(source.readBytes(), fallbackName, outDir, chapterFallback, null, cancelCheck, onProgress)
         }
@@ -99,6 +102,12 @@ object BookConverter {
                         source, outDir, parsed.title, hasText, pageTexts, chapterFallback,
                         onProgress
                     )
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Cancel is not a build failure to recover from:
+                    // without this it fell into the full re-parse
+                    // below, so Cancel during a mixed build restarted
+                    // the whole text parse instead of stopping.
+                    throw e
                 } catch (e: Exception) {
                     // A failed mixed build must not lose the text book
                     // that already parsed: rebuild it cleanly and
@@ -112,6 +121,11 @@ object BookConverter {
             }
         } else {
             val err = text.exceptionOrNull()
+            if (err is kotlinx.coroutines.CancellationException) {
+                // Cancel during the text parse must stop here, not
+                // fall through to a full image render of the book.
+                throw err
+            }
             if (err is PdfPasswordRequiredException ||
                 err is PdfPasswordWrongException ||
                 err is PdfUnsupportedEncryptionException
@@ -122,6 +136,8 @@ object BookConverter {
         val title = text.getOrNull()?.first?.title ?: File(fallbackName).nameWithoutExtension
         try {
             return PdfImageBook.render(source, outDir, title, onProgress)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (renderErr: Exception) {
             throw text.exceptionOrNull() ?: renderErr
         }

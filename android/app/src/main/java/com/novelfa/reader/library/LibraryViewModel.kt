@@ -11,7 +11,6 @@ import com.novelfa.reader.data.isCompleted
 import com.novelfa.reader.data.isInProgress
 import com.novelfa.reader.data.isUuidLikeTitle
 import com.novelfa.reader.data.progressPercent
-import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.settings.CollectionManager
 import com.novelfa.reader.settings.ManualCollectionRegistry
 import java.io.File
@@ -211,7 +210,12 @@ class LibraryViewModel(
         uris: List<Uri>,
         overwriteDuplicates: Boolean = false,
         passwordProvider: PdfPasswordProvider? = null,
-        onStage: ((String?) -> Unit)? = null
+        onStage: ((String?) -> Unit)? = null,
+        // Progress for the shared import dialog: (1-based file index,
+        // original file name). Fired before the duplicate checks for
+        // each file, so the dialog names the file it is actually on
+        // instead of the previous file or none at all.
+        onFile: ((Int, String?) -> Unit)? = null
     ): ImportSummary {
         val imp = requireNotNull(importer) { "Importer not provided" }
         val existingBooks = dao.allBooks().first()
@@ -239,11 +243,16 @@ class LibraryViewModel(
             val newHash = hashOf(uri) ?: return null
             val stored = File(book.filePath)
             if (!stored.isFile) return null
-            val oldHash = runCatching { sha256OfFile(stored) }.getOrNull() ?: return null
+            // Cancellable streaming hash (not the blocking sha256OfFile):
+            // duplicate detection re-reads whole stored books, and a
+            // Cancel pressed during that read used to run on to the
+            // end regardless, exactly like the parse paths below.
+            val oldHash = imp.sha256OfStoredFile(stored) ?: return null
             return newHash == oldHash
         }
-        for (uri in uris) {
+        for ((index, uri) in uris.withIndex()) {
             val displayName = imp.displayNameOf(uri)
+            onFile?.invoke(index + 1, displayName)
             val key = displayName?.lowercase()
             if (!overwriteDuplicates) {
                 if (key != null && key in batchAddedNames) {
@@ -336,15 +345,18 @@ class LibraryViewModel(
      */
     suspend fun overwriteDuplicates(
         uris: List<Uri>,
-        passwordProvider: PdfPasswordProvider? = null
+        passwordProvider: PdfPasswordProvider? = null,
+        onStage: ((String?) -> Unit)? = null,
+        onFile: ((Int, String?) -> Unit)? = null
     ): ImportSummary {
         val imp = requireNotNull(importer) { "Importer not provided" }
         var added = 0
         var failed = 0
         var restored = 0
         val failedDetails = mutableListOf<FailedImport>()
-        for (uri in uris) {
+        for ((index, uri) in uris.withIndex()) {
             val displayName = imp.displayNameOf(uri)
+            onFile?.invoke(index + 1, displayName)
             val key = displayName?.lowercase()
             try {
                 // Remove the existing book with the same file name.
@@ -355,7 +367,9 @@ class LibraryViewModel(
                         removeBook(existing)
                     }
                 }
-                val newId = imp.importBook(uri, passwordProvider = passwordProvider)
+                val newId = imp.importBook(
+                    uri, passwordProvider = passwordProvider, onStage = onStage
+                )
                 added++
                 if (imp.applyReadingRecord(newId)) restored++
             } catch (e: CancellationException) {

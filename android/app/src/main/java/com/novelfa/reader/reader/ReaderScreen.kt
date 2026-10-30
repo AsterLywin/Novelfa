@@ -105,6 +105,8 @@ import com.novelfa.reader.theme.ThemePreviewCard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -2110,6 +2112,22 @@ private suspend fun openParsed(
         // fall through to a fresh conversion below instead of
         // showing blank chapters / broken images silently.
     }
+    // Stamp-miss rescue (converted formats only; EPUB re-unzips
+    // cheaply and keeps its old path): a conversion killed AFTER it
+    // wrote its chapters but BEFORE the stamp landed used to be
+    // deleted here and converted from zero on the next open — for
+    // a big PDF that is the whole slow conversion again. Chapters
+    // are only written at the end of a conversion, so a cache that
+    // passes the same validity check the stamp-hit path uses is a
+    // finished conversion, not a partial one, and is safe to return;
+    // the reader's background renderMissing still fills any missing
+    // scanned pages afterwards.
+    if (!stampOk && format != BookFormat.EPUB) {
+        val rescued = ConvertedBook.read(outDir, titleFallback ?: book.name, chapterFallback)
+        if (rescued != null && isConvertedCacheValid(outDir, rescued)) {
+            return rescued
+        }
+    }
     outDir.deleteRecursively()
     outDir.mkdirs()
     val parsed = if (format == BookFormat.EPUB) {
@@ -2118,6 +2136,7 @@ private suspend fun openParsed(
             var entryCount = 0
             var totalBytes = 0L
             while (entries.hasMoreElements()) {
+                currentCoroutineContext().ensureActive()
                 val entry = entries.nextElement()
                 // Zip-bomb guard: cap entry count and total uncompressed size.
                 if (++entryCount > MAX_ZIP_ENTRIES) {

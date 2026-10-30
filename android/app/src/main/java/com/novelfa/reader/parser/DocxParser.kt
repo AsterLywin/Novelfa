@@ -35,19 +35,24 @@ object DocxParser {
         outDir: File,
         chapterFallback: (Int) -> String,
         /** Original file name (see [BookConverter.parse]): the stored file is "$uuid.docx". */
-        titleFallback: String? = null
+        titleFallback: String? = null,
+        // Cancellation hook (BookConverter injects it): both the
+        // unzip and the body walk below are plain blocking loops,
+        // so without it Cancel could not interrupt a big DOCX at all.
+        checkCancelled: (() -> Unit)? = null
     ): ParsedBook {
         outDir.mkdirs()
-        unzip(docxFile, outDir)
-        return parse(outDir, titleFallback?.takeIf { it.isNotBlank() } ?: docxFile.name, outDir, chapterFallback)
+        unzip(docxFile, outDir, checkCancelled)
+        return parse(outDir, titleFallback?.takeIf { it.isNotBlank() } ?: docxFile.name, outDir, chapterFallback, checkCancelled)
     }
 
-    private fun unzip(zip: File, outDir: File) {
+    private fun unzip(zip: File, outDir: File, checkCancelled: (() -> Unit)? = null) {
         java.util.zip.ZipFile(zip).use { zf ->
             val entries = zf.entries()
             var entryCount = 0
             var totalBytes = 0L
             while (entries.hasMoreElements()) {
+                checkCancelled?.invoke()
                 val entry = entries.nextElement()
                 if (++entryCount > 10_000) {
                     throw java.io.IOException("Zip entry count exceeds limit: ${entry.name}")
@@ -79,7 +84,8 @@ object DocxParser {
         extractDir: File,
         fileName: String,
         outDir: File,
-        chapterFallback: (Int) -> String
+        chapterFallback: (Int) -> String,
+        checkCancelled: (() -> Unit)? = null
     ): ParsedBook {
         val document = File(extractDir, "word/document.xml")
         if (!document.isFile) {
@@ -127,6 +133,7 @@ object DocxParser {
         fun processChildren(parent: Element) {
             val kids = parent.childNodes
             for (i in 0 until kids.length) {
+                checkCancelled?.invoke()
                 val node = kids.item(i)
                 if (node.nodeType != Node.ELEMENT_NODE) continue
                 val el = node as Element

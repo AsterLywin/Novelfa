@@ -325,9 +325,10 @@ fun LibraryScreen(
     // State for duplicate-overwrite confirmation dialog
     var pendingDuplicates by remember { mutableStateOf<List<Uri>>(emptyList()) }
     // Import progress: a big DOCX parses for seconds with no other
-    // feedback, which reads as "the import does nothing". The dialog
-    // below stays up until importUris finishes (success or failure),
-    // and its scrim also blocks a second tap / tab switch mid-import.
+    // feedback, which reads as "the import does nothing". The shared
+    // dialog below stays up until the importer itself finishes
+    // (success or failure), and its scrim also blocks a second tap /
+    // tab switch mid-import.
     var isImporting by remember { mutableStateOf(false) }
     // The running import job, so the progress dialog's Cancel button
     // can actually stop it: before this, a hung import (e.g. a PDF
@@ -335,10 +336,16 @@ fun LibraryScreen(
     // up forever with no way out.
     var importJob by remember { mutableStateOf<Job?>(null) }
     // Current import stage for the progress dialog ("copy", "decrypt",
-    // "validate", "save"; null = no stage to show). Set by importBook
-    // through importMultiple; a stuck import's screenshot names the
-    // exact step it sits in.
+    // "validate", "parse", "save"; null = no stage to show). Set by
+    // importBook through importMultiple; a stuck import's screenshot
+    // names the exact step it sits in.
     var importStage by remember { mutableStateOf<String?>(null) }
+    // File the dialog is currently on, for the shared dialog's
+    // "file N of M" line and file name (same state the collections
+    // screen now feeds the same dialog with).
+    var importFileName by remember { mutableStateOf<String?>(null) }
+    var importFileIndex by remember { mutableStateOf(0) }
+    var importFileTotal by remember { mutableStateOf(1) }
     var pendingDuplicateNames by remember { mutableStateOf<List<String>>(emptyList()) }
     // Encrypted-PDF password prompt (also covers the ACTION_VIEW path,
     // which funnels through importUris below).
@@ -360,12 +367,27 @@ fun LibraryScreen(
         }
         isImporting = true
         importStage = null
+        importFileName = null
+        importFileIndex = 0
+        importFileTotal = uris.size
         importJob = currentCoroutineContext()[Job]
+        // The summary message is shown AFTER the dialog closes, never
+        // inside the try: showSnackbar suspends until the message is
+        // dismissed, so showing it here used to keep the dialog up
+        // for the whole snackbar duration even though the book was
+        // already saved — the "imported already, dialog hasn't
+        // noticed" symptom. The dialog now closes exactly when the
+        // importer returns, and the message follows it.
+        var snackbarMessage: String? = null
         try {
             val summary = viewModel.importMultiple(
                 uris,
                 passwordProvider = pdfPasswordPrompt.provider,
-                onStage = { importStage = it }
+                onStage = { importStage = it },
+                onFile = { index, name ->
+                    importFileIndex = index
+                    importFileName = name
+                }
             )
             // If duplicates found, ask for confirmation instead of silently skipping
             if (summary.duplicates > 0 && summary.duplicateUris.isNotEmpty()) {
@@ -376,15 +398,15 @@ fun LibraryScreen(
                 if (summary.added > 0) parts.add(addedFmt.format(summary.added))
                 if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
                 failedPart(summary)?.let { parts.add(it) }
-                if (parts.isNotEmpty()) snackbar.showSnackbar(parts.joinToString(sep))
-                return
+                if (parts.isNotEmpty()) snackbarMessage = parts.joinToString(sep)
+            } else {
+                val parts = mutableListOf<String>()
+                if (summary.added > 0) parts.add(addedFmt.format(summary.added))
+                if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
+                if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
+                failedPart(summary)?.let { parts.add(it) }
+                if (parts.isNotEmpty()) snackbarMessage = parts.joinToString(sep)
             }
-            val parts = mutableListOf<String>()
-            if (summary.added > 0) parts.add(addedFmt.format(summary.added))
-            if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
-            if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
-            failedPart(summary)?.let { parts.add(it) }
-            if (parts.isNotEmpty()) snackbar.showSnackbar(parts.joinToString(sep))
         } catch (e: CancellationException) {
             throw e
         } catch (e: ImportException) {
@@ -394,19 +416,24 @@ fun LibraryScreen(
             val cause = e.cause
             val detail = (cause?.javaClass?.simpleName ?: "no-cause") +
                 ": " + (cause?.message ?: e.message)
-            snackbar.showSnackbar(e.messageFa + "\n" + detail)
+            snackbarMessage = e.messageFa + "\n" + detail
         } catch (e: Exception) {
             // Anything else (Room errors, unexpected throws) must not crash
             // the app: show a generic message with the diagnostic detail.
             val detail = (e.javaClass.simpleName ?: "no-cause") + ": " + (e.message ?: "")
-            snackbar.showSnackbar(
+            snackbarMessage =
                 context.getString(R.string.import_error_not_valid_epub) + "\n" + detail
-            )
         } finally {
             importJob = null
             importStage = null
+            importFileName = null
+            importFileIndex = 0
             isImporting = false
+            // A cancelled import waiting on a PDF password used to
+            // leave the password dialog up after this dialog closed.
+            pdfPasswordPrompt.dismissPending()
         }
+        snackbarMessage?.let { snackbar.showSnackbar(it) }
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -419,39 +446,15 @@ fun LibraryScreen(
     val launchImport = { picker.launch(SUPPORTED_BOOK_MIME_TYPES) }
 
     if (isImporting) {
-        // Standard Material3 progress dialog: title, indeterminate
-        // progress, an explanatory note, and a working Cancel — the
-        // old one was a bare spinner row with an empty confirm slot
-        // and no way out at all.
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text(stringResource(R.string.import_in_progress)) },
-            text = {
-                Column {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(16.dp))
-                    // The live stage, when the importer reports one:
-                    // a stuck import's screenshot names its step.
-                    val stageText = when (importStage) {
-                        "copy" -> stringResource(R.string.import_stage_copy)
-                        "decrypt" -> stringResource(R.string.import_stage_decrypt)
-                        "validate" -> stringResource(R.string.import_stage_validate)
-                        "save" -> stringResource(R.string.import_stage_save)
-                        else -> null
-                    }
-                    if (stageText != null) {
-                        Text(stageText)
-                        Spacer(Modifier.height(8.dp))
-                    }
-                    Text(stringResource(R.string.import_large_files_note))
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { importJob?.cancel() }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            }
+        // Shared dialog (same one the collections screen uses):
+        // Novelfa Card style, file name, "file N of M", live stage,
+        // and a Cancel that cancels the running import job.
+        ImportProgressDialog(
+            fileName = importFileName,
+            fileIndex = importFileIndex,
+            fileTotal = importFileTotal,
+            stage = importStage,
+            onCancel = { importJob?.cancel() }
         )
     }
 
@@ -1401,23 +1404,54 @@ fun LibraryScreen(
                     val uris = pendingDuplicates
                     pendingDuplicates = emptyList()
                     pendingDuplicateNames = emptyList()
+                    // Overwrites run through the same shared dialog
+                    // as a fresh import (this path used to run with
+                    // no progress UI and no Cancel at all), and its
+                    // summary is shown after the dialog closes, for
+                    // the same snackbar-delay reason as importUris.
                     scope.launch {
-                        val summary = viewModel.overwriteDuplicates(
-                            uris, passwordProvider = pdfPasswordPrompt.provider
-                        )
-                        val parts = mutableListOf<String>()
-                        if (summary.added > 0) parts.add(addedFmt.format(summary.added))
-                        if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
-                        if (summary.failed > 0) {
-                            val base = failedFmt.format(summary.failed)
-                            val sep2 = if (isEnglishUi) ", " else "، "
-                            val shown = summary.failedDetails.take(3)
-                                .joinToString(sep2) { "${it.name}: ${it.reason}" }
-                            parts.add(if (summary.failedDetails.isEmpty()) base else "$base ($shown)")
+                        isImporting = true
+                        importStage = null
+                        importFileName = null
+                        importFileIndex = 0
+                        importFileTotal = uris.size
+                        importJob = currentCoroutineContext()[Job]
+                        var message: String? = null
+                        try {
+                            val summary = viewModel.overwriteDuplicates(
+                                uris,
+                                passwordProvider = pdfPasswordPrompt.provider,
+                                onStage = { importStage = it },
+                                onFile = { index, name ->
+                                    importFileIndex = index
+                                    importFileName = name
+                                }
+                            )
+                            val parts = mutableListOf<String>()
+                            if (summary.added > 0) parts.add(addedFmt.format(summary.added))
+                            if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
+                            if (summary.failed > 0) {
+                                val base = failedFmt.format(summary.failed)
+                                val sep2 = if (isEnglishUi) ", " else "، "
+                                val shown = summary.failedDetails.take(3)
+                                    .joinToString(sep2) { "${it.name}: ${it.reason}" }
+                                parts.add(if (summary.failedDetails.isEmpty()) base else "$base ($shown)")
+                            }
+                            if (parts.isNotEmpty()) {
+                                message = parts.joinToString(if (isEnglishUi) ", " else "، ")
+                            }
+                        } catch (e: CancellationException) {
+                            // Cancelled overwrite: no message, no book.
+                            throw e
+                        } finally {
+                            importJob = null
+                            importStage = null
+                            importFileName = null
+                            importFileIndex = 0
+                            isImporting = false
+                            pdfPasswordPrompt.dismissPending()
                         }
-                        if (parts.isNotEmpty()) {
-                            snackbar.showSnackbar(parts.joinToString(if (isEnglishUi) ", " else "، "))
-                        }
+                        message?.let { snackbar.showSnackbar(it) }
                     }
                 }) { Text(stringResource(R.string.yes_overwrite)) }
             },

@@ -78,8 +78,23 @@ object PdfImageBook {
         title: String,
         onProgress: ((Int, Int) -> Unit)? = null
     ): ParsedBook {
-        val count = renderPages(pdfFile, outDir, null, onProgress, OPEN_PRELOAD_PAGES)
-        return ConvertedBook.write(outDir, title, buildSections(title, count))
+        // Chapters FIRST, page images second (the old order rendered
+        // the preload and only then wrote the chapters): if the
+        // process dies mid-preload, the chapters now already exist,
+        // so the next open can return them and let renderMissing
+        // fill the missing pages instead of converting from zero —
+        // see openParsed's stamp-miss rescue. The 1000-page cap is
+        // still enforced here before anything is written.
+        val count = ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+            PdfRenderer(pfd).use { it.pageCount }
+        }
+        if (count <= 0) throw IllegalArgumentException("PDF has no pages")
+        if (count > MAX_IMAGE_PAGES) {
+            throw IllegalArgumentException("PDF has too many pages for image rendering")
+        }
+        val parsed = ConvertedBook.write(outDir, title, buildSections(title, count))
+        renderPages(pdfFile, outDir, null, onProgress, OPEN_PRELOAD_PAGES)
+        return parsed
     }
 
     /**

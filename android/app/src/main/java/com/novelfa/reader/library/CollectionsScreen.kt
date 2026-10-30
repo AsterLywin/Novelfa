@@ -52,6 +52,7 @@ import com.novelfa.reader.settings.CollectionException
 import com.novelfa.reader.data.isCompleted
 import com.novelfa.reader.data.isInProgress
 import com.novelfa.reader.data.progressPercent
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -91,9 +92,16 @@ fun CollectionsScreen(
 
     // WPF parity: import books straight into a collection (CollectionAdd).
     var importTarget by remember { mutableStateOf<String?>(null) }
-    // Import progress (same reason as LibraryScreen): a slow parse with
-    // no feedback reads as a broken import.
+    // Import progress, feeding the SAME shared dialog as the library
+    // screen: this screen used to show a bare spinner with no stage
+    // and no Cancel at all, so an import started here could not be
+    // stopped except by killing the app.
     var isImporting by remember { mutableStateOf(false) }
+    var importJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var importStage by remember { mutableStateOf<String?>(null) }
+    var importFileName by remember { mutableStateOf<String?>(null) }
+    var importFileIndex by remember { mutableStateOf(0) }
+    var importFileTotal by remember { mutableStateOf(1) }
     val pdfPasswordPrompt = rememberPdfPasswordPrompt()
     val importPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -102,10 +110,21 @@ fun CollectionsScreen(
         importTarget = null
         if (uris.isNotEmpty() && target != null) {
             isImporting = true
+            importStage = null
+            importFileName = null
+            importFileIndex = 0
+            importFileTotal = uris.size
             scope.launch {
+                importJob = currentCoroutineContext()[kotlinx.coroutines.Job]
                 try {
                 val summary = viewModel.importMultiple(
-                    uris, passwordProvider = pdfPasswordPrompt.provider
+                    uris,
+                    passwordProvider = pdfPasswordPrompt.provider,
+                    onStage = { importStage = it },
+                    onFile = { index, name ->
+                        importFileIndex = index
+                        importFileName = name
+                    }
                 )
                 if (summary.addedNames.isNotEmpty()) {
                     val all = viewModel.books.first()
@@ -135,23 +154,24 @@ fun CollectionsScreen(
                     ).show()
                 }
                 } finally {
+                    importJob = null
+                    importStage = null
+                    importFileName = null
+                    importFileIndex = 0
                     isImporting = false
+                    pdfPasswordPrompt.dismissPending()
                 }
             }
         }
     }
 
     if (isImporting) {
-        AlertDialog(
-            onDismissRequest = {},
-            confirmButton = {},
-            text = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.width(16.dp))
-                    Text(stringResource(R.string.import_in_progress))
-                }
-            }
+        ImportProgressDialog(
+            fileName = importFileName,
+            fileIndex = importFileIndex,
+            fileTotal = importFileTotal,
+            stage = importStage,
+            onCancel = { importJob?.cancel() }
         )
     }
 

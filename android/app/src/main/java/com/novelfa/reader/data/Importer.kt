@@ -283,8 +283,18 @@ class Importer(
                 context.getString(R.string.chapter_fallback, n)
             }
             val parsed = if (format == BookFormat.EPUB) {
-                unzip(destFile, openCacheDir)
-                EpubParser.parse(openCacheDir, displayName, chapterFallback)
+                // "parse" is the stage the dialog used to skip: the
+                // unzip + EPUB parse is the long step for big EPUBs,
+                // and the dialog sat on the stale "copy" stage all
+                // through it. The per-entry check inside unzip and
+                // the per-spine check inside the parser are what
+                // make Cancel land here at all (both used to be
+                // plain blocking loops with no check).
+                onStage?.invoke("parse")
+                unzip(destFile, openCacheDir) { ioCtx.ensureActive() }
+                EpubParser.parse(
+                    openCacheDir, displayName, chapterFallback
+                ) { ioCtx.ensureActive() }
             } else if (format == BookFormat.PDF) {
                 // LAZY import (the ReadEra/ComicScreen rule): import
                 // time must not grow with the book. The old path ran
@@ -314,7 +324,7 @@ class Importer(
                 onStage?.invoke("decrypt")
                 val decrypted = resolvePdfDecryption(
                     destFile.readBytes(), displayName, passwordProvider
-                )
+                ) { ioCtx.ensureActive() }
                 if (decrypted != null) destFile.writeBytes(decrypted)
                 ioCtx.ensureActive()
                 onStage?.invoke("validate")
@@ -377,8 +387,15 @@ class Importer(
             } else {
                 // Converted formats: parse errors get a format-aware
                 // user-facing message instead of the EPUB-only texts.
+                // Cancellation must NOT be wrapped into an import
+                // error here: it used to be, so pressing Cancel
+                // mid-DOCX-parse showed a failure snackbar instead
+                // of just stopping the import.
+                onStage?.invoke("parse")
                 try {
                     BookConverter.parse(destFile, openCacheDir, chapterFallback, displayName)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     throw ImportException(
                         e.message ?: "parse failed",
@@ -421,6 +438,9 @@ class Importer(
                 // book is saved, so the import dialog waits for it. A
                 // failure here must never fail the import — the book
                 // simply stays coverless, exactly as before.
+                // A Cancel pressed just before this step must still
+                // stop the import instead of saving the book anyway.
+                ioCtx.ensureActive()
                 coverPath = runCatching {
                     val tmp = GeneratedCover.generate(
                         context, bookTitle, destFile.absolutePath
@@ -548,7 +568,11 @@ class Importer(
     private suspend fun resolvePdfDecryption(
         data: ByteArray,
         displayName: String,
-        provider: PdfPasswordProvider?
+        provider: PdfPasswordProvider?,
+        // Cancellation hook for the blocking decrypt rewrite (see
+        // PdfParser.decryptToPlainPdf): without it, Cancel pressed
+        // during an encrypted PDF's rewrite ran on regardless.
+        checkCancelled: (() -> Unit)? = null
     ): ByteArray? {
         // Fast path: most PDFs are unencrypted, and the old code paid
         // for a whole PdfDoc construction (full xref scan) on every
@@ -557,7 +581,7 @@ class Importer(
         // it can never skip a decryption the file actually needs.
         if (!PdfParser.maybeEncrypted(data)) return null
         try {
-            return PdfParser.decryptToPlainPdf(data, null)
+            return PdfParser.decryptToPlainPdf(data, null, checkCancelled)
         } catch (e: PdfUnsupportedEncryptionException) {
             throw ImportException(
                 e.message ?: "unsupported encryption",
@@ -579,7 +603,7 @@ class Importer(
                     messageFa = context.getString(R.string.import_error_pdf_password_required)
                 )
             try {
-                return PdfParser.decryptToPlainPdf(data, pw)
+                return PdfParser.decryptToPlainPdf(data, pw, checkCancelled)
                     ?: throw ImportException(
                         "PDF decryption failed",
                         messageFa = context.getString(R.string.import_error_damaged)
@@ -684,6 +708,30 @@ class Importer(
         }.getOrNull()
     }
 
+    /**
+     * Cancellable streaming SHA-256 of a STORED book file, for
+     * duplicate detection in [LibraryViewModel]. The shared
+     * [sha256OfFile] helper has no cancellation point, and duplicate
+     * detection re-reads whole stored books — a Cancel pressed
+     * during that read used to run on to the end regardless.
+     */
+    suspend fun sha256OfStoredFile(file: File): String? = withContext(Dispatchers.IO) {
+        val ioCtx = currentCoroutineContext()
+        runCatching {
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    ioCtx.ensureActive()
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    digest.update(buf, 0, n)
+                }
+            }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        }.getOrNull()
+    }
+
     private fun queryDisplayName(uri: Uri): String? = runCatching {
         context.contentResolver.query(
             uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
@@ -711,7 +759,11 @@ class Importer(
         }
     }.getOrNull()
 
-    private fun unzip(zip: File, outDir: File) {
+    private fun unzip(
+        zip: File,
+        outDir: File,
+        checkCancelled: (() -> Unit)? = null
+    ) {
         // Zip-bomb guard: read the entry count from the End-of-Central-Directory
         // record BEFORE ZipFile() materializes the whole central directory.
         if (centralDirectoryEntryCount(zip) > MAX_ZIP_ENTRIES) {
@@ -722,6 +774,7 @@ class Importer(
             var entryCount = 0
             var totalBytes = 0L
             while (entries.hasMoreElements()) {
+                checkCancelled?.invoke()
                 val entry = entries.nextElement()
                 // Zip-bomb guard: cap entry count and total uncompressed size.
                 if (++entryCount > MAX_ZIP_ENTRIES) {

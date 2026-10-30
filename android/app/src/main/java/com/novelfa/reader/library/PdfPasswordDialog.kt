@@ -55,6 +55,20 @@ class PdfPasswordPrompt {
         request = null
     }
 
+    /**
+     * Drops an outstanding password question without answering it.
+     * Needed when the import itself is cancelled while it waits for
+     * a password: cancelling the import job throws inside the
+     * importer's await, but the deferred stays incomplete and the
+     * request stays set, so without this the password dialog would
+     * sit on screen forever after the import dialog closed.
+     */
+    fun dismissPending() {
+        val pending = request
+        request = null
+        pending?.deferred?.cancel()
+    }
+
     /** A [PdfPasswordProvider] bound to this prompt, for the ViewModel. */
     val provider: PdfPasswordProvider
         get() = { fileName, retry -> ask(fileName, retry) }

@@ -175,10 +175,12 @@ object PdfParser {
         for ((idx, num) in pages.withIndex()) {
             checkCancelled?.invoke()
             pageParagraphs += runCatching { doc.pageParagraphs(num) }.getOrDefault(emptyList())
-            // Progress for the reader's loading UI: every 10th page
-            // and the last one, so a long parse does not recompose
-            // the UI once per page.
-            if (idx + 1 == pages.size || (idx + 1) % 10 == 0) {
+            // Progress for the reader's loading UI: the first page,
+            // every 10th page and the last one, so a long parse does
+            // not recompose the UI once per page — but the user also
+            // does not stare at a bare spinner until page 10 with no
+            // sign that anything is happening at all.
+            if (idx == 0 || idx + 1 == pages.size || (idx + 1) % 10 == 0) {
                 onPage?.invoke(idx + 1, pages.size)
             }
         }
@@ -253,10 +255,18 @@ object PdfParser {
      * when a given password fails, and
      * [PdfUnsupportedEncryptionException] for non-Standard handlers.
      */
-    fun decryptToPlainPdf(data: ByteArray, password: String?): ByteArray? {
+    fun decryptToPlainPdf(
+        data: ByteArray,
+        password: String?,
+        // Cancellation hook (the importer injects it): the rewrite
+        // below walks every object of the file with no suspension
+        // point, so without it Cancel could not interrupt an
+        // encrypted PDF's rewrite at all.
+        checkCancelled: (() -> Unit)? = null
+    ): ByteArray? {
         val doc = PdfDoc(data, password)
         if (doc.security == null) return null
-        return doc.writeDecryptedPdf()
+        return doc.writeDecryptedPdf(checkCancelled)
     }
 
     private class PdfDoc(private val bytes: ByteArray, private val password: String? = null) {
@@ -691,7 +701,7 @@ object PdfParser {
          * parses with this same parser sans password — which the caller
          * verifies by parsing it before storing.
          */
-        fun writeDecryptedPdf(): ByteArray {
+        fun writeDecryptedPdf(checkCancelled: (() -> Unit)? = null): ByteArray {
             val sec = security ?: return bytes
             val out = ByteArrayOutputStream()
             fun ascii(s: String) = out.write(s.toByteArray(Charsets.ISO_8859_1))
@@ -741,6 +751,7 @@ object PdfParser {
                 }
             }
             for (num in offsets.keys.sorted()) {
+                checkCancelled?.invoke()
                 if (num == 0 || num == encryptNum) continue
                 val raw = rawObject(num) ?: continue
                 val dictStart = raw.indexOf("<<")
