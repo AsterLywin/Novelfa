@@ -910,7 +910,13 @@ private fun NativeImageBookViewer(
         else -> Color(0xFF1E1E1E)
     }
     val cutMargin by prefs.comicCutMargin.collectAsState(initial = false)
-    val pageMarginDp by prefs.comicPageMargin.collectAsState(initial = 0)
+    val cropPadH by prefs.comicCropPadH.collectAsState(initial = 0)
+    val cropPadV by prefs.comicCropPadV.collectAsState(initial = 0)
+    val paddingEnabled by prefs.comicPaddingEnabled.collectAsState(initial = false)
+    // Percent 0..40 (ComicScreen's SeekBar max 400 -> ratio
+    // 0..0.4); the effective ratio is 0 when the switch is off.
+    val pageMarginPct by prefs.comicPageMargin.collectAsState(initial = 0)
+    val paddingRatio = if (paddingEnabled) pageMarginPct / 100f else 0f
     val currentChapterIndex = chapters.indexOfLast { it.firstPageIndex <= currentPage }
     val currentChapter = chapters.getOrNull(currentChapterIndex)
 
@@ -1115,7 +1121,9 @@ private fun NativeImageBookViewer(
                         unifiedWidthPx = unifiedWidthPx,
                         zoomFactor = zoomFactors[zoomIndex],
                         cropMargin = cutMargin,
-                        pageMarginDp = pageMarginDp,
+                        cropPadH = cropPadH,
+                        cropPadV = cropPadV,
+                        paddingRatio = paddingRatio,
                         pageBg = pageBg
                     )
                 }
@@ -1138,7 +1146,9 @@ private fun NativeImageBookViewer(
                             unifiedWidthPx = unifiedWidthPx,
                             zoomFactor = zoomFactors[zoomIndex],
                             cropMargin = cutMargin,
-                            pageMarginDp = pageMarginDp,
+                            cropPadH = cropPadH,
+                            cropPadV = cropPadV,
+                            paddingRatio = paddingRatio,
                             pageBg = pageBg
                         )
                     }
@@ -1211,6 +1221,7 @@ private fun NativeImageBookViewer(
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp)
                     .padding(bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -1321,22 +1332,102 @@ private fun NativeImageBookViewer(
                         }
                     )
                 }
+                // Kept margins after auto-cropping (ComicScreen's
+                // set_img_crop_auto_pad_h/v, 0..100): each side
+                // grows by this percent of the larger margin on
+                // that axis. 0 = crop exactly to the detected
+                // content box, the ComicScreen default.
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(R.string.comic_crop_pad_h),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "$cropPadH%",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Slider(
+                        value = cropPadH.toFloat(),
+                        onValueChange = { v ->
+                            scope.launch { prefs.setComicCropPadH(v.toInt()) }
+                        },
+                        valueRange = 0f..100f
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(R.string.comic_crop_pad_v),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "$cropPadV%",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Slider(
+                        value = cropPadV.toFloat(),
+                        onValueChange = { v ->
+                            scope.launch { prefs.setComicCropPadV(v.toInt()) }
+                        },
+                        valueRange = 0f..100f
+                    )
+                }
+                // Padding (ComicScreen's img_btn8 dialog): a
+                // switch plus a ratio SeekBar, 0..40, displayed
+                // as "- X%" because the image SHRINKS by that
+                // much and the freed space becomes the margin.
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = stringResource(R.string.comic_page_margin),
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    listOf(0, 8, 16, 24).forEach { margin ->
-                        TextButton(
-                            enabled = pageMarginDp != margin,
-                            onClick = {
-                                scope.launch { prefs.setComicPageMargin(margin) }
-                            }
-                        ) { Text("${margin}dp") }
+                    Switch(
+                        checked = paddingEnabled,
+                        onCheckedChange = { checked ->
+                            scope.launch { prefs.setComicPaddingEnabled(checked) }
+                        }
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(R.string.comic_page_margin),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = if (pageMarginPct == 0) {
+                                "0%"
+                            } else {
+                                "− $pageMarginPct%"
+                            },
+                            style = MaterialTheme.typography.bodyMedium
+                        )
                     }
+                    Slider(
+                        value = pageMarginPct.toFloat(),
+                        onValueChange = { v ->
+                            scope.launch { prefs.setComicPageMargin(v.toInt()) }
+                        },
+                        valueRange = 0f..40f,
+                        steps = 39,
+                        enabled = paddingEnabled
+                    )
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1349,72 +1440,6 @@ private fun NativeImageBookViewer(
             }
         }
     }
-}
-
-/**
- * ComicScreen-style cut margin, display-time only: the file is
- * never touched, and the crop is recomputed from the rendered
- * bitmap every time the page renders. The documented behaviour
- * is "automatically removes excess whitespace around the edges
- * of images, maximizing the screen space" — so: the border
- * colour is the corner pixel (comic page borders are one solid
- * colour, white or black), each side is scanned inward while
- * its whole line matches that colour, and all four sides trim
- * independently, per page (one page's wide white frame must not
- * dictate the next page's crop). Two tolerances keep JPEG
- * pages honest: a pixel matches when every channel is within
- * 16 of the border colour (compression noise), and a line
- * counts as border when 98% of its pixels match (a stray speck
- * must not stop the scan, but a real panel edge — a full line
- * of content colour — always does). Safety: if the surviving
- * box would be under a tenth of the page in either dimension
- * (a near-solid page, or a runaway scan), the original bitmap
- * is returned untouched. Runs on the IO thread beside the
- * decode; a full-bleed page costs one line read, because the
- * first line already fails the test.
- */
-private fun cropUniformBorder(src: Bitmap): Bitmap {
-    val w = src.width
-    val h = src.height
-    if (w <= 2 || h <= 2) return src
-    val ref = src.getPixel(0, 0)
-    // Channel extraction by shifts, not android.graphics.Color:
-    // this file's Color is the Compose one, which has no red()
-    // helpers, and importing both Colors would collide.
-    val refR = (ref shr 16) and 0xFF
-    val refG = (ref shr 8) and 0xFF
-    val refB = ref and 0xFF
-    fun isBorder(pixel: Int): Boolean {
-        return kotlin.math.abs(((pixel shr 16) and 0xFF) - refR) <= 16 &&
-            kotlin.math.abs(((pixel shr 8) and 0xFF) - refG) <= 16 &&
-            kotlin.math.abs((pixel and 0xFF) - refB) <= 16
-    }
-    val line = IntArray(maxOf(w, h))
-    fun horizontalLineIsBorder(y: Int): Boolean {
-        src.getPixels(line, 0, w, 0, y, w, 1)
-        var matches = 0
-        for (x in 0 until w) if (isBorder(line[x])) matches++
-        return matches * 100 >= 98 * w
-    }
-    fun verticalLineIsBorder(x: Int): Boolean {
-        src.getPixels(line, 0, 1, x, 0, 1, h)
-        var matches = 0
-        for (y in 0 until h) if (isBorder(line[y])) matches++
-        return matches * 100 >= 98 * h
-    }
-    var top = 0
-    while (top < h && horizontalLineIsBorder(top)) top++
-    var bottom = h - 1
-    while (bottom > top && horizontalLineIsBorder(bottom)) bottom--
-    var left = 0
-    while (left < w && verticalLineIsBorder(left)) left++
-    var right = w - 1
-    while (right > left && verticalLineIsBorder(right)) right--
-    val cropW = right - left + 1
-    val cropH = bottom - top + 1
-    if (cropW < w / 10 || cropH < h / 10) return src
-    if (left == 0 && top == 0 && right == w - 1 && bottom == h - 1) return src
-    return Bitmap.createBitmap(src, left, top, cropW, cropH)
 }
 
 /**
@@ -1439,21 +1464,23 @@ private fun NativePageItem(
     unifiedWidthPx: Int = 0,
     zoomFactor: Float = 1f,
     cropMargin: Boolean = false,
-    pageMarginDp: Int = 0,
+    cropPadH: Int = 0,
+    cropPadV: Int = 0,
+    paddingRatio: Float = 0f,
     pageBg: Color = Color(0xFF1E1E1E)
 ) {
-    var bitmap by remember(page, renderWidthPx, cropMargin) { mutableStateOf<Bitmap?>(null) }
-    var failed by remember(page, renderWidthPx, cropMargin) { mutableStateOf(false) }
+    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableStateOf<Bitmap?>(null) }
+    var failed by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableStateOf(false) }
     // The render error itself, shown under the failure text: the
     // old code threw it away (getOrNull), so a phone-only tester
     // could only ever report "it failed" and the cause stayed
     // invisible. The message names the entry and the reason
     // (unreadable image, missing entry, unsupported compression),
     // which is what a screenshot of this screen needs to carry.
-    var failMessage by remember(page, renderWidthPx, cropMargin) { mutableStateOf<String?>(null) }
-    var retry by remember(page, renderWidthPx, cropMargin) { mutableIntStateOf(0) }
+    var failMessage by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableStateOf<String?>(null) }
+    var retry by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableIntStateOf(0) }
 
-    LaunchedEffect(page, renderWidthPx, retry, cropMargin) {
+    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV) {
         bitmap = null
         failed = false
         failMessage = null
@@ -1461,12 +1488,21 @@ private fun NativePageItem(
             runCatching {
                 val raw = source.renderPage(page, renderWidthPx)
                 if (cropMargin) {
-                    val cropped = cropUniformBorder(raw)
-                    // createBitmap copies: the uncropped original
-                    // must go now, or every cropped page leaks a
-                    // full-size bitmap beside its crop.
-                    if (cropped !== raw) raw.recycle()
-                    cropped
+                    val rect = detectContentRect(raw, cropPadH, cropPadV)
+                    if (rect != null) {
+                        // createBitmap copies: the uncropped
+                        // original must go now, or every cropped
+                        // page leaks a full-size bitmap beside
+                        // its crop.
+                        val cropped = Bitmap.createBitmap(
+                            raw, rect.left, rect.top,
+                            rect.width(), rect.height()
+                        )
+                        raw.recycle()
+                        cropped
+                    } else {
+                        raw
+                    }
                 } else {
                     raw
                 }
@@ -1483,7 +1519,7 @@ private fun NativePageItem(
     // Same trap as the source close above: `bitmap` is state, so
     // reading it in onDispose could recycle a NEWER bitmap that a
     // re-render already assigned. Capture it in a local val.
-    DisposableEffect(page, renderWidthPx, retry, cropMargin) {
+    DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV) {
         val toRecycle = bitmap
         onDispose { toRecycle?.recycle() }
     }
@@ -1493,19 +1529,30 @@ private fun NativePageItem(
         bitmap != null -> {
             val bmp = bitmap!!
             val ratio = bmp.width.toFloat() / bmp.height.toFloat()
+            // Padding ratio (ComicScreen's set_img_padding_ratio):
+            // the displayed page shrinks — horizontally by
+            // ratio * 1.25, the 1.25 compensating a portrait
+            // screen so the inset looks even — and the freed
+            // space becomes the margin. Aspect is preserved:
+            // the width drives, the height follows the ratio.
+            // 0 means off, exactly the old behaviour.
+            val shrink = if (paddingRatio > 0f) {
+                (1f - 1.25f * paddingRatio).coerceAtLeast(0.5f)
+            } else {
+                1f
+            }
             if (paged) {
                 Column(
                     modifier = Modifier.fillMaxSize()
                         .verticalScroll(rememberScrollState())
-                        .background(pageBg)
-                        .padding(pageMarginDp.dp),
+                        .background(pageBg),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Image(
                         bitmap = bmp.asImageBitmap(),
                         contentDescription = null,
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .fillMaxWidth(shrink)
                             .aspectRatio(ratio)
                             .background(Color.White)
                     )
@@ -1527,7 +1574,7 @@ private fun NativePageItem(
                 // snaps to the unified width once, without
                 // moving the reading position.
                 val pageWidthDp = with(density) {
-                    (bmp.width * zoomFactor).toInt().toDp()
+                    (bmp.width * zoomFactor * shrink).toInt().toDp()
                 }
                 val slotWidthDp = if (unifiedWidthPx > 0) {
                     with(density) {
@@ -1545,7 +1592,6 @@ private fun NativePageItem(
                 // way to pan to its sides.
                 Box(
                     modifier = Modifier.fillMaxWidth()
-                        .padding(pageMarginDp.dp)
                         .horizontalScroll(rememberScrollState()),
                     contentAlignment = Alignment.Center
                 ) {

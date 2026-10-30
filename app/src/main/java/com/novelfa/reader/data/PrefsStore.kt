@@ -59,11 +59,22 @@ class PrefsStore(private val context: Context) {
         // old 0xFF1E1E1E letterbox), "black" or "white".
         val COMIC_BACKGROUND = stringPreferencesKey("comicBackground")
         // Native comic viewer cut margin (default off): trim the
-        // uniform border around each page at display time.
+        // detected content box around each page at display time.
         val COMIC_CUT_MARGIN = booleanPreferencesKey("comicCutMargin")
-        // Native comic viewer page margin in dp (default 0): the
-        // gap kept between the page and the screen edge.
-        val COMIC_PAGE_MARGIN = intPreferencesKey("comicPageMargin")
+        // Kept margins after auto-cropping, percent 0..100
+        // (ComicScreen's set_img_crop_auto_pad_h/v): each side
+        // grows by this percent of the larger margin on its axis.
+        val COMIC_CROP_PAD_H = intPreferencesKey("comicCropPadH")
+        val COMIC_CROP_PAD_V = intPreferencesKey("comicCropPadV")
+        // Native comic viewer padding switch (ComicScreen's
+        // set_img_padding_yn, default off).
+        val COMIC_PADDING_ENABLED = booleanPreferencesKey("comicPaddingEnabled")
+        // Padding ratio, percent 0..40 (ComicScreen's
+        // set_img_padding_ratio, SeekBar max 400 -> 0..0.4).
+        // NOTE: this key briefly held dp values (0/8/16/24) in
+        // an unshipped commit; the unit is percent now, and no
+        // APK ever shipped the dp meaning, so no migration.
+        val COMIC_PAGE_MARGIN = intPreferencesKey("comicPageMarginPct")
         // Safe (fast) import: single-read copy + deferred generated
         // covers, toggled from Settings. Default ON: it only changes
         // how import reads and when covers are built, never the book
@@ -118,7 +129,16 @@ class PrefsStore(private val context: Context) {
     /** Native comic viewer cut margin (default off). */
     val comicCutMargin: Flow<Boolean> =
         context.dataStore.data.map { it[COMIC_CUT_MARGIN] ?: false }
-    /** Native comic viewer page margin in dp (default 0). */
+    /** Kept margin after auto-cropping, horizontal percent 0..100 (default 0). */
+    val comicCropPadH: Flow<Int> =
+        context.dataStore.data.map { it[COMIC_CROP_PAD_H] ?: 0 }
+    /** Kept margin after auto-cropping, vertical percent 0..100 (default 0). */
+    val comicCropPadV: Flow<Int> =
+        context.dataStore.data.map { it[COMIC_CROP_PAD_V] ?: 0 }
+    /** Native comic viewer padding switch (default off). */
+    val comicPaddingEnabled: Flow<Boolean> =
+        context.dataStore.data.map { it[COMIC_PADDING_ENABLED] ?: false }
+    /** Native comic viewer padding ratio, percent 0..40 (default 0). */
     val comicPageMargin: Flow<Int> =
         context.dataStore.data.map { it[COMIC_PAGE_MARGIN] ?: 0 }
     /** Safe import toggle (default ON; see FAST_IMPORT). */
@@ -234,6 +254,18 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setComicCutMargin(value: Boolean) {
         context.dataStore.edit { it[COMIC_CUT_MARGIN] = value }
+    }
+
+    suspend fun setComicCropPadH(value: Int) {
+        context.dataStore.edit { it[COMIC_CROP_PAD_H] = value }
+    }
+
+    suspend fun setComicCropPadV(value: Int) {
+        context.dataStore.edit { it[COMIC_CROP_PAD_V] = value }
+    }
+
+    suspend fun setComicPaddingEnabled(value: Boolean) {
+        context.dataStore.edit { it[COMIC_PADDING_ENABLED] = value }
     }
 
     suspend fun setComicPageMargin(value: Int) {

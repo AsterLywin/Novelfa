@@ -347,4 +347,6 @@
     <string name="comic_bg_white">White</string>
     <string name="comic_cut_margin">Cut margin</string>
     <string name="comic_page_margin">Page margin</string>
+    <string name="comic_crop_pad_h">Kept margin, horizontal</string>
+    <string name="comic_crop_pad_v">Kept margin, vertical</string>
 </resources>
