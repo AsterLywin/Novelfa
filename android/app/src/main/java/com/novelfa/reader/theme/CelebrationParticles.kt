@@ -57,7 +57,13 @@ fun CelebrationParticles(
             delay(33)
         }
     }
-    Canvas(modifier = modifier.fillMaxSize()) {
+    // The caller owns the size: this used to append fillMaxSize
+    // here, and inside the XP dialog that stretched the whole
+    // dialog to nearly full screen height — a tall empty box
+    // with the text stranded at the top. The dialog now passes
+    // matchParentSize, so the canvas covers exactly the content
+    // area and the dialog wraps the content height.
+    Canvas(modifier = modifier) {
         val t = tick * 0.033f
         if (tier == CelebrationTier.ETERNITY) {
             drawHalo(Color(0xFFFFD166))

@@ -502,7 +502,17 @@ fun ReaderScreen(
         } catch (e: CancellationException) {
             // Navigation away: don't show a spurious error.
             throw e
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // Every engine failure lands here, not in a crash:
+            // an engine can fail with an Error too (an OOM while
+            // extracting a pathological archive, a stack overflow
+            // on a malformed file), and catching only Exception
+            // let those kill the app on open. The loadError
+            // screen below is the same one a corrupt book already
+            // got — the user closes the book instead of losing
+            // the app. Best-effort only: after an OOM the process
+            // may still be unhealthy, but it no longer dies on
+            // the spot.
             preparingFile = false
             loadError = true
             snackbar.showSnackbar(openErr)

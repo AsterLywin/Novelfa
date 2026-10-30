@@ -446,7 +446,9 @@ fun PdfReaderRoute(
     var resolvedFile by remember { mutableStateOf<File?>(null) }
     var resolveFailed by remember { mutableStateOf(false) }
     LaunchedEffect(bookId) {
-        val found = withContext(Dispatchers.IO) { dao.getById(bookId) }
+        val found = withContext(Dispatchers.IO) {
+            runCatching { dao.getById(bookId) }.getOrNull()
+        }
         if (found == null) missing = true else entity = found
     }
     // Resolve before routing: for in-place books the entity path
@@ -667,7 +669,9 @@ private fun NativeImageBookViewer(
     // source only when the viewer actually leaves.
     DisposableEffect(source) {
         val toClose = source
-        onDispose { toClose?.close() }
+        // A throw inside onDispose kills the app, so closing a
+        // source that is already half-dead must never throw out.
+        onDispose { runCatching { toClose?.close() } }
     }
 
     val pageCount = source?.pageCount ?: 0

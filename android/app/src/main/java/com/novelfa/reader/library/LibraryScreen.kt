@@ -1182,9 +1182,14 @@ fun LibraryScreen(
                 shape = RoundedCornerShape(20.dp)
             ) {
                 Box {
+                    // matchParentSize, not fillMaxSize: in a Box
+                    // this sizes the particle canvas to the Box
+                    // as determined by its sibling (the Column),
+                    // so the dialog wraps the content height
+                    // instead of stretching to the screen.
                     CelebrationParticles(
                         tier = up.tier,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.matchParentSize()
                     )
                     Column(modifier = Modifier.padding(24.dp)) {
                         Text(
