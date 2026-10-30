@@ -159,6 +159,16 @@ internal interface NativePageSource : Closeable {
 
     /** Renders one page to a fresh bitmap the CALLER owns. */
     fun renderPage(index: Int, targetWidthPx: Int): Bitmap
+
+    /**
+     * Native pixel size of one page (width to height), without
+     * decoding its pixels — a bounds-only decode. Used to lay
+     * out a book's pages at one unified display width. Sources
+     * that render at a caller-chosen width (PDF) return null:
+     * they have no native size to unify. Default null, so
+     * existing sources keep compiling unchanged.
+     */
+    fun nativePageSize(index: Int): Pair<Int, Int>? = null
 }
 
 internal class PdfNativeRenderer(pdfFile: File) : NativePageSource {
@@ -222,14 +232,14 @@ internal class PdfNativeRenderer(pdfFile: File) : NativePageSource {
 }
 
 /**
- * CBZ/ZIP page source: decodes one archive image on demand.
- * Manhwa pages are tall and mostly opaque, so they decode as
- * RGB_565 (half the memory of ARGB_8888) and are allowed up to
- * 16384px tall before sampling down — a tall strip must stay
- * readable, not be shrunk to a thumbnail by a PDF-sized cap.
- * Sampling is a power of two (the decoder's efficient path), so
- * the decoded width is the closest power-of-two sample at or
- * below the requested width, never an exact-width stretch.
+ * CBZ/ZIP page source: decodes one archive image on demand, at
+ * the image's NATIVE size — no sampling down to the screen
+ * width (see renderPage). Manhwa pages are tall and mostly
+ * opaque, so they decode as RGB_565 (half the memory of
+ * ARGB_8888) and are allowed up to 16384px tall / 8192px wide
+ * before sampling down — a tall strip must stay readable, not
+ * be shrunk to a thumbnail by a PDF-sized cap. Sampling is a
+ * power of two (the decoder's efficient path).
  *
  * RGB_565 is a FIRST try only, not the only try: some decoders
  * (notably WebP, the format most manhwa archives use today)
@@ -250,6 +260,21 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
     override val chapters: List<CbzChapter> =
         CbzBook.chaptersForEntries(entries)
 
+    override fun nativePageSize(index: Int): Pair<Int, Int>? {
+        synchronized(lock) {
+            if (index < 0 || index >= entries.size) return null
+            val entry = zip.getEntry(entries[index]) ?: return null
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            runCatching {
+                zip.getInputStream(entry).use { stream ->
+                    BitmapFactory.decodeStream(stream, null, bounds)
+                }
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            return bounds.outWidth to bounds.outHeight
+        }
+    }
+
     override fun renderPage(index: Int, targetWidthPx: Int): Bitmap {
         synchronized(lock) {
             if (index < 0 || index >= entries.size) {
@@ -264,8 +289,22 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
                 throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
             }
+            // Native-size decode: pages used to be sampled down
+            // to the SCREEN width (a 1600px page on a 1080px
+            // screen decoded at 800px — half its pixels thrown
+            // away before display). Now the bitmap keeps the
+            // image's own dimensions and [targetWidthPx] is
+            // ignored for comics. The ONLY sampling left is the
+            // safety ceiling: a page taller than 16384px or
+            // wider than 8192px would blow the GPU texture
+            // limit and the heap, so those — and only those —
+            // sample down just enough to fit. Display scaling
+            // (fit-width in paged mode, zoom, the unified-width
+            // slot in continuous mode) happens in the UI layer
+            // on the full bitmap, never by throwing pixels away
+            // at decode time.
             var sample = 1
-            while (bounds.outWidth / sample > targetWidthPx ||
+            while (bounds.outWidth / sample > MAX_DECODE_WIDTH ||
                 bounds.outHeight / sample > MAX_DECODE_HEIGHT
             ) {
                 sample *= 2
@@ -302,6 +341,7 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
 
     companion object {
         private const val MAX_DECODE_HEIGHT = 16384
+        private const val MAX_DECODE_WIDTH = 8192
     }
 }
 
@@ -535,8 +575,21 @@ private fun NativeImageBookViewer(
             source = opened
         }
     }
+    // THE "zip file closed" FIX: `source` is a MutableState, so
+    // reading it inside onDispose reads its CURRENT value, not
+    // the value the effect started with. When the open effect
+    // set source null -> opened, this effect restarted and its
+    // old onDispose ran AFTER the state already held the new
+    // source — closing the just-opened zip before a single page
+    // rendered (page count still showed, because the entry list
+    // is built in the constructor, before the close). Capturing
+    // the instance in a local val makes dispose close exactly
+    // the source this effect instance started with: the old
+    // effect closes null (no-op), the live one closes the real
+    // source only when the viewer actually leaves.
     DisposableEffect(source) {
-        onDispose { source?.close() }
+        val toClose = source
+        onDispose { toClose?.close() }
     }
 
     val pageCount = source?.pageCount ?: 0
@@ -566,6 +619,29 @@ private fun NativeImageBookViewer(
                 }
             }
             totalChaptersFixed = true
+        }
+    }
+
+    // Unified display width for continuous mode: the widest
+    // native page width in the book (device pixels). Pages of
+    // different widths are then shown in slots of this one
+    // width, each image centered at its own native size — no
+    // bitmap is ever resampled or stretched to fill the slot.
+    // Computed in the background once the source is open; 0
+    // means "not known yet" (or a source with no native sizes,
+    // like PDF), in which case items fall back to their own
+    // width. A width change never moves the reading position:
+    // only item widths change, never their heights or order.
+    var unifiedWidthPx by remember { mutableStateOf(0) }
+    LaunchedEffect(source) {
+        val src = source ?: return@LaunchedEffect
+        unifiedWidthPx = withContext(Dispatchers.IO) {
+            var max = 0
+            for (i in 0 until src.pageCount) {
+                val w = runCatching { src.nativePageSize(i)?.first ?: 0 }.getOrDefault(0)
+                if (w > max) max = w
+            }
+            max
         }
     }
 
@@ -903,7 +979,9 @@ private fun NativeImageBookViewer(
                         source = activeSource,
                         page = page,
                         renderWidthPx = renderWidthPx,
-                        paged = true
+                        paged = true,
+                        unifiedWidthPx = unifiedWidthPx,
+                        zoomFactor = zoomFactors[zoomIndex]
                     )
                 }
             }
@@ -921,7 +999,9 @@ private fun NativeImageBookViewer(
                             source = activeSource,
                             page = page,
                             renderWidthPx = renderWidthPx,
-                            paged = false
+                            paged = false,
+                            unifiedWidthPx = unifiedWidthPx,
+                            zoomFactor = zoomFactors[zoomIndex]
                         )
                     }
                 }
@@ -996,7 +1076,9 @@ private fun NativePageItem(
     source: NativePageSource,
     page: Int,
     renderWidthPx: Int,
-    paged: Boolean
+    paged: Boolean,
+    unifiedWidthPx: Int = 0,
+    zoomFactor: Float = 1f
 ) {
     var bitmap by remember(page, renderWidthPx) { mutableStateOf<Bitmap?>(null) }
     var failed by remember(page, renderWidthPx) { mutableStateOf(false) }
@@ -1024,8 +1106,12 @@ private fun NativePageItem(
     }
     // Recycle exactly the bitmap this item rendered, and only when
     // this item (page + width + retry generation) leaves composition.
+    // Same trap as the source close above: `bitmap` is state, so
+    // reading it in onDispose could recycle a NEWER bitmap that a
+    // re-render already assigned. Capture it in a local val.
     DisposableEffect(page, renderWidthPx, retry) {
-        onDispose { bitmap?.recycle() }
+        val toRecycle = bitmap
+        onDispose { toRecycle?.recycle() }
     }
 
     val density = LocalDensity.current
@@ -1050,19 +1136,56 @@ private fun NativePageItem(
                     )
                 }
             } else {
+                // Continuous mode: the image is shown at its
+                // native pixel size (times the zoom factor —
+                // an explicit user enlargement, drawn by the
+                // GPU, not a re-decode), centered in a slot of
+                // the book's unified width. A narrower page
+                // therefore sits centered in the same-width
+                // frame as the widest page, with empty space
+                // at its sides — never stretched, never
+                // resampled, never cropped. Its height stays
+                // its own native height, so the column keeps
+                // each page's proportions. Until the unified
+                // width is computed the slot is the page's own
+                // width (the old behaviour); the slot then
+                // snaps to the unified width once, without
+                // moving the reading position.
+                val pageWidthDp = with(density) {
+                    (bmp.width * zoomFactor).toInt().toDp()
+                }
+                val slotWidthDp = if (unifiedWidthPx > 0) {
+                    with(density) {
+                        (unifiedWidthPx * zoomFactor).toInt().toDp()
+                    }
+                } else {
+                    pageWidthDp
+                }
+                // Two boxes, deliberately: the outer one is
+                // the screen-wide scroll viewport (a page wider
+                // than the screen must stay pannable), the
+                // inner one is the unified-width slot the image
+                // is centered in. A single slot-wide box would
+                // clip a wide page at the list viewport with no
+                // way to pan to its sides.
                 Box(
                     modifier = Modifier.fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
                     contentAlignment = Alignment.Center
                 ) {
-                    Image(
-                        bitmap = bmp.asImageBitmap(),
-                        contentDescription = null,
-                        modifier = Modifier
-                            .width(with(density) { bmp.width.toDp() })
-                            .aspectRatio(ratio)
-                            .background(Color.White)
-                    )
+                    Box(
+                        modifier = Modifier.width(slotWidthDp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            bitmap = bmp.asImageBitmap(),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .width(pageWidthDp)
+                                .aspectRatio(ratio)
+                                .background(Color.White)
+                        )
+                    }
                 }
             }
         }
