@@ -1731,6 +1731,11 @@ private fun NativeImageBookViewer(
     }
 }
 
+/** Pixel budget for the software image steps (resize, sharpen):
+ * above this, the transient IntArray copies would risk an OOM
+ * on tall pages, so the native bitmap is kept for GPU display. */
+private const val MAX_SOFTWARE_PIXELS = 8_000_000L
+
 /**
  * One original page. The bitmap is owned by THIS item: rendered on
  * IO when the item is composed, recycled when it leaves
@@ -1821,7 +1826,21 @@ private fun NativePageItem(
                 // still far sharper than resampling from the
                 // wrong size, and it keeps the padding slider
                 // from re-rendering on every drag.
-                if (paged) {
+                // MEMORY BUDGET: every software step below
+                // materializes 2-3 full-size IntArray copies
+                // beside the bitmap itself. On a tall manhwa
+                // strip (1200x12000 = 14M pixels) that is
+                // ~170MB transient on top of the pager's
+                // preloaded neighbours — enough to OOM the
+                // heap, and runCatching turns the OOM into a
+                // failed page instead of an image. So software
+                // steps run only up to 8M pixels; bigger pages
+                // keep the native bitmap for the GPU path, which
+                // is exactly what the build before this change
+                // did. The budget is re-checked per step, on
+                // the current size: a page resized down first
+                // is small by the time sharpen runs.
+                if (paged && current.width.toLong() * current.height <= MAX_SOFTWARE_PIXELS) {
                     if (fitMode == "width" && screenWidthPx > 0 &&
                         current.width != screenWidthPx
                     ) {
@@ -1854,7 +1873,9 @@ private fun NativePageItem(
                         }
                     }
                 }
-                if (sharpen && sharpenLevel > 0) {
+                if (sharpen && sharpenLevel > 0 &&
+                    current.width.toLong() * current.height <= MAX_SOFTWARE_PIXELS
+                ) {
                     val sharp = sharpenUnsharp(current, sharpenLevel)
                     if (sharp !== current) {
                         current.recycle()
