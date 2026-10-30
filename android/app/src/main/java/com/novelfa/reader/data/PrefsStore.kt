@@ -75,6 +75,23 @@ class PrefsStore(private val context: Context) {
         // an unshipped commit; the unit is percent now, and no
         // APK ever shipped the dp meaning, so no migration.
         val COMIC_PAGE_MARGIN = intPreferencesKey("comicPageMarginPct")
+        // Native comic viewer page fit (ComicScreen's
+        // set_img_fitscreen: 0 off / 1 height / 2 width / 3
+        // stretch): "width" (default, the old behaviour), "height",
+        // "original" (native pixels, pannable both ways) or
+        // "stretch" (fill the screen, aspect ignored). Paged mode
+        // only; continuous mode always shows native size.
+        val COMIC_FIT_MODE = stringPreferencesKey("comicFitMode")
+        // Native comic viewer page direction (ComicScreen's
+        // set_img_page_direction_pager): true (default) = right to
+        // left, the reading direction of the translated books this
+        // viewer was built for; false = left to right.
+        val COMIC_DIRECTION_RTL = booleanPreferencesKey("comicDirectionRtl")
+        // Native comic viewer sharpen (ComicScreen's
+        // set_img_filter_sharp_yn, default off): unsharp masking
+        // after crop/upscale, strength = level / 10.
+        val COMIC_SHARPEN = booleanPreferencesKey("comicSharpen")
+        val COMIC_SHARPEN_LEVEL = intPreferencesKey("comicSharpenLevel")
         // Safe (fast) import: single-read copy + deferred generated
         // covers, toggled from Settings. Default ON: it only changes
         // how import reads and when covers are built, never the book
@@ -141,6 +158,14 @@ class PrefsStore(private val context: Context) {
     /** Native comic viewer padding ratio, percent 0..40 (default 0). */
     val comicPageMargin: Flow<Int> =
         context.dataStore.data.map { it[COMIC_PAGE_MARGIN] ?: 0 }
+    val comicFitMode: Flow<String> =
+        context.dataStore.data.map { it[COMIC_FIT_MODE] ?: "width" }
+    val comicDirectionRtl: Flow<Boolean> =
+        context.dataStore.data.map { it[COMIC_DIRECTION_RTL] ?: true }
+    val comicSharpen: Flow<Boolean> =
+        context.dataStore.data.map { it[COMIC_SHARPEN] ?: false }
+    val comicSharpenLevel: Flow<Int> =
+        context.dataStore.data.map { it[COMIC_SHARPEN_LEVEL] ?: 5 }
     /** Safe import toggle (default ON; see FAST_IMPORT). */
     val fastImport: Flow<Boolean> = context.dataStore.data.map { it[FAST_IMPORT] ?: true }
     /** In-place import toggle (default OFF; see IN_PLACE_IMPORT). */
@@ -270,6 +295,18 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setComicPageMargin(value: Int) {
         context.dataStore.edit { it[COMIC_PAGE_MARGIN] = value }
+    }
+    suspend fun setComicFitMode(value: String) {
+        context.dataStore.edit { it[COMIC_FIT_MODE] = value }
+    }
+    suspend fun setComicDirectionRtl(value: Boolean) {
+        context.dataStore.edit { it[COMIC_DIRECTION_RTL] = value }
+    }
+    suspend fun setComicSharpen(value: Boolean) {
+        context.dataStore.edit { it[COMIC_SHARPEN] = value }
+    }
+    suspend fun setComicSharpenLevel(value: Int) {
+        context.dataStore.edit { it[COMIC_SHARPEN_LEVEL] = value }
     }
 
     suspend fun setFastImport(value: Boolean) {

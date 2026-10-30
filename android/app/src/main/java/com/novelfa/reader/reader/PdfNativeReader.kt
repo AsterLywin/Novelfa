@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -70,6 +71,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
@@ -351,6 +353,18 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
                             BitmapFactory.Options().apply {
                                 inSampleSize = sample
                                 inPreferredConfig = config
+                                // Quality over speed: ComicScreen's
+                                // tile decoder sets this, and it is
+                                // the one flag the JPEG decoder
+                                // actually listens to — fancy
+                                // chroma upsampling and a more
+                                // accurate IDCT instead of the fast
+                                // approximations. On line art and
+                                // flat manhwa colour the difference
+                                // is visible; the cost is decode
+                                // time on the IO thread, which is
+                                // where this already runs.
+                                inPreferQualityOverSpeed = true
                             }
                         )
                     }
@@ -866,6 +880,9 @@ private fun NativeImageBookViewer(
     val screenWidthPx = with(density) {
         LocalConfiguration.current.screenWidthDp.dp.toPx().toInt()
     }
+    val screenHeightPx = with(density) {
+        LocalConfiguration.current.screenHeightDp.dp.toPx().toInt()
+    }
     // Zoom steps: fit-width, 1.5x, 2x. Never below fit-width: a page
     // smaller than the screen is a wasted screen, not a feature.
     val zoomFactors = remember { listOf(1f, 1.5f, 2f) }
@@ -917,6 +934,13 @@ private fun NativeImageBookViewer(
     // 0..0.4); the effective ratio is 0 when the switch is off.
     val pageMarginPct by prefs.comicPageMargin.collectAsState(initial = 0)
     val paddingRatio = if (paddingEnabled) pageMarginPct / 100f else 0f
+    // Page fit, direction and sharpen (ComicScreen's fitscreen /
+    // page-direction / filter-sharp settings, same defaults):
+    // fit-width, right-to-left, sharpen off.
+    val fitMode by prefs.comicFitMode.collectAsState(initial = "width")
+    val directionRtl by prefs.comicDirectionRtl.collectAsState(initial = true)
+    val sharpen by prefs.comicSharpen.collectAsState(initial = false)
+    val sharpenLevel by prefs.comicSharpenLevel.collectAsState(initial = 5)
     val currentChapterIndex = chapters.indexOfLast { it.firstPageIndex <= currentPage }
     val currentChapter = chapters.getOrNull(currentChapterIndex)
 
@@ -1035,15 +1059,17 @@ private fun NativeImageBookViewer(
             ) {
                 BottomAppBar {
                     // Arrows follow the reading flow, not the Latin
-                    // alphabet: in this RTL layout the previous page
-                    // sits to the right and the next page to the
-                    // left, so prev points right and next left.
+                    // alphabet: right-to-left (the default) puts the
+                    // previous page on the right and the next page on
+                    // the left, so prev points right and next left;
+                    // left-to-right flips both sides. The actions
+                    // never change, only the sides they sit on.
                     IconButton(
                         enabled = currentPage > 0,
                         onClick = { stepTo(currentPage - 1) }
                     ) {
                         AppIcon(
-                            AppIconKind.ArrowForward,
+                            if (directionRtl) AppIconKind.ArrowForward else AppIconKind.ArrowBack,
                             tint = if (currentPage > 0) {
                                 LocalContentColor.current
                             } else {
@@ -1090,7 +1116,7 @@ private fun NativeImageBookViewer(
                         onClick = { stepTo(currentPage + 1) }
                     ) {
                         AppIcon(
-                            AppIconKind.ArrowBack,
+                            if (directionRtl) AppIconKind.ArrowBack else AppIconKind.ArrowForward,
                             tint = if (currentPage < pageCount - 1) {
                                 LocalContentColor.current
                             } else {
@@ -1147,6 +1173,12 @@ private fun NativeImageBookViewer(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize()
                         .background(pageBg),
+                    // Page direction (ComicScreen's
+                    // set_img_page_direction_pager): the pager
+                    // already reads right-to-left in this RTL
+                    // layout, so left-to-right is the reversed
+                    // layout, not a different component.
+                    reverseLayout = !directionRtl,
                     beyondViewportPageCount = 1
                 ) { page ->
                     NativePageItem(
@@ -1160,7 +1192,12 @@ private fun NativeImageBookViewer(
                         cropPadH = cropPadH,
                         cropPadV = cropPadV,
                         paddingRatio = paddingRatio,
-                        pageBg = pageBg
+                        pageBg = pageBg,
+                        screenWidthPx = screenWidthPx,
+                        screenHeightPx = screenHeightPx,
+                        fitMode = fitMode,
+                        sharpen = sharpen,
+                        sharpenLevel = sharpenLevel
                     )
                 }
             }
@@ -1185,7 +1222,12 @@ private fun NativeImageBookViewer(
                             cropPadH = cropPadH,
                             cropPadV = cropPadV,
                             paddingRatio = paddingRatio,
-                            pageBg = pageBg
+                            pageBg = pageBg,
+                            screenWidthPx = screenWidthPx,
+                            screenHeightPx = screenHeightPx,
+                            fitMode = fitMode,
+                            sharpen = sharpen,
+                            sharpenLevel = sharpenLevel
                         )
                     }
                 }
@@ -1557,6 +1599,125 @@ private fun NativeImageBookViewer(
                         enabled = paddingEnabled
                     )
                 }
+                // Page fit (ComicScreen's fitscreen menu: off /
+                // height / width / stretch). Paged mode only —
+                // continuous mode always shows native size, so
+                // these buttons are dimmed there; the mode row
+                // above switches to paged. "Original" is
+                // ComicScreen's off: native pixels, pannable.
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = stringResource(R.string.comic_fit_mode),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            enabled = isPaged && fitMode != "width",
+                            onClick = {
+                                scope.launch { prefs.setComicFitMode("width") }
+                            }
+                        ) {
+                            Text(stringResource(R.string.comic_fit_width))
+                        }
+                        TextButton(
+                            enabled = isPaged && fitMode != "height",
+                            onClick = {
+                                scope.launch { prefs.setComicFitMode("height") }
+                            }
+                        ) {
+                            Text(stringResource(R.string.comic_fit_height))
+                        }
+                        TextButton(
+                            enabled = isPaged && fitMode != "original",
+                            onClick = {
+                                scope.launch { prefs.setComicFitMode("original") }
+                            }
+                        ) {
+                            Text(stringResource(R.string.comic_fit_original))
+                        }
+                        TextButton(
+                            enabled = isPaged && fitMode != "stretch",
+                            onClick = {
+                                scope.launch { prefs.setComicFitMode("stretch") }
+                            }
+                        ) {
+                            Text(stringResource(R.string.comic_fit_stretch))
+                        }
+                    }
+                }
+                // Page direction (ComicScreen's direction dialog,
+                // pager half): right-to-left is the default for
+                // the translated books this viewer was built for;
+                // left-to-right flips the pager and both bottom
+                // arrows. Paged mode only — continuous scroll
+                // has no page order to flip.
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = stringResource(R.string.comic_direction),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            enabled = isPaged && !directionRtl,
+                            onClick = {
+                                scope.launch { prefs.setComicDirectionRtl(true) }
+                            }
+                        ) {
+                            Text(stringResource(R.string.comic_direction_rtl))
+                        }
+                        TextButton(
+                            enabled = isPaged && directionRtl,
+                            onClick = {
+                                scope.launch { prefs.setComicDirectionRtl(false) }
+                            }
+                        ) {
+                            Text(stringResource(R.string.comic_direction_ltr))
+                        }
+                    }
+                }
+                // Sharpen (ComicScreen's filter dialog: sharp
+                // checkbox + level SeekBar). Off by default, like
+                // there; the level slider is dimmed while off.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.comic_sharpen),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Switch(
+                        checked = sharpen,
+                        onCheckedChange = { checked ->
+                            scope.launch { prefs.setComicSharpen(checked) }
+                        }
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(R.string.comic_sharpen),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "$sharpenLevel",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Slider(
+                        value = sharpenLevel.toFloat(),
+                        onValueChange = { v ->
+                            scope.launch { prefs.setComicSharpenLevel(v.toInt()) }
+                        },
+                        valueRange = 0f..10f,
+                        steps = 9,
+                        enabled = sharpen
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
@@ -1595,45 +1756,99 @@ private fun NativePageItem(
     cropPadH: Int = 0,
     cropPadV: Int = 0,
     paddingRatio: Float = 0f,
-    pageBg: Color = Color(0xFF1E1E1E)
+    pageBg: Color = Color(0xFF1E1E1E),
+    screenWidthPx: Int = 0,
+    screenHeightPx: Int = 0,
+    fitMode: String = "width",
+    sharpen: Boolean = false,
+    sharpenLevel: Int = 0
 ) {
-    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableStateOf<Bitmap?>(null) }
-    var failed by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableStateOf(false) }
+    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableStateOf<Bitmap?>(null) }
+    var failed by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableStateOf(false) }
     // The render error itself, shown under the failure text: the
     // old code threw it away (getOrNull), so a phone-only tester
     // could only ever report "it failed" and the cause stayed
     // invisible. The message names the entry and the reason
     // (unreadable image, missing entry, unsupported compression),
     // which is what a screenshot of this screen needs to carry.
-    var failMessage by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableStateOf<String?>(null) }
-    var retry by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV) { mutableIntStateOf(0) }
+    var failMessage by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableStateOf<String?>(null) }
+    var retry by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableIntStateOf(0) }
 
-    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV) {
+    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) {
         bitmap = null
         failed = false
         failMessage = null
         val rendered = withContext(Dispatchers.IO) {
             runCatching {
-                val raw = source.renderPage(page, renderWidthPx)
+                // The pipeline mirrors ComicScreen's per-page
+                // filter order: crop, then upscale, then sharpen.
+                // Each step replaces the bitmap and recycles the
+                // previous one, so only one full-size bitmap per
+                // item is ever alive.
+                var current = source.renderPage(page, renderWidthPx)
                 if (cropMargin) {
-                    val rect = detectContentRect(raw, cropPadH, cropPadV)
+                    val rect = detectContentRect(current, cropPadH, cropPadV)
                     if (rect != null) {
                         // createBitmap copies: the uncropped
                         // original must go now, or every cropped
                         // page leaks a full-size bitmap beside
                         // its crop.
                         val cropped = Bitmap.createBitmap(
-                            raw, rect.left, rect.top,
+                            current, rect.left, rect.top,
                             rect.width(), rect.height()
                         )
-                        raw.recycle()
-                        cropped
-                    } else {
-                        raw
+                        current.recycle()
+                        current = cropped
                     }
-                } else {
-                    raw
                 }
+                // Upscale: only when the page is SMALLER than its
+                // display size in a fit mode that sizes the page
+                // to the screen (width or height). A bigger page
+                // is never resampled in software — it is drawn
+                // from its own pixels, and the GPU handles the
+                // downscale. Padding's shrink is ignored here on
+                // purpose: upscaling to the full screen size and
+                // letting the GPU shave the padding off is still
+                // far sharper than a bilinear stretch from the
+                // small original, and it keeps the padding slider
+                // from re-rendering on every drag.
+                if (paged) {
+                    if (fitMode == "width" && screenWidthPx > 0 &&
+                        current.width < screenWidthPx
+                    ) {
+                        val targetH =
+                            (screenWidthPx * current.height / current.width)
+                                .coerceAtLeast(1)
+                        val up = upscaleBicubic(
+                            current, screenWidthPx, targetH
+                        )
+                        if (up !== current) {
+                            current.recycle()
+                            current = up
+                        }
+                    } else if (fitMode == "height" && screenHeightPx > 0 &&
+                        current.height < screenHeightPx
+                    ) {
+                        val targetW =
+                            (screenHeightPx * current.width / current.height)
+                                .coerceAtLeast(1)
+                        val up = upscaleBicubic(
+                            current, targetW, screenHeightPx
+                        )
+                        if (up !== current) {
+                            current.recycle()
+                            current = up
+                        }
+                    }
+                }
+                if (sharpen && sharpenLevel > 0) {
+                    val sharp = sharpenUnsharp(current, sharpenLevel)
+                    if (sharp !== current) {
+                        current.recycle()
+                        current = sharp
+                    }
+                }
+                current
             }
         }
         rendered.onSuccess { bitmap = it }
@@ -1647,7 +1862,7 @@ private fun NativePageItem(
     // Same trap as the source close above: `bitmap` is state, so
     // reading it in onDispose could recycle a NEWER bitmap that a
     // re-render already assigned. Capture it in a local val.
-    DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV) {
+    DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) {
         val toRecycle = bitmap
         onDispose { toRecycle?.recycle() }
     }
@@ -1670,20 +1885,94 @@ private fun NativePageItem(
                 1f
             }
             if (paged) {
-                Column(
-                    modifier = Modifier.fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .background(pageBg),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Image(
-                        bitmap = bmp.asImageBitmap(),
-                        contentDescription = null,
-                        modifier = Modifier
-                            .fillMaxWidth(shrink)
-                            .aspectRatio(ratio)
-                            .background(Color.White)
-                    )
+                // Page fit (ComicScreen's fitscreen menu). Width
+                // is the old behaviour; height sizes the page to
+                // the viewport height and pans sideways when the
+                // page is wider; original shows native pixels
+                // (times the zoom factor) and pans both ways;
+                // stretch fills the screen and ignores aspect.
+                // Zoom is deliberately ignored by width/height/
+                // stretch: those modes size the page to the
+                // screen, so a zoom factor would only fight the
+                // fit. Original is the mode where zoom means
+                // something, and it applies there.
+                when (fitMode) {
+                    "height" -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize()
+                                .horizontalScroll(rememberScrollState())
+                                .background(pageBg),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                bitmap = bmp.asImageBitmap(),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .fillMaxHeight(shrink)
+                                    .aspectRatio(ratio)
+                                    .background(Color.White)
+                            )
+                        }
+                    }
+                    "original" -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize()
+                                .horizontalScroll(rememberScrollState())
+                                .background(pageBg),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .verticalScroll(rememberScrollState()),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                val nativeWidthDp = with(density) {
+                                    (bmp.width * zoomFactor * shrink).toInt().toDp()
+                                }
+                                Image(
+                                    bitmap = bmp.asImageBitmap(),
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .width(nativeWidthDp)
+                                        .aspectRatio(ratio)
+                                        .background(Color.White)
+                                )
+                            }
+                        }
+                    }
+                    "stretch" -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize()
+                                .background(pageBg),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                bitmap = bmp.asImageBitmap(),
+                                contentDescription = null,
+                                contentScale = ContentScale.FillBounds,
+                                modifier = Modifier
+                                    .fillMaxSize(shrink)
+                                    .background(Color.White)
+                            )
+                        }
+                    }
+                    else -> {
+                        Column(
+                            modifier = Modifier.fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .background(pageBg),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Image(
+                                bitmap = bmp.asImageBitmap(),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .fillMaxWidth(shrink)
+                                    .aspectRatio(ratio)
+                                    .background(Color.White)
+                            )
+                        }
+                    }
                 }
             } else {
                 // Continuous mode: the image is shown at its

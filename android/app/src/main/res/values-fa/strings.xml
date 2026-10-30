@@ -349,4 +349,13 @@
     <string name="comic_page_margin">فاصله از حاشیه</string>
     <string name="comic_crop_pad_h">حاشیه‌ی نگه‌داشته‌شده، افقی</string>
     <string name="comic_crop_pad_v">حاشیه‌ی نگه‌داشته‌شده، عمودی</string>
+    <string name="comic_fit_mode">نحوه‌ی جای‌گیری صفحه</string>
+    <string name="comic_fit_width">پهنا به اندازه‌ی صفحه</string>
+    <string name="comic_fit_height">ارتفاع به اندازه‌ی صفحه</string>
+    <string name="comic_fit_original">اندازه‌ی واقعی</string>
+    <string name="comic_fit_stretch">کشیدن تا پر شدن</string>
+    <string name="comic_direction">جهت ورق‌زدن</string>
+    <string name="comic_direction_rtl">راست به چپ</string>
+    <string name="comic_direction_ltr">چپ به راست</string>
+    <string name="comic_sharpen">تیز کردن تصویر</string>
 </resources>

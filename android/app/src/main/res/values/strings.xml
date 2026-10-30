@@ -349,4 +349,13 @@
     <string name="comic_page_margin">Page margin</string>
     <string name="comic_crop_pad_h">Kept margin, horizontal</string>
     <string name="comic_crop_pad_v">Kept margin, vertical</string>
+    <string name="comic_fit_mode">Page fit</string>
+    <string name="comic_fit_width">Fit width</string>
+    <string name="comic_fit_height">Fit height</string>
+    <string name="comic_fit_original">Original size</string>
+    <string name="comic_fit_stretch">Stretch to fill</string>
+    <string name="comic_direction">Page direction</string>
+    <string name="comic_direction_rtl">Right to left</string>
+    <string name="comic_direction_ltr">Left to right</string>
+    <string name="comic_sharpen">Sharpen image</string>
 </resources>
