@@ -4,12 +4,21 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,6 +34,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
@@ -32,6 +43,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
@@ -39,6 +51,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -52,8 +65,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -861,117 +878,217 @@ private fun NativeImageBookViewer(
         }
     }
 
+    // ComicScreen-style chrome. The old bars were always visible
+    // and crowded: five text buttons up top, two more below, on a
+    // phone that is mostly page. Now a tap anywhere on the page
+    // hides both bars (reading goes full-screen) and the next tap
+    // brings them back. Tap only: a swipe still turns or scrolls
+    // the page, because the pager/list consumes the drag before
+    // this detector's up-event can fire — so hiding never eats a
+    // page turn. The top bar keeps only icons (chapters, mode,
+    // settings); zoom and fit-width moved into the settings sheet,
+    // where text buttons have room.
+    var chromeVisible by remember { mutableStateOf(true) }
+    var showViewSettings by remember { mutableStateOf(false) }
+    val viewSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Scrub preview, not a live move (ComicScreen's page move
+    // preview, number-only: a thumbnail would decode a page per
+    // scrub step). While the thumb is dragged the indicator shows
+    // the page it WOULD land on and nothing else moves — no page
+    // flips, no progress saves, no XP entries for skipped pages.
+    // Releasing the thumb jumps there through the same jump the
+    // buttons use.
+    var sliderPreview by remember { mutableStateOf<Int?>(null) }
+    // Page background (letterbox around narrower pages): the old
+    // dark grey, black, or white — persisted like the reading
+    // mode, so the choice survives reopening the book.
+    val savedBgKey by prefs.comicBackground.collectAsState(initial = "dark")
+    val pageBg = when (savedBgKey) {
+        "black" -> Color.Black
+        "white" -> Color.White
+        else -> Color(0xFF1E1E1E)
+    }
+    val currentChapterIndex = chapters.indexOfLast { it.firstPageIndex <= currentPage }
+    val currentChapter = chapters.getOrNull(currentChapterIndex)
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = book.title,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = { closeViewer() }) {
-                        AppIcon(
-                            AppIconKind.ArrowBack,
-                            tint = LocalContentColor.current,
-                            size = 18.dp
-                        )
-                    }
-                },
-                actions = {
-                    if (showChapterList) {
-                        TextButton(onClick = { showChapters = true }) {
-                            Text(stringResource(R.string.chapters))
+            AnimatedVisibility(
+                visible = chromeVisible,
+                enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+            ) {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(
+                                text = book.title,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (currentChapter != null) {
+                                Text(
+                                    text = currentChapter.title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = LocalContentColor.current.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = { closeViewer() }) {
+                            AppIcon(
+                                AppIconKind.ArrowBack,
+                                tint = LocalContentColor.current,
+                                size = 18.dp
+                            )
+                        }
+                    },
+                    actions = {
+                        if (showChapterList) {
+                            IconButton(onClick = { showChapters = true }) {
+                                AppIcon(
+                                    AppIconKind.List,
+                                    tint = LocalContentColor.current,
+                                    size = 19.dp
+                                )
+                            }
+                        }
+                        // Icon shows the mode the tap SWITCHES to:
+                        // a scroll glyph while paged, a pages glyph
+                        // while continuous.
+                        IconButton(onClick = { toggleMode() }) {
+                            AppIcon(
+                                if (isPaged) {
+                                    AppIconKind.Scroll
+                                } else {
+                                    AppIconKind.Pages
+                                },
+                                tint = LocalContentColor.current,
+                                size = 19.dp
+                            )
+                        }
+                        IconButton(onClick = { showViewSettings = true }) {
+                            AppIcon(
+                                AppIconKind.Gear,
+                                tint = LocalContentColor.current,
+                                size = 19.dp
+                            )
                         }
                     }
-                    TextButton(onClick = { toggleMode() }) {
-                        Text(
-                            stringResource(
-                                if (isPaged) {
-                                    R.string.mode_horizontal
-                                } else {
-                                    R.string.mode_vertical_continuous
-                                }
-                            )
-                        )
-                    }
-                    TextButton(
-                        enabled = zoomIndex > 0,
-                        onClick = { zoomIndex-- }
-                    ) { Text(stringResource(R.string.pdf_zoom_out)) }
-                    TextButton(
-                        enabled = zoomIndex < zoomFactors.lastIndex,
-                        onClick = { zoomIndex++ }
-                    ) { Text(stringResource(R.string.pdf_zoom_in)) }
-                    TextButton(
-                        enabled = zoomIndex != 0,
-                        onClick = { zoomIndex = 0 }
-                    ) { Text(stringResource(R.string.pdf_fit_width)) }
-                }
-            )
+                )
+            }
         },
         bottomBar = {
-            if (pageCount > 0) {
+            AnimatedVisibility(
+                visible = chromeVisible && pageCount > 0,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+            ) {
                 BottomAppBar {
-                    TextButton(
+                    // Arrows follow the reading flow, not the Latin
+                    // alphabet: in this RTL layout the previous page
+                    // sits to the right and the next page to the
+                    // left, so prev points right and next left.
+                    IconButton(
                         enabled = currentPage > 0,
                         onClick = { stepTo(currentPage - 1) }
-                    ) { Text(stringResource(R.string.pdf_prev_page)) }
+                    ) {
+                        AppIcon(
+                            AppIconKind.ArrowForward,
+                            tint = if (currentPage > 0) {
+                                LocalContentColor.current
+                            } else {
+                                LocalContentColor.current.copy(alpha = 0.38f)
+                            },
+                            size = 19.dp
+                        )
+                    }
                     Column(
                         modifier = Modifier.weight(1f),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        val preview = sliderPreview
                         Text(
                             text = stringResource(
                                 R.string.page_indicator,
-                                currentPage + 1, pageCount
+                                (preview ?: currentPage) + 1, pageCount
                             ),
                             style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Center,
+                            color = if (preview != null) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                LocalContentColor.current
+                            }
                         )
                         Slider(
-                            value = currentPage.toFloat(),
+                            value = (sliderPreview ?: currentPage).toFloat(),
                             onValueChange = { v ->
-                                currentPage = v.toInt().coerceIn(0, pageCount - 1)
+                                sliderPreview =
+                                    v.toInt().coerceIn(0, pageCount - 1)
                             },
                             onValueChangeFinished = {
-                                jumpTo(currentPage)
+                                val target = sliderPreview
+                                sliderPreview = null
+                                if (target != null) jumpTo(target)
                             },
                             valueRange = 0f..(pageCount - 1).coerceAtLeast(0).toFloat(),
                             steps = (pageCount - 2).coerceIn(0, 1000)
                         )
                     }
-                    TextButton(
+                    IconButton(
                         enabled = currentPage < pageCount - 1,
                         onClick = { stepTo(currentPage + 1) }
-                    ) { Text(stringResource(R.string.pdf_next_page)) }
+                    ) {
+                        AppIcon(
+                            AppIconKind.ArrowBack,
+                            tint = if (currentPage < pageCount - 1) {
+                                LocalContentColor.current
+                            } else {
+                                LocalContentColor.current.copy(alpha = 0.38f)
+                            },
+                            size = 19.dp
+                        )
+                    }
                 }
             }
         }
     ) { padding ->
-        when {
-            openError -> {
-                Box(
-                    modifier = Modifier.fillMaxSize().padding(padding),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(stringResource(errorRes))
-                        Spacer(Modifier.height(12.dp))
-                        TextButton(onClick = onClose) {
-                            Text(stringResource(R.string.close))
+        // The tap surface for the chrome toggle: the whole page
+        // area, padded by the Scaffold's bars while they are
+        // visible, full-screen once they hide. Buttons inside
+        // (retry, close) consume their own taps, so a tap on one
+        // never toggles the chrome by accident.
+        Box(
+            modifier = Modifier.fillMaxSize().padding(padding)
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { chromeVisible = !chromeVisible })
+                }
+        ) {
+            when {
+                openError -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(stringResource(errorRes))
+                            Spacer(Modifier.height(12.dp))
+                            TextButton(onClick = onClose) {
+                                Text(stringResource(R.string.close))
+                            }
                         }
                     }
                 }
-            }
-            source == null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize().padding(padding),
-                    contentAlignment = Alignment.Center
-                ) {
+                source == null -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
                         Spacer(Modifier.height(12.dp))
@@ -983,8 +1100,8 @@ private fun NativeImageBookViewer(
                 val activeSource = source!!
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.fillMaxSize().padding(padding)
-                        .background(Color(0xFF1E1E1E)),
+                    modifier = Modifier.fillMaxSize()
+                        .background(pageBg),
                     beyondViewportPageCount = 1
                 ) { page ->
                     NativePageItem(
@@ -1001,8 +1118,8 @@ private fun NativeImageBookViewer(
                 val activeSource = source!!
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize().padding(padding)
-                        .background(Color(0xFF1E1E1E)),
+                    modifier = Modifier.fillMaxSize()
+                        .background(pageBg),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -1017,6 +1134,7 @@ private fun NativeImageBookViewer(
                         )
                     }
                 }
+            }
             }
         }
     }
@@ -1067,6 +1185,127 @@ private fun NativeImageBookViewer(
                 }
             }
         )
+    }
+
+    // View settings sheet (the gear in the top bar): everything
+    // that used to crowd the top bar as text buttons, plus the
+    // page background. It stays open while adjusting, so zoom,
+    // mode and background can be tried in one visit; the close
+    // button or a drag dismisses it. Nothing here touches the
+    // reading position: mode keeps pendingModeTarget, zoom
+    // re-lands on the same page, background only repaints the
+    // letterbox.
+    if (showViewSettings) {
+        ModalBottomSheet(
+            onDismissRequest = { showViewSettings = false },
+            sheetState = viewSheetState
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.comic_view_settings),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        enabled = !isPaged,
+                        onClick = { toggleMode() }
+                    ) { Text(stringResource(R.string.mode_horizontal)) }
+                    TextButton(
+                        enabled = isPaged,
+                        onClick = { toggleMode() }
+                    ) { Text(stringResource(R.string.mode_vertical_continuous)) }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        enabled = zoomIndex > 0,
+                        onClick = { zoomIndex-- }
+                    ) { Text(stringResource(R.string.pdf_zoom_out)) }
+                    Text(
+                        text = when (zoomFactors[zoomIndex]) {
+                            1.5f -> "1.5×"
+                            2f -> "2×"
+                            else -> "1×"
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    TextButton(
+                        enabled = zoomIndex < zoomFactors.lastIndex,
+                        onClick = { zoomIndex++ }
+                    ) { Text(stringResource(R.string.pdf_zoom_in)) }
+                    TextButton(
+                        enabled = zoomIndex != 0,
+                        onClick = { zoomIndex = 0 }
+                    ) { Text(stringResource(R.string.pdf_fit_width)) }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.comic_background),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    val bgOptions = listOf(
+                        Triple("dark", Color(0xFF1E1E1E), R.string.comic_bg_dark),
+                        Triple("black", Color.Black, R.string.comic_bg_black),
+                        Triple("white", Color.White, R.string.comic_bg_white)
+                    )
+                    bgOptions.forEach { (key, color, labelRes) ->
+                        val selected = savedBgKey == key
+                        val bgLabel = stringResource(labelRes)
+                        Box(
+                            modifier = Modifier.size(36.dp)
+                                .clip(CircleShape)
+                                .semantics { contentDescription = bgLabel }
+                                .background(color)
+                                .border(
+                                    width = if (selected) 2.dp else 1.dp,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        LocalContentColor.current.copy(alpha = 0.4f)
+                                    },
+                                    shape = CircleShape
+                                )
+                                .clickable {
+                                    scope.launch {
+                                        prefs.setComicBackground(key)
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (selected) {
+                                AppIcon(
+                                    AppIconKind.Check,
+                                    tint = if (key == "white") {
+                                        Color.Black
+                                    } else {
+                                        Color.White
+                                    },
+                                    size = 16.dp
+                                )
+                            }
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = { showViewSettings = false }) {
+                        Text(stringResource(R.string.close))
+                    }
+                }
+            }
+        }
     }
 }
 
