@@ -20,13 +20,12 @@ val releaseKeyPassword: String? =
 android {
     namespace = "com.novelfa.reader"
     compileSdk = 35
-    // Pinned to the side-by-side NDK that is actually installed
-    // (and that the AVIF engine was verified against): without
-    // this, AGP demands its own default NDK (26.1.10909125) and
-    // fails project configuration with "NDK not configured"
-    // the moment externalNativeBuild exists. On a fresh machine
-    // the SDK Manager installs this exact version on demand.
-    ndkVersion = "28.2.13676358"
+    // NOTE: the AVIF engine ships PREBUILT — no NDK or CMake is
+    // needed to build this project. The .so files live in
+    // src/main/jniLibs/<abi>/ and are packaged automatically
+    // (filtered by the ndk abiFilters in defaultConfig). The C
+    // sources in src/main/cpp are the source of truth; a rebuild
+    // on a machine with NDK 28.2.13676358 replaces the .so files.
     defaultConfig { applicationId = "com.novelfa.reader"; minSdk = 29; targetSdk = 35; versionCode = 2; versionName = "1.0.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"; ndk { abiFilters += "arm64-v8a"; abiFilters += "armeabi-v7a" } }
     if (releaseKeystorePath != null) {
         signingConfigs {
@@ -42,14 +41,10 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
-    // AVIF engine (libavif + libaom, see src/main/cpp/CMakeLists.txt):
-    // built per ABI by externalNativeBuild. The two pinned
-    // releases download at configure time (FetchContent), so no
-    // third-party sources or binaries are checked in. If CMake
-    // is missing on the build machine, Android Studio offers to
-    // install it — the Kotlin code degrades gracefully without
-    // the .so (AVIF pages fail, everything else works).
-    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt") } }
+    // AVIF engine: prebuilt .so files in src/main/jniLibs are
+    // packaged automatically. If the .so files are absent, the
+    // Kotlin code degrades gracefully (AVIF pages fail,
+    // everything else works).
 }
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.10.00")
