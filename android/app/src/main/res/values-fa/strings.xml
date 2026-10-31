@@ -359,4 +359,5 @@
     <string name="comic_direction_ltr">چپ به راست</string>
     <string name="comic_sharpen">تیز کردن تصویر</string>
     <string name="comic_zoom">بزرگ‌نمایی</string>
+    <string name="comic_dual_page">دو صفحه‌ای</string>
 </resources>

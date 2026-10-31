@@ -190,15 +190,29 @@ internal interface NativePageSource : Closeable {
     fun renderPage(index: Int, targetWidthPx: Int): Bitmap
 
     /**
-     * An animated drawable for one page, or null. Only GIF pages
-     * have one: BitmapFactory decodes a GIF to its FIRST frame
-     * only, so an animated page needs its own path — decoded
-     * with ImageDecoder into an AnimatedImageDrawable that the
-     * viewer plays in an ImageView. Every other format returns
-     * null and renders through [renderPage] as before. Default
-     * null, so existing sources keep compiling unchanged.
+     * An animated drawable for one page, or null. GIF and
+     * animated WebP pages have one: BitmapFactory decodes either
+     * to its FIRST frame only, so an animated page needs its own
+     * path — decoded with ImageDecoder into an
+     * AnimatedImageDrawable that the viewer plays in an ImageView.
+     * A STILL WebP returns null: ImageDecoder would hand back a
+     * plain BitmapDrawable for it, and taking the drawable path
+     * would silently drop crop/resize/sharpen for a still page.
+     * The Animatable check is what keeps the two apart. Every
+     * other format returns null and renders through [renderPage]
+     * as before. Default null, so existing sources keep
+     * compiling unchanged.
      */
     fun animatedDrawable(index: Int): Drawable? = null
+
+    /**
+     * Whether one page is animated (GIF/WebP). The dual-page
+     * pairing needs it without decoding: a split page is two
+     * halves of one still image, and an animation cannot be
+     * halved that way. Default false; CBZ overrides it from the
+     * entry extension, the same check [animatedDrawable] uses.
+     */
+    fun isAnimatedPage(index: Int): Boolean = false
 
     /**
      * Native pixel size of one page (width to height), without
@@ -308,25 +322,62 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
                 }
             }
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-            return bounds.outWidth to bounds.outHeight
+            // Display size, not file size: a 90/270 EXIF rotation
+            // swaps width and height, and the dual-page split
+            // decision (landscape or not) must see the rotated
+            // shape, not the stored one.
+            val degrees = exifDegrees(entry)
+            return if (degrees == 90 || degrees == 270) {
+                bounds.outHeight to bounds.outWidth
+            } else {
+                bounds.outWidth to bounds.outHeight
+            }
         }
+    }
+
+    override fun isAnimatedPage(index: Int): Boolean {
+        if (index < 0 || index >= entries.size) return false
+        val name = entries[index]
+        return name.endsWith(".gif", ignoreCase = true) ||
+            name.endsWith(".webp", ignoreCase = true)
     }
 
     override fun animatedDrawable(index: Int): Drawable? {
         synchronized(lock) {
             if (index < 0 || index >= entries.size) return null
-            // Extension check only: a GIF entry is the one case
-            // where the bitmap path loses information (all frames
-            // but the first), so it alone takes the drawable path.
-            if (!entries[index].endsWith(".gif", ignoreCase = true)) return null
+            // Extension check only: GIF and WebP entries are the
+            // cases where the bitmap path loses information (all
+            // frames but the first), so they alone try the
+            // drawable path — and only if the decoded drawable
+            // actually animates (see the interface doc: a still
+            // WebP falls through to the bitmap path with its
+            // crop/resize/sharpen intact).
+            if (!isAnimatedPage(index)) return null
             val entry = zip.getEntry(entries[index]) ?: return null
             return runCatching {
                 val bytes = zip.getInputStream(entry).use { it.readBytes() }
                 ImageDecoder.decodeDrawable(
                     ImageDecoder.createSource(ByteBuffer.wrap(bytes))
                 )
-            }.getOrNull()
+            }.getOrNull()?.takeIf { it is Animatable }
         }
+    }
+
+    /**
+     * EXIF rotation for one entry, in degrees (0/90/180/270).
+     * ComicScreen honours EXIF orientation in its tile decoder;
+     * without it a sideways camera photo in a CBZ shows
+     * sideways. Any failure (not a JPEG, no EXIF, truncated
+     * header) means upright — a bad header must never fail the
+     * page. Each call needs its own stream: a consumed stream
+     * cannot be read twice.
+     */
+    private fun exifDegrees(entry: java.util.zip.ZipEntry): Int {
+        return runCatching {
+            zip.getInputStream(entry).use { stream ->
+                ExifRotation.degreesFromStream(stream)
+            }
+        }.getOrDefault(0)
     }
 
     override fun renderPage(index: Int, targetWidthPx: Int): Bitmap {
@@ -343,6 +394,18 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
                 throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
             }
+            // EXIF rotation, read BEFORE the sample loop: a
+            // 90/270 rotation swaps the dimensions the ceiling
+            // is checked against, or an ultra-wide page stored
+            // sideways would sample down for the wrong axis.
+            // The rotation itself is applied to the decoded
+            // bitmap below, so the crop/resize/sharpen pipeline
+            // downstream always sees the upright page.
+            val exifDegrees = exifDegrees(entry)
+            val effWidth =
+                if (exifDegrees == 90 || exifDegrees == 270) bounds.outHeight else bounds.outWidth
+            val effHeight =
+                if (exifDegrees == 90 || exifDegrees == 270) bounds.outWidth else bounds.outHeight
             // Native-size decode: pages used to be sampled down
             // to the SCREEN width (a 1600px page on a 1080px
             // screen decoded at 800px — half its pixels thrown
@@ -358,8 +421,8 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             // on the full bitmap, never by throwing pixels away
             // at decode time.
             var sample = 1
-            while (bounds.outWidth / sample > MAX_DECODE_WIDTH ||
-                bounds.outHeight / sample > MAX_DECODE_HEIGHT
+            while (effWidth / sample > MAX_DECODE_WIDTH ||
+                effHeight / sample > MAX_DECODE_HEIGHT
             ) {
                 sample *= 2
             }
@@ -382,13 +445,13 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             // page bitmaps are owned per visible item and
             // recycled when the item leaves composition, so
             // only the visible window's pages are alive.
-            fun decodeAs(config: Bitmap.Config): Bitmap? {
+            fun decodeAs(config: Bitmap.Config, sampleSize: Int): Bitmap? {
                 return runCatching {
                     zip.getInputStream(entry).use { stream ->
                         BitmapFactory.decodeStream(
                             stream, null,
                             BitmapFactory.Options().apply {
-                                inSampleSize = sample
+                                inSampleSize = sampleSize
                                 inPreferredConfig = config
                                 // Quality over speed: ComicScreen's
                                 // tile decoder sets this, and it is
@@ -407,10 +470,39 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
                     }
                 }.getOrNull()
             }
-            val bitmap = decodeAs(Bitmap.Config.ARGB_8888)
-                ?: decodeAs(Bitmap.Config.RGB_565)
+            // Out-of-memory retry, ComicScreen's way: a decode
+            // that dies on memory is retried at double the
+            // sample size (a quarter of the pixels) instead of
+            // failing the page outright. runCatching swallows
+            // the OOM (an Error, but a caught one — the heap is
+            // still usable, just full), so a null here means
+            // "try smaller", not "give up". Three rounds bound
+            // the work: a genuinely corrupt image fails all six
+            // attempts fast and still lands on the page's
+            // failure placeholder with a retry button, never a
+            // dead book. A decoded bitmap is never the fallback
+            // here: Novelfa's per-page failure screen (message +
+            // retry) already IS the graceful fallback, and it
+            // says more than a blank page would.
+            var bitmap: Bitmap? = null
+            var attemptSample = sample
+            for (round in 0 until 3) {
+                bitmap = decodeAs(Bitmap.Config.ARGB_8888, attemptSample)
+                    ?: decodeAs(Bitmap.Config.RGB_565, attemptSample)
+                if (bitmap != null) break
+                attemptSample *= 2
+            }
+            val decoded = bitmap
                 ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
-            return bitmap
+            if (exifDegrees == 0) return decoded
+            val matrix = android.graphics.Matrix().apply {
+                postRotate(exifDegrees.toFloat())
+            }
+            val rotated = Bitmap.createBitmap(
+                decoded, 0, 0, decoded.width, decoded.height, matrix, true
+            )
+            if (rotated !== decoded) decoded.recycle()
+            return rotated
         }
     }
 
@@ -616,6 +708,74 @@ private fun ZipReaderRoute(
 }
 
 /**
+ * One pager item in dual-page mode (ComicScreen's 2p view).
+ * [firstPage] is the page the bottom bar, progress save and XP
+ * all track for this item — the pair's first page in reading
+ * order, so bookkeeping stays in pages even though the pager
+ * moves in pairs.
+ */
+private sealed interface DualPair {
+    val firstPage: Int
+
+    /** The book's last page, alone (odd page count). */
+    data class Single(override val firstPage: Int) : DualPair
+
+    /** Two consecutive pages, side by side. */
+    data class Pair(override val firstPage: Int, val secondPage: Int) : DualPair
+
+    /** One landscape page, split across the pair (see below). */
+    data class Split(override val firstPage: Int) : DualPair
+}
+
+/**
+ * Pairs for a book, in reading order. A page is split only when
+ * it is landscape (wider than tall, by DISPLAY size — EXIF
+ * rotation already applied) AND not animated: an animation
+ * cannot be halved into two stills. PDF sources report no native
+ * size, so they never split — they pair plainly. A bounds decode
+ * that fails for a page treats it as portrait: the page still
+ * pairs, it just never splits on its own.
+ */
+private fun buildDualPairs(source: NativePageSource, pageCount: Int): List<DualPair> {
+    val pairs = mutableListOf<DualPair>()
+    var i = 0
+    while (i < pageCount) {
+        val size = runCatching { source.nativePageSize(i) }.getOrNull()
+        val split = size != null && size.first > size.second &&
+            !runCatching { source.isAnimatedPage(i) }.getOrDefault(false)
+        if (split) {
+            pairs += DualPair.Split(i)
+            i += 1
+        } else if (i + 1 < pageCount) {
+            pairs += DualPair.Pair(i, i + 1)
+            i += 2
+        } else {
+            pairs += DualPair.Single(i)
+            i += 1
+        }
+    }
+    return pairs
+}
+
+/**
+ * The pair holding [page]: a pair contains its pages, so a
+ * slider jump or chapter jump to any page lands on its pair.
+ * Falls back to the last pair starting at or before the page
+ * (and to 0 for a page before every pair, which cannot happen
+ * for a real book but keeps the pager index in range).
+ */
+private fun pairIndexForPage(pairs: List<DualPair>, page: Int): Int {
+    for ((index, pair) in pairs.withIndex()) {
+        when (pair) {
+            is DualPair.Single -> if (pair.firstPage == page) return index
+            is DualPair.Pair -> if (pair.firstPage == page || pair.secondPage == page) return index
+            is DualPair.Split -> if (pair.firstPage == page) return index
+        }
+    }
+    return pairs.indexOfLast { it.firstPage <= page }.coerceAtLeast(0)
+}
+
+/**
  * The native viewer itself, for PDF and CBZ alike. Render width is
  * the screen width times the zoom factor (1x / 1.5x / 2x, fit-width
  * is 1x); changing zoom re-renders visible pages at the new width,
@@ -707,10 +867,39 @@ private fun NativeImageBookViewer(
         }
     }
 
+    // Dual page (ComicScreen's 2p view): in paged mode each
+    // pager item is a PAIR, not a page. A pair is two consecutive
+    // pages side by side, a single page when the book has an odd
+    // page left over, or one landscape page SPLIT across the pair
+    // (its halves, reading order first) — a wide page shown whole
+    // in a portrait slot would shrink to illegibility, and the
+    // split is what keeps it readable. Continuous mode ignores
+    // dual entirely: a strip is one page wide by definition.
+    // Pairs are computed on IO from bounds-only sizes (no pixel
+    // decode), cached per source, and only when the switch is on
+    // — a dual-off book never pays for them.
+    val dualPage by prefs.comicDualPage.collectAsState(initial = false)
+    var dualPairs by remember { mutableStateOf<List<DualPair>?>(null) }
+    var dualPairsFor by remember { mutableStateOf<NativePageSource?>(null) }
+    LaunchedEffect(source, dualPage, pageCount) {
+        val src = source ?: return@LaunchedEffect
+        if (!dualPage || pageCount <= 0) return@LaunchedEffect
+        if (dualPairsFor === src && dualPairs != null) return@LaunchedEffect
+        val pairs = withContext(Dispatchers.IO) {
+            runCatching { buildDualPairs(src, pageCount) }.getOrNull()
+        }
+        if (pairs != null) {
+            dualPairs = pairs
+            dualPairsFor = src
+        }
+    }
+    val pagerPageCount =
+        if (dualPage && dualPairs != null) dualPairs!!.size else pageCount
+
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
     val pagerState = rememberPagerState(
         initialPage = initialPage,
-        pageCount = { pageCount }
+        pageCount = { pagerPageCount }
     )
     var currentPage by remember { mutableIntStateOf(initialPage) }
 
@@ -756,18 +945,37 @@ private fun NativeImageBookViewer(
     // first), which would credit the page the user is still on.
     // currentPage only changes when the user actually moves, so a
     // mode toggle, zoom change or restore never credits anything.
-    LaunchedEffect(currentPage, pageCount) {
+    // Dual page gets a SECOND dwell clock: both pages of a pair
+    // are on screen together, so both earn their own dwell — the
+    // pair's second page is not a skipped page, it was read.
+    // A split page has no second page (its halves are one page),
+    // and leaving dual settles the second clock through flush.
+    val xpTrackerSecond = remember(book.id) { XpSessionTracker() }
+    LaunchedEffect(currentPage, pageCount, dualPage, dualPairs) {
         if (pageCount <= 0) return@LaunchedEffect
-        val toCredit = xpTracker.enter(currentPage) ?: return@LaunchedEffect
-        xpCreditPage(toCredit)
+        xpTracker.enter(currentPage)?.let { xpCreditPage(it) }
+        val second = if (dualPage && dualPairs != null) {
+            val pair = dualPairs!!.getOrNull(pairIndexForPage(dualPairs!!, currentPage))
+            (pair as? DualPair.Pair)?.secondPage
+        } else {
+            null
+        }
+        if (second != null) {
+            xpTrackerSecond.enter(second)?.let { xpCreditPage(it) }
+        } else {
+            xpTrackerSecond.flush()?.let { xpCreditPage(it) }
+        }
     }
     DisposableEffect(book.id) {
         onDispose {
             val tracker = xpTracker
+            val trackerSecond = xpTrackerSecond
             xpFlushScope.launch {
                 runCatching {
                     val flushed = tracker.flush()
                     if (flushed != null) xpCreditPage(flushed)
+                    val flushedSecond = trackerSecond.flush()
+                    if (flushedSecond != null) xpCreditPage(flushedSecond)
                 }
             }
         }
@@ -790,7 +998,17 @@ private fun NativeImageBookViewer(
         if (target != 0) {
             currentPage = target
             if (isPaged) {
-                runCatching { pagerState.scrollToPage(target) }
+                // Dual: the pager moves in pairs, so the restore
+                // target (a page) maps to its pair; when pairs
+                // are not computed yet the correction effect
+                // below lands it once they are.
+                val pagerTarget =
+                    if (dualPage && dualPairs != null) {
+                        pairIndexForPage(dualPairs!!, target)
+                    } else {
+                        target
+                    }
+                runCatching { pagerState.scrollToPage(pagerTarget) }
             } else {
                 runCatching { listState.scrollToItem(target) }
             }
@@ -823,10 +1041,26 @@ private fun NativeImageBookViewer(
     // a DB write per page. The effect restarts on a mode switch,
     // so the pager flow replaces the list flow (and vice versa)
     // instead of both tracking at once.
-    LaunchedEffect(listState, pagerState, pageCount, isPaged) {
+    // The first emission after every restart is skipped on
+    // purpose: it is the position the pager/list ALREADY sits at
+    // (restore, mode switch, dual toggle), and currentPage
+    // already holds it. Accepting it would, on a dual toggle,
+    // save the transient pair index as a page number before the
+    // correction effect below lands the pager on the right pair.
+    LaunchedEffect(listState, pagerState, pageCount, isPaged, dualPage, dualPairs) {
         if (pageCount <= 0) return@LaunchedEffect
+        var first = true
         if (isPaged) {
-            snapshotFlow { pagerState.currentPage }.collect { page ->
+            snapshotFlow { pagerState.currentPage }.collect { pagerIdx ->
+                if (first) {
+                    first = false
+                    return@collect
+                }
+                val page = if (dualPage && dualPairs != null) {
+                    dualPairs!!.getOrNull(pagerIdx)?.firstPage ?: return@collect
+                } else {
+                    pagerIdx
+                }
                 if (page in 0 until pageCount) {
                     currentPage = page
                     savePage(page)
@@ -834,10 +1068,36 @@ private fun NativeImageBookViewer(
             }
         } else {
             snapshotFlow { listState.firstVisibleItemIndex }.collect { page ->
+                if (first) {
+                    first = false
+                    return@collect
+                }
                 if (page in 0 until pageCount) {
                     currentPage = page
                     savePage(page)
                 }
+            }
+        }
+    }
+
+    // Dual-toggle landing: when dual turns on, or pairs finish
+    // loading, the pager index (a page index until now) must
+    // become the pair holding the current page; when dual turns
+    // off, the pair index must become the page again. Without
+    // this the pager would sit on a meaningless index after the
+    // toggle, and the tracking effect above would save it as a
+    // page number. The skipped first emission above is what makes
+    // this race-free in either effect order.
+    LaunchedEffect(dualPage, dualPairs, isPaged) {
+        if (!isPaged || pageCount <= 0) return@LaunchedEffect
+        if (dualPage && dualPairs != null) {
+            val target = pairIndexForPage(dualPairs!!, currentPage)
+            if (pagerState.currentPage != target) {
+                runCatching { pagerState.scrollToPage(target) }
+            }
+        } else if (!dualPage) {
+            if (pagerState.currentPage != currentPage) {
+                runCatching { pagerState.scrollToPage(currentPage) }
             }
         }
     }
@@ -850,6 +1110,8 @@ private fun NativeImageBookViewer(
             runCatching {
                 val flushed = xpTracker.flush()
                 if (flushed != null) xpCreditPage(flushed)
+                val flushedSecond = xpTrackerSecond.flush()
+                if (flushedSecond != null) xpCreditPage(flushedSecond)
             }
             savePage(currentPage, force = true)
             onClose()
@@ -875,7 +1137,15 @@ private fun NativeImageBookViewer(
         scope.launch {
             val target = page.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
             if (isPaged) {
-                runCatching { pagerState.scrollToPage(target) }
+                // Dual: the pager moves in pairs, so a jump to a
+                // page lands on its pair (never a half pair).
+                val pagerTarget =
+                    if (dualPage && dualPairs != null) {
+                        pairIndexForPage(dualPairs!!, target)
+                    } else {
+                        target
+                    }
+                runCatching { pagerState.scrollToPage(pagerTarget) }
             } else {
                 runCatching { listState.scrollToItem(target) }
             }
@@ -887,7 +1157,19 @@ private fun NativeImageBookViewer(
         scope.launch {
             val target = page.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
             if (isPaged) {
-                runCatching { pagerState.animateScrollToPage(target) }
+                if (dualPage && dualPairs != null) {
+                    // Step by PAIR, not by page: the buttons call
+                    // this with currentPage +/- 1, and stepping a
+                    // single page in dual mode would land mid-pair
+                    // and break the pairing. The direction comes
+                    // from the requested page vs the current one.
+                    val dir = if (target > currentPage) 1 else -1
+                    val cur = pairIndexForPage(dualPairs!!, currentPage)
+                    val next = (cur + dir).coerceIn(0, dualPairs!!.size - 1)
+                    runCatching { pagerState.animateScrollToPage(next) }
+                } else {
+                    runCatching { pagerState.animateScrollToPage(target) }
+                }
             } else {
                 runCatching { listState.scrollToItem(target) }
             }
@@ -1213,6 +1495,8 @@ private fun NativeImageBookViewer(
             }
             isPaged -> {
                 val activeSource = source!!
+                val pairs = dualPairs
+                val useDual = dualPage && pairs != null
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize()
@@ -1224,24 +1508,74 @@ private fun NativeImageBookViewer(
                     // layout, not a different component.
                     reverseLayout = !directionRtl,
                     beyondViewportPageCount = 1
-                ) { page ->
-                    NativePageItem(
-                        source = activeSource,
-                        page = page,
-                        renderWidthPx = renderWidthPx,
-                        paged = true,
-                        zoomFactor = zoomFactors[zoomIndex],
-                        cropMargin = cutMargin,
-                        cropPadH = cropPadH,
-                        cropPadV = cropPadV,
-                        paddingRatio = paddingRatio,
-                        pageBg = pageBg,
-                        screenWidthPx = screenWidthPx,
-                        screenHeightPx = screenHeightPx,
-                        fitMode = fitMode,
-                        sharpen = sharpen,
-                        sharpenLevel = sharpenLevel
-                    )
+                ) { pagerIdx ->
+                    // One item, one set of parameters: the only
+                    // thing that varies between single and dual
+                    // is which page(s) the item shows.
+                    @Composable
+                    fun singleItem(page: Int, halfSide: Int = 0) {
+                        NativePageItem(
+                            source = activeSource,
+                            page = page,
+                            renderWidthPx = renderWidthPx,
+                            paged = true,
+                            zoomFactor = zoomFactors[zoomIndex],
+                            cropMargin = cutMargin,
+                            cropPadH = cropPadH,
+                            cropPadV = cropPadV,
+                            paddingRatio = paddingRatio,
+                            pageBg = pageBg,
+                            screenWidthPx = screenWidthPx,
+                            screenHeightPx = screenHeightPx,
+                            fitMode = fitMode,
+                            sharpen = sharpen,
+                            sharpenLevel = sharpenLevel,
+                            halfSide = halfSide
+                        )
+                    }
+                    if (!useDual) {
+                        singleItem(pagerIdx)
+                    } else {
+                        when (val pair = pairs!![pagerIdx]) {
+                            is DualPair.Single -> singleItem(pair.firstPage)
+                            is DualPair.Pair -> {
+                                // Row follows the layout
+                                // direction: in RTL the first
+                                // child sits on the right, in LTR
+                                // on the left — so (first, second)
+                                // is reading order in both.
+                                Row(Modifier.fillMaxSize()) {
+                                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                                        singleItem(pair.firstPage)
+                                    }
+                                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                                        singleItem(pair.secondPage)
+                                    }
+                                }
+                            }
+                            is DualPair.Split -> {
+                                // One landscape page across the
+                                // pair: the half read FIRST goes
+                                // in the first slot — in RTL that
+                                // is the RIGHT half (reading
+                                // starts on the right), in LTR
+                                // the LEFT half. Row lays the
+                                // first child per direction, so
+                                // (first-read half, second half)
+                                // lands correctly in both.
+                                val (firstSide, secondSide) =
+                                    if (directionRtl) 2 to 1 else 1 to 2
+                                Row(Modifier.fillMaxSize()) {
+                                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                                        singleItem(pair.firstPage, firstSide)
+                                    }
+                                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                                        singleItem(pair.firstPage, secondSide)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             else -> {
@@ -1374,6 +1708,35 @@ private fun NativeImageBookViewer(
                         label = stringResource(R.string.mode_vertical_continuous),
                         selected = !isPaged,
                         onClick = { if (isPaged) toggleMode() }
+                    )
+                }
+                // Dual page (ComicScreen's 2p view): two pages
+                // side by side per screen in paged mode, with a
+                // landscape page split across the pair. Paged
+                // only, like fit/direction/zoom — in vertical
+                // mode the strip is one page wide by definition,
+                // so the switch is dimmed there rather than
+                // pretending to do something.
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.comic_dual_page),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isPaged) {
+                            LocalContentColor.current
+                        } else {
+                            LocalContentColor.current.copy(alpha = 0.38f)
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = dualPage,
+                        enabled = isPaged,
+                        onCheckedChange = { checked ->
+                            scope.launch { prefs.setComicDualPage(checked) }
+                        }
                     )
                 }
                 // Zoom steps: paged-original only. In vertical
@@ -1906,29 +2269,72 @@ private fun NativePageItem(
     screenHeightPx: Int = 0,
     fitMode: String = "width",
     sharpen: Boolean = false,
-    sharpenLevel: Int = 0
+    sharpenLevel: Int = 0,
+    // Dual-page half: 0 = the whole page, 1 = its left half,
+    // 2 = its right half (IMAGE coordinates — the pair lays the
+    // halves out in reading order). A half item renders its
+    // half at the slot width (half the screen), never the full
+    // page squeezed into the slot.
+    halfSide: Int = 0
 ) {
-    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableStateOf<Bitmap?>(null) }
-    // An animated drawable (GIF pages only). When one is present
-    // the bitmap path is skipped entirely: the drawable IS the
-    // page, frames and all — a bitmap would freeze it on frame
-    // one, which is what the viewer did before this change.
-    var drawable by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableStateOf<Drawable?>(null) }
-    var failed by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableStateOf(false) }
+    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableStateOf<Bitmap?>(null) }
+    // An animated drawable (GIF / animated WebP pages only).
+    // When one is present the bitmap path is skipped entirely:
+    // the drawable IS the page, frames and all — a bitmap would
+    // freeze it on frame one, which is what the viewer did
+    // before this change.
+    var drawable by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableStateOf<Drawable?>(null) }
+    var failed by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableStateOf(false) }
     // The render error itself, shown under the failure text: the
     // old code threw it away (getOrNull), so a phone-only tester
     // could only ever report "it failed" and the cause stayed
     // invisible. The message names the entry and the reason
     // (unreadable image, missing entry, unsupported compression),
     // which is what a screenshot of this screen needs to carry.
-    var failMessage by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableStateOf<String?>(null) }
-    var retry by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) { mutableIntStateOf(0) }
+    var failMessage by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableStateOf<String?>(null) }
+    var retry by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableIntStateOf(0) }
+    // Zoom re-render (ComicScreen's tile refinement,
+    // coarse-grained): the pipeline sizes the bitmap to the
+    // display width, so a 2x pinch would otherwise just upscale
+    // that bitmap on the GPU and go soft. When the pinch passes
+    // 1.75x the page re-renders at 2x display width (bicubic
+    // from the native pixels, not from the 1x bitmap), and when
+    // it falls back under 1.25x it re-renders at 1x. The
+    // hysteresis stops flapping at the threshold. renderScale
+    // is deliberately NOT in the bitmap/drawables' remember
+    // keys: a re-render must swap the bitmap under the live
+    // zoom container (which keeps its scale), not dispose the
+    // container and snap the page back to 1x mid-pinch.
+    var renderScale by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableIntStateOf(1) }
+    // Threshold-guarded: the container reports every pinch move,
+    // but only a threshold crossing re-renders.
+    val onPinchScale: (Float) -> Unit = { s ->
+        if (s > 1.75f && renderScale != 2) {
+            renderScale = 2
+        } else if (s < 1.25f && renderScale != 1) {
+            renderScale = 1
+        }
+    }
 
-    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) {
-        bitmap = null
-        drawable = null
+    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, renderScale) {
+        // No bitmap/drawable nulling here on purpose: every key
+        // above except renderScale is also a remember key, so a
+        // page/parameter change already resets the states to
+        // null through remember — and a renderScale change must
+        // keep the old bitmap on screen until the sharper one
+        // arrives, or the zoom container would dispose mid-pinch
+        // (see renderScale). Only the failure flags reset: a
+        // re-render that fails must not leave a stale failure
+        // screen over a still-valid old bitmap (the branch below
+        // shows the bitmap before the failure, so the old page
+        // simply stays until its replacement arrives).
         failed = false
         failMessage = null
+        // The bitmap this run replaces, recycled once its
+        // replacement lands (not in onDispose: the dispose
+        // effect below is keyed without renderScale, so it
+        // would otherwise recycle the replacement too).
+        val previousBitmap = bitmap
         // Animated path first: for a GIF page the drawable
         // replaces the bitmap path wholesale. For every other
         // format it returns null immediately (extension check)
@@ -2002,14 +2408,22 @@ private fun NativePageItem(
                 // did. The budget is re-checked per step, on
                 // the current size: a page resized down first
                 // is small by the time sharpen runs.
+                // Display width for this item: the screen width
+                // times the zoom re-render scale (1x, or 2x once
+                // the pinch passes 1.75x), halved for a dual-page
+                // half item — its slot is half the screen, and
+                // resizing to the full screen would only make
+                // the GPU downscale it back in the slot.
+                val displayWidthPx = (screenWidthPx * renderScale)
+                    .let { if (halfSide != 0) it / 2 else it }
                 val resizeTarget: Pair<Int, Int>? = when {
-                    !paged && screenWidthPx > 0 ->
-                        screenWidthPx to
-                            (screenWidthPx * current.height / current.width)
+                    !paged && displayWidthPx > 0 ->
+                        displayWidthPx to
+                            (displayWidthPx * current.height / current.width)
                                 .coerceAtLeast(1)
-                    paged && fitMode == "width" && screenWidthPx > 0 ->
-                        screenWidthPx to
-                            (screenWidthPx * current.height / current.width)
+                    paged && fitMode == "width" && displayWidthPx > 0 ->
+                        displayWidthPx to
+                            (displayWidthPx * current.height / current.width)
                                 .coerceAtLeast(1)
                     paged && fitMode == "height" && screenHeightPx > 0 ->
                         (screenHeightPx * current.width / current.height)
@@ -2041,26 +2455,64 @@ private fun NativePageItem(
                         current = sharp
                     }
                 }
+                // Dual-page half, LAST: crop/resize/sharpen all
+                // ran on the whole page (they need the full
+                // image), and only the finished page is halved.
+                // 1 = left half, 2 = right half, in IMAGE
+                // coordinates — the pair lays them out in
+                // reading order, so this never needs to know the
+                // direction.
+                if (halfSide != 0) {
+                    val halfW = (current.width / 2).coerceAtLeast(1)
+                    val x = if (halfSide == 1) 0 else halfW
+                    val w = if (halfSide == 1) {
+                        halfW
+                    } else {
+                        (current.width - halfW).coerceAtLeast(1)
+                    }
+                    val half = Bitmap.createBitmap(current, x, 0, w, current.height)
+                    if (half !== current) {
+                        current.recycle()
+                        current = half
+                    }
+                }
                 current
             }
         }
-        rendered.onSuccess { bitmap = it }
+        rendered.onSuccess {
+            bitmap = it
+            // A re-render (zoom scale change) replaces a live
+            // bitmap: the replaced one goes now, or every zoom
+            // re-render leaks a full-size bitmap beside its
+            // replacement. The dispose effect below is keyed
+            // without renderScale, so it never fires on a
+            // re-render — this is the only place the replaced
+            // bitmap is freed, and the dispose effect frees the
+            // final one.
+            if (previousBitmap != null && previousBitmap !== it) {
+                previousBitmap.recycle()
+            }
+        }
         rendered.onFailure {
             failed = true
             failMessage = it.message ?: it.javaClass.simpleName
         }
     }
-    // Recycle exactly the bitmap this item rendered, and only when
-    // this item (page + width + retry generation) leaves composition.
-    // Same trap as the source close above: `bitmap` is state, so
-    // reading it in onDispose could recycle a NEWER bitmap that a
-    // re-render already assigned. Capture it in a local val.
-    DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx) {
-        val toRecycle = bitmap
-        val toStop = drawable
+    // Recycle the bitmap this item owns when it leaves
+    // composition. The read is live on purpose: the state object
+    // this closure captures belongs to this remember instance,
+    // so a key change (new page/parameters) disposes against the
+    // OLD instance's bitmap, while a zoom re-render — which is
+    // NOT a key of this effect — swaps the bitmap without
+    // disposing, and the dispose then frees the final bitmap,
+    // not a stale one (the swapped-out ones were freed in
+    // onSuccess above). Reading state in onDispose is safe
+    // here precisely because the state object, not the value,
+    // is what the closure holds.
+    DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) {
         onDispose {
-            toRecycle?.recycle()
-            (toStop as? Animatable)?.stop()
+            bitmap?.recycle()
+            (drawable as? Animatable)?.stop()
         }
     }
 
@@ -2265,20 +2717,45 @@ private fun NativePageItem(
                         }
                     }
                     else -> {
+                        // Fit-width, now with the same pinch
+                        // zoom the strip has (ComicScreen's
+                        // PhotoView per page): before this, a
+                        // paged page could only zoom through
+                        // the sheet stepper in original mode,
+                        // and width mode ignored zoom entirely.
+                        // The container's edge handoff IS the
+                        // zoom lock: at 1x a drag is never
+                        // consumed, so the pager turns; while
+                        // zoomed a drag pans, and at the pan
+                        // edge the pager takes over again — the
+                        // page never fights the page turn. The
+                        // Column's vertical scroll is the tall
+                        // page's own scroll (ComicScreen wraps
+                        // an over-tall page in its own vertical
+                        // ScrollView inside the pager), so a
+                        // tall page is never cut in paged mode
+                        // either: it scrolls vertically inside
+                        // its page, exactly like the strip.
                         Column(
                             modifier = Modifier.fillMaxSize()
                                 .verticalScroll(rememberScrollState())
                                 .background(pageBg),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Image(
-                                bitmap = bmp.asImageBitmap(),
-                                contentDescription = null,
+                            ZoomablePageContainer(
                                 modifier = Modifier
                                     .fillMaxWidth(shrink)
-                                    .aspectRatio(ratio)
-                                    .background(Color.White)
-                            )
+                                    .aspectRatio(ratio),
+                                onScaleChange = onPinchScale
+                            ) {
+                                Image(
+                                    bitmap = bmp.asImageBitmap(),
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(Color.White)
+                                )
+                            }
                         }
                     }
                 }
@@ -2294,7 +2771,8 @@ private fun NativePageItem(
                 // draws it 1:1 (up to the padding shrink).
                 ZoomablePageContainer(
                     modifier = Modifier.fillMaxWidth(shrink)
-                        .aspectRatio(ratio)
+                        .aspectRatio(ratio),
+                    onScaleChange = onPinchScale
                 ) {
                     Image(
                         bitmap = bmp.asImageBitmap(),

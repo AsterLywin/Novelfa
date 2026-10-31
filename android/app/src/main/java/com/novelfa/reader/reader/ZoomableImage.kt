@@ -58,6 +58,14 @@ private const val MAX_ZOOM = 4f
 @Composable
 fun ZoomablePageContainer(
     modifier: Modifier,
+    // Reports the live pinch scale (1..4). The caller uses it to
+    // re-render the page sharper once the pinch passes a
+    // threshold (ComicScreen's tile refinement, coarse-grained:
+    // a full-page re-render at 2x display width instead of
+    // per-tile re-decodes — same visible result, far less
+    // machinery). Fires on every pinch move; the caller must
+    // guard its own threshold so it does not re-render per move.
+    onScaleChange: (Float) -> Unit = {},
     content: @Composable () -> Unit
 ) {
     // Plain state, not Animatable: the gesture loop runs in a
@@ -132,6 +140,7 @@ fun ZoomablePageContainer(
                                 newOffset = clampOffset(newOffset, newScale)
                                 scale = newScale
                                 offset = newOffset
+                                onScaleChange(newScale)
                                 prevCentroid = centroid
                                 prevDistance = distance
                                 pressed.forEach { it.consume() }

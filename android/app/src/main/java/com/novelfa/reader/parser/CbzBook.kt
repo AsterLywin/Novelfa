@@ -132,12 +132,28 @@ object CbzBook {
         chaptersForEntries(imageEntryNames(zipFile))
 
     /**
-     * Natural order: runs of digits compare as numbers (2 < 10),
-     * everything else compares case-insensitively. Splitting on
+     * Natural order, ComicScreen's way: compare path SEGMENT by
+     * segment (split on '/'), each segment naturally (runs of
+     * digits as numbers, 2 < 10, the rest case-insensitive). A
+     * path that is a prefix of the other sorts first, so a folder
+     * sorts before its contents instead of after a same-prefix
+     * file (`a/b` before `a-b`, where a flat comparison would
+     * put the '-' file first because '-' < '/'). Splitting on
      * digit runs keeps `page-2` before `page-10` and keeps
      * `chapter-01/page-03` grouped under its folder.
      */
     internal fun compareNatural(a: String, b: String): Int {
+        val aSegs = a.split('/')
+        val bSegs = b.split('/')
+        val n = minOf(aSegs.size, bSegs.size)
+        for (i in 0 until n) {
+            val cmp = compareNaturalSegment(aSegs[i], bSegs[i])
+            if (cmp != 0) return cmp
+        }
+        return aSegs.size.compareTo(bSegs.size)
+    }
+
+    private fun compareNaturalSegment(a: String, b: String): Int {
         val aParts = splitNatural(a)
         val bParts = splitNatural(b)
         val n = minOf(aParts.size, bParts.size)

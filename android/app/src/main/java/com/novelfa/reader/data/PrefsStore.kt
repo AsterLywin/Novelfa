@@ -92,6 +92,13 @@ class PrefsStore(private val context: Context) {
         // after crop/upscale, strength = level / 10.
         val COMIC_SHARPEN = booleanPreferencesKey("comicSharpen")
         val COMIC_SHARPEN_LEVEL = intPreferencesKey("comicSharpenLevel")
+        // Native comic viewer dual page (ComicScreen's 2p view,
+        // default off): in paged mode two pages sit side by side
+        // per screen, and a single landscape page is split across
+        // the pair (its halves, reading order first). Continuous
+        // mode ignores it — a strip is one page wide by
+        // definition. Paged only, like fit/direction/zoom.
+        val COMIC_DUAL_PAGE = booleanPreferencesKey("comicDualPage")
         // Safe (fast) import: single-read copy + deferred generated
         // covers, toggled from Settings. Default ON: it only changes
         // how import reads and when covers are built, never the book
@@ -166,6 +173,9 @@ class PrefsStore(private val context: Context) {
         context.dataStore.data.map { it[COMIC_SHARPEN] ?: false }
     val comicSharpenLevel: Flow<Int> =
         context.dataStore.data.map { it[COMIC_SHARPEN_LEVEL] ?: 5 }
+    /** Native comic viewer dual page (default off, paged mode only). */
+    val comicDualPage: Flow<Boolean> =
+        context.dataStore.data.map { it[COMIC_DUAL_PAGE] ?: false }
     /** Safe import toggle (default ON; see FAST_IMPORT). */
     val fastImport: Flow<Boolean> = context.dataStore.data.map { it[FAST_IMPORT] ?: true }
     /** In-place import toggle (default OFF; see IN_PLACE_IMPORT). */
@@ -307,6 +317,10 @@ class PrefsStore(private val context: Context) {
     }
     suspend fun setComicSharpenLevel(value: Int) {
         context.dataStore.edit { it[COMIC_SHARPEN_LEVEL] = value }
+    }
+
+    suspend fun setComicDualPage(value: Boolean) {
+        context.dataStore.edit { it[COMIC_DUAL_PAGE] = value }
     }
 
     suspend fun setFastImport(value: Boolean) {
