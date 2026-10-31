@@ -358,4 +358,5 @@
     <string name="comic_direction_rtl">Right to left</string>
     <string name="comic_direction_ltr">Left to right</string>
     <string name="comic_sharpen">Sharpen image</string>
+    <string name="comic_zoom">Zoom</string>
 </resources>

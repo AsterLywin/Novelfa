@@ -41,6 +41,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
@@ -1323,46 +1324,52 @@ private fun NativeImageBookViewer(
                     text = stringResource(R.string.comic_view_settings),
                     style = MaterialTheme.typography.titleMedium
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(
-                        enabled = !isPaged,
-                        onClick = { toggleMode() }
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            AppIcon(
-                                AppIconKind.Pages,
-                                tint = LocalContentColor.current,
-                                size = 15.dp
-                            )
-                            Text(stringResource(R.string.mode_horizontal))
-                        }
-                    }
-                    TextButton(
-                        enabled = isPaged,
-                        onClick = { toggleMode() }
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            AppIcon(
-                                AppIconKind.Scroll,
-                                tint = LocalContentColor.current,
-                                size = 15.dp
-                            )
-                            Text(stringResource(R.string.mode_vertical_continuous))
-                        }
-                    }
+                // Mode: a real choice, not two buttons one of
+                // which is mysteriously disabled. Both rows are
+                // always tappable and the active one is
+                // highlighted — the old pair (one enabled, one
+                // dimmed) read as "one of these is broken",
+                // which is how vertical mode stayed
+                // undiscovered. Tapping the active mode is a
+                // no-op, never a flip back.
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = stringResource(R.string.reading_mode),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    SheetChoiceRow(
+                        icon = AppIconKind.Pages,
+                        label = stringResource(R.string.mode_horizontal),
+                        selected = isPaged,
+                        onClick = { if (!isPaged) toggleMode() }
+                    )
+                    SheetChoiceRow(
+                        icon = AppIconKind.Scroll,
+                        label = stringResource(R.string.mode_vertical_continuous),
+                        selected = !isPaged,
+                        onClick = { if (isPaged) toggleMode() }
+                    )
                 }
+                // Zoom steps: paged-original only. In vertical
+                // mode pages fill the strip width and pinch
+                // zooms, so the stepper is dimmed there rather
+                // than pretending to do something.
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Text(
+                        text = stringResource(R.string.comic_zoom),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isPaged) {
+                            LocalContentColor.current
+                        } else {
+                            LocalContentColor.current.copy(alpha = 0.38f)
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
                     IconButton(
-                        enabled = zoomIndex > 0,
+                        enabled = isPaged && zoomIndex > 0,
                         onClick = { zoomIndex-- }
                     ) {
                         AppIcon(
@@ -1380,7 +1387,7 @@ private fun NativeImageBookViewer(
                         style = MaterialTheme.typography.bodyMedium
                     )
                     IconButton(
-                        enabled = zoomIndex < zoomFactors.lastIndex,
+                        enabled = isPaged && zoomIndex < zoomFactors.lastIndex,
                         onClick = { zoomIndex++ }
                     ) {
                         AppIcon(
@@ -1390,7 +1397,7 @@ private fun NativeImageBookViewer(
                         )
                     }
                     IconButton(
-                        enabled = zoomIndex != 0,
+                        enabled = isPaged && zoomIndex != 0,
                         onClick = { zoomIndex = 0 }
                     ) {
                         AppIcon(
@@ -1576,34 +1583,17 @@ private fun NativeImageBookViewer(
                         }
                     )
                 }
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            AppIcon(
-                                AppIconKind.Padding,
-                                tint = LocalContentColor.current,
-                                size = 16.dp
-                            )
-                            Text(
-                                text = stringResource(R.string.comic_page_margin),
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                        Text(
-                            text = if (pageMarginPct == 0) {
-                                "0%"
-                            } else {
-                                "− $pageMarginPct%"
-                            },
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
+                // The switch row above labels this slider, so
+                // it carries no repeated label of its own — just
+                // the slider and its value, indented as a sub-row
+                // (the old header repeated "فاصله از حاشیه" and
+                // made the sheet read as two identical settings).
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(start = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Slider(
                         value = pageMarginPct.toFloat(),
                         onValueChange = { v ->
@@ -1611,54 +1601,64 @@ private fun NativeImageBookViewer(
                         },
                         valueRange = 0f..40f,
                         steps = 39,
-                        enabled = paddingEnabled
+                        enabled = paddingEnabled,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = if (pageMarginPct == 0) {
+                            "0%"
+                        } else {
+                            "− $pageMarginPct%"
+                        },
+                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
                 // Page fit (ComicScreen's fitscreen menu: off /
                 // height / width / stretch). Paged mode only —
-                // continuous mode always shows native size, so
-                // these buttons are dimmed there; the mode row
-                // above switches to paged. "Original" is
+                // vertical mode always fills the strip width,
+                // so these rows are dimmed there. "Original" is
                 // ComicScreen's off: native pixels, pannable.
+                // One full-width row per option: the old row of
+                // four squeezed buttons wrapped the long
+                // Persian labels word-per-line (the screenshot
+                // showed "اندازه‌ی واقعی" stacked vertically).
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         text = stringResource(R.string.comic_fit_mode),
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(
-                            enabled = isPaged && fitMode != "width",
-                            onClick = {
-                                scope.launch { prefs.setComicFitMode("width") }
-                            }
-                        ) {
-                            Text(stringResource(R.string.comic_fit_width))
+                    SheetChoiceRow(
+                        label = stringResource(R.string.comic_fit_width),
+                        selected = fitMode == "width",
+                        enabled = isPaged,
+                        onClick = {
+                            scope.launch { prefs.setComicFitMode("width") }
                         }
-                        TextButton(
-                            enabled = isPaged && fitMode != "height",
-                            onClick = {
-                                scope.launch { prefs.setComicFitMode("height") }
-                            }
-                        ) {
-                            Text(stringResource(R.string.comic_fit_height))
+                    )
+                    SheetChoiceRow(
+                        label = stringResource(R.string.comic_fit_height),
+                        selected = fitMode == "height",
+                        enabled = isPaged,
+                        onClick = {
+                            scope.launch { prefs.setComicFitMode("height") }
                         }
-                        TextButton(
-                            enabled = isPaged && fitMode != "original",
-                            onClick = {
-                                scope.launch { prefs.setComicFitMode("original") }
-                            }
-                        ) {
-                            Text(stringResource(R.string.comic_fit_original))
+                    )
+                    SheetChoiceRow(
+                        label = stringResource(R.string.comic_fit_original),
+                        selected = fitMode == "original",
+                        enabled = isPaged,
+                        onClick = {
+                            scope.launch { prefs.setComicFitMode("original") }
                         }
-                        TextButton(
-                            enabled = isPaged && fitMode != "stretch",
-                            onClick = {
-                                scope.launch { prefs.setComicFitMode("stretch") }
-                            }
-                        ) {
-                            Text(stringResource(R.string.comic_fit_stretch))
+                    )
+                    SheetChoiceRow(
+                        label = stringResource(R.string.comic_fit_stretch),
+                        selected = fitMode == "stretch",
+                        enabled = isPaged,
+                        onClick = {
+                            scope.launch { prefs.setComicFitMode("stretch") }
                         }
-                    }
+                    )
                 }
                 // Page direction (ComicScreen's direction dialog,
                 // pager half): right-to-left is the default for
@@ -1671,24 +1671,22 @@ private fun NativeImageBookViewer(
                         text = stringResource(R.string.comic_direction),
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(
-                            enabled = isPaged && !directionRtl,
-                            onClick = {
-                                scope.launch { prefs.setComicDirectionRtl(true) }
-                            }
-                        ) {
-                            Text(stringResource(R.string.comic_direction_rtl))
+                    SheetChoiceRow(
+                        label = stringResource(R.string.comic_direction_rtl),
+                        selected = directionRtl,
+                        enabled = isPaged,
+                        onClick = {
+                            scope.launch { prefs.setComicDirectionRtl(true) }
                         }
-                        TextButton(
-                            enabled = isPaged && directionRtl,
-                            onClick = {
-                                scope.launch { prefs.setComicDirectionRtl(false) }
-                            }
-                        ) {
-                            Text(stringResource(R.string.comic_direction_ltr))
+                    )
+                    SheetChoiceRow(
+                        label = stringResource(R.string.comic_direction_ltr),
+                        selected = !directionRtl,
+                        enabled = isPaged,
+                        onClick = {
+                            scope.launch { prefs.setComicDirectionRtl(false) }
                         }
-                    }
+                    )
                 }
                 // Sharpen (ComicScreen's filter dialog: sharp
                 // checkbox + level SeekBar). Off by default, like
@@ -1709,20 +1707,17 @@ private fun NativeImageBookViewer(
                         }
                     )
                 }
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = stringResource(R.string.comic_sharpen),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            text = "$sharpenLevel",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
+                // Same de-duplication as the margin slider: the
+                // switch row above is the label, so this is just
+                // the slider and its level, indented as a sub-row
+                // (the old header repeated "تیز کردن تصویر" and
+                // the sheet showed two identical rows).
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(start = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Slider(
                         value = sharpenLevel.toFloat(),
                         onValueChange = { v ->
@@ -1730,7 +1725,12 @@ private fun NativeImageBookViewer(
                         },
                         valueRange = 0f..10f,
                         steps = 9,
-                        enabled = sharpen
+                        enabled = sharpen,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "$sharpenLevel",
+                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
                 Row(
@@ -1742,6 +1742,71 @@ private fun NativeImageBookViewer(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * One full-width choice row for the view settings sheet
+ * (mode, fit, direction). The old sheet squeezed several
+ * long Persian option labels into one horizontal row, and
+ * they wrapped word-per-line; one option per row, with the
+ * active one highlighted and ticked, cannot squeeze. A
+ * disabled row keeps its tick if it is the current value,
+ * dimmed like its label, so "current but not changeable
+ * in this mode" still reads.
+ */
+@Composable
+private fun SheetChoiceRow(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    icon: AppIconKind? = null,
+    enabled: Boolean = true
+) {
+    val contentColor = if (enabled) {
+        LocalContentColor.current
+    } else {
+        LocalContentColor.current.copy(alpha = 0.38f)
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (selected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    Color.Transparent
+                }
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (icon != null) {
+            AppIcon(
+                icon,
+                tint = contentColor,
+                size = 18.dp
+            )
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = contentColor,
+            modifier = Modifier.weight(1f)
+        )
+        if (selected) {
+            AppIcon(
+                AppIconKind.Check,
+                tint = if (enabled) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    contentColor
+                },
+                size = 18.dp
+            )
         }
     }
 }
