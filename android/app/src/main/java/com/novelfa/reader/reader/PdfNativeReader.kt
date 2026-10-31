@@ -1008,15 +1008,41 @@ private fun NativeImageBookViewer(
                                 )
                             }
                         }
-                        // Icon shows the mode the tap SWITCHES to:
-                        // a scroll glyph while paged, a pages glyph
-                        // while continuous.
-                        IconButton(onClick = { toggleMode() }) {
+                        // Icon shows the CURRENT mode, not the
+                        // destination — the old convention showed
+                        // the mode the tap would switch TO, and
+                        // its scroll glyph looks vertical, so it
+                        // actively misled: the user circled it
+                        // believing vertical mode was ON while
+                        // the app was still paged (which is why
+                        // pages still slid sideways). Now the
+                        // glyph reads as the state: two pages
+                        // side by side = paging horizontally, a
+                        // vertical strip = scrolling vertically.
+                        // The settings sheet already highlights
+                        // the current mode the same way, so the
+                        // two indicators can no longer disagree.
+                        // (Read above the button: semantics is
+                        // not composable, so the label is resolved
+                        // here, never hardcoded.)
+                        val modeDescription = stringResource(
+                            if (isPaged) {
+                                R.string.mode_horizontal
+                            } else {
+                                R.string.mode_vertical_continuous
+                            }
+                        )
+                        IconButton(
+                            onClick = { toggleMode() },
+                            modifier = Modifier.semantics {
+                                contentDescription = modeDescription
+                            }
+                        ) {
                             AppIcon(
                                 if (isPaged) {
-                                    AppIconKind.Scroll
-                                } else {
                                     AppIconKind.Pages
+                                } else {
+                                    AppIconKind.Scroll
                                 },
                                 tint = LocalContentColor.current,
                                 size = 19.dp
