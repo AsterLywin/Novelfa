@@ -360,4 +360,27 @@
     <string name="comic_sharpen">Sharpen image</string>
     <string name="comic_zoom">Zoom</string>
     <string name="comic_dual_page">Dual page</string>
+    <string name="comic_filter_gray">Grayscale</string>
+    <string name="comic_filter_contrast">Contrast</string>
+    <string name="comic_filter_invert">Invert colors</string>
+    <string name="comic_upscale_mode">Upscale interpolation</string>
+    <string name="comic_upscale_linear">Linear</string>
+    <string name="comic_upscale_cubic">Cubic</string>
+    <string name="comic_upscale_lanczos">Lanczos</string>
+    <string name="comic_rotate">Rotate view</string>
+    <string name="comic_bookmark">Bookmark</string>
+    <string name="comic_bookmarks">Bookmarks</string>
+    <string name="comic_no_bookmarks">No bookmarks yet</string>
+    <string name="comic_capture">Save page</string>
+    <string name="comic_page_saved">Page saved: %1$s</string>
+    <string name="comic_save_failed">Could not save the page</string>
+    <string name="comic_overview">Page overview</string>
+    <string name="comic_manual_crop">Manual crop</string>
+    <string name="comic_crop_apply">Apply</string>
+    <string name="comic_crop_reset">Reset</string>
+    <string name="comic_crop_hint">Drag a corner to resize, drag inside to move</string>
+    <string name="comic_zip_password">Archive password</string>
+    <string name="comic_password_wrong">Wrong password — try again</string>
+    <string name="comic_volume_keys">Volume keys turn pages</string>
+    <string name="mode_horizontal_continuous">Horizontal strip</string>
 </resources>

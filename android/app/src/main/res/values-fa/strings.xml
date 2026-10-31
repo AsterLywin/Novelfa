@@ -360,4 +360,27 @@
     <string name="comic_sharpen">تیز کردن تصویر</string>
     <string name="comic_zoom">بزرگ‌نمایی</string>
     <string name="comic_dual_page">دو صفحه‌ای</string>
+    <string name="comic_filter_gray">خاکستری</string>
+    <string name="comic_filter_contrast">کنتراست</string>
+    <string name="comic_filter_invert">معکوس کردن رنگ‌ها</string>
+    <string name="comic_upscale_mode">روش بزرگ‌نمایی</string>
+    <string name="comic_upscale_linear">خطی</string>
+    <string name="comic_upscale_cubic">مکعبی</string>
+    <string name="comic_upscale_lanczos">لانکزوس</string>
+    <string name="comic_rotate">چرخش نما</string>
+    <string name="comic_bookmark">نشانک</string>
+    <string name="comic_bookmarks">نشانک‌ها</string>
+    <string name="comic_no_bookmarks">هنوز نشانکی نیست</string>
+    <string name="comic_capture">ذخیره‌ی صفحه</string>
+    <string name="comic_page_saved">صفحه ذخیره شد: %1$s</string>
+    <string name="comic_save_failed">ذخیره‌ی صفحه ممکن نشد</string>
+    <string name="comic_overview">مرور صفحه‌ها</string>
+    <string name="comic_manual_crop">کراپ دستی</string>
+    <string name="comic_crop_apply">اعمال</string>
+    <string name="comic_crop_reset">بازنشانی</string>
+    <string name="comic_crop_hint">برای تغییر اندازه گوشه را بکشید، برای جابه‌جایی داخل کادر را بکشید</string>
+    <string name="comic_zip_password">رمز فایل فشرده</string>
+    <string name="comic_password_wrong">رمز اشتباه است، دوباره تلاش کنید</string>
+    <string name="comic_volume_keys">دکمه‌های صدا ورق بزنند</string>
+    <string name="mode_horizontal_continuous">نوار افقی</string>
 </resources>

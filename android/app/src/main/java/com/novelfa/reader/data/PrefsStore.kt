@@ -99,6 +99,39 @@ class PrefsStore(private val context: Context) {
         // mode ignores it — a strip is one page wide by
         // definition. Paged only, like fit/direction/zoom.
         val COMIC_DUAL_PAGE = booleanPreferencesKey("comicDualPage")
+        // Native comic viewer filters (ComicScreen's filter
+        // dialog, all default off): grayscale, contrast by
+        // histogram equalisation on luma, invert. Applied after
+        // crop/upscale/sharpen, bitmap pages only (animated
+        // pages play as-is, like sharpen).
+        val COMIC_FILTER_GRAY = booleanPreferencesKey("comicFilterGray")
+        val COMIC_FILTER_CONTRAST = booleanPreferencesKey("comicFilterContrast")
+        val COMIC_FILTER_INVERT = booleanPreferencesKey("comicFilterInvert")
+        // Native comic viewer upscale interpolation (ComicScreen's
+        // set_img_filter_upscale_mode): "linear", "cubic"
+        // (default — the behaviour before this setting existed),
+        // "lanczos". Upscale only; downscale stays area-average.
+        val COMIC_UPSCALE_MODE = stringPreferencesKey("comicUpscaleMode")
+        // Native comic viewer view rotation, degrees clockwise
+        // (0/90/180/270, default 0): rotates every page's display
+        // (the Rotate action cycles it). 180 also mirrors the
+        // navigation direction, ComicScreen's rotation rule.
+        val COMIC_ROTATION = intPreferencesKey("comicRotation")
+        // Native comic viewer volume-key turning (default off:
+        // volume keys normally adjust volume, and hijacking them
+        // is a choice, not a default): volume down = next page,
+        // volume up = previous page.
+        val COMIC_VOLUME_KEYS = booleanPreferencesKey("comicVolumeKeys")
+        // Native comic viewer reading mode, separate from the
+        // shared readingMode: comics have THREE modes now
+        // (paged / vertical strip / horizontal strip) and the
+        // EPUB reader only understands two — sharing one key
+        // would make the EPUB reader misbehave in horizontal
+        // mode (its continuous-only features key off
+        // CONTINUOUS_VERTICAL). Null = follow the shared key,
+        // so existing users keep their mode until they change it
+        // in the comic viewer.
+        val COMIC_READING_MODE = stringPreferencesKey("comicReadingMode")
         // Safe (fast) import: single-read copy + deferred generated
         // covers, toggled from Settings. Default ON: it only changes
         // how import reads and when covers are built, never the book
@@ -176,6 +209,25 @@ class PrefsStore(private val context: Context) {
     /** Native comic viewer dual page (default off, paged mode only). */
     val comicDualPage: Flow<Boolean> =
         context.dataStore.data.map { it[COMIC_DUAL_PAGE] ?: false }
+    /** Native comic viewer filters (all default off). */
+    val comicFilterGray: Flow<Boolean> =
+        context.dataStore.data.map { it[COMIC_FILTER_GRAY] ?: false }
+    val comicFilterContrast: Flow<Boolean> =
+        context.dataStore.data.map { it[COMIC_FILTER_CONTRAST] ?: false }
+    val comicFilterInvert: Flow<Boolean> =
+        context.dataStore.data.map { it[COMIC_FILTER_INVERT] ?: false }
+    /** Native comic viewer upscale interpolation (default "cubic"). */
+    val comicUpscaleMode: Flow<String> =
+        context.dataStore.data.map { it[COMIC_UPSCALE_MODE] ?: "cubic" }
+    /** Native comic viewer view rotation, degrees (default 0). */
+    val comicRotation: Flow<Int> =
+        context.dataStore.data.map { it[COMIC_ROTATION] ?: 0 }
+    /** Native comic viewer volume-key turning (default off). */
+    val comicVolumeKeys: Flow<Boolean> =
+        context.dataStore.data.map { it[COMIC_VOLUME_KEYS] ?: false }
+    /** Native comic viewer mode override (null = follow shared mode). */
+    val comicReadingMode: Flow<String?> =
+        context.dataStore.data.map { it[COMIC_READING_MODE] }
     /** Safe import toggle (default ON; see FAST_IMPORT). */
     val fastImport: Flow<Boolean> = context.dataStore.data.map { it[FAST_IMPORT] ?: true }
     /** In-place import toggle (default OFF; see IN_PLACE_IMPORT). */
@@ -321,6 +373,34 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setComicDualPage(value: Boolean) {
         context.dataStore.edit { it[COMIC_DUAL_PAGE] = value }
+    }
+
+    suspend fun setComicFilterGray(value: Boolean) {
+        context.dataStore.edit { it[COMIC_FILTER_GRAY] = value }
+    }
+
+    suspend fun setComicFilterContrast(value: Boolean) {
+        context.dataStore.edit { it[COMIC_FILTER_CONTRAST] = value }
+    }
+
+    suspend fun setComicFilterInvert(value: Boolean) {
+        context.dataStore.edit { it[COMIC_FILTER_INVERT] = value }
+    }
+
+    suspend fun setComicUpscaleMode(value: String) {
+        context.dataStore.edit { it[COMIC_UPSCALE_MODE] = value }
+    }
+
+    suspend fun setComicRotation(value: Int) {
+        context.dataStore.edit { it[COMIC_ROTATION] = value }
+    }
+
+    suspend fun setComicVolumeKeys(value: Boolean) {
+        context.dataStore.edit { it[COMIC_VOLUME_KEYS] = value }
+    }
+
+    suspend fun setComicReadingMode(value: String) {
+        context.dataStore.edit { it[COMIC_READING_MODE] = value }
     }
 
     suspend fun setFastImport(value: Boolean) {

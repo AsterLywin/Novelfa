@@ -9,6 +9,7 @@ import android.graphics.pdf.PdfRenderer
 import android.widget.ImageView
 import java.nio.ByteBuffer
 import android.os.ParcelFileDescriptor
+import java.io.ByteArrayOutputStream
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -18,6 +19,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +38,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
@@ -52,15 +59,18 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -71,8 +81,28 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -94,6 +124,7 @@ import com.novelfa.reader.data.BookEntity
 import com.novelfa.reader.data.CoverBackfill
 import com.novelfa.reader.data.InPlaceSource
 import com.novelfa.reader.data.PrefsStore
+import com.novelfa.reader.data.ReaderExtrasStore
 import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CbzBook
@@ -109,7 +140,9 @@ import com.novelfa.reader.theme.XpStore
 import java.io.Closeable
 import java.io.File
 import java.time.Instant
-import java.util.zip.ZipFile
+import net.lingala.zip4j.ZipFile
+import net.lingala.zip4j.model.FileHeader
+import com.novelfa.reader.data.CropRect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -223,6 +256,17 @@ internal interface NativePageSource : Closeable {
      * existing sources keep compiling unchanged.
      */
     fun nativePageSize(index: Int): Pair<Int, Int>? = null
+
+    /**
+     * A small thumbnail of one page (about [targetWidthPx]
+     * wide, height capped at 1200px), for the scrub preview and
+     * the page-overview grid. Cheap by construction: a sampled
+     * decode, never the full pipeline (no crop/sharpen/filters)
+     * — a thumbnail that decoded a page per scrub step would
+     * stall the slider, and a grid of full pages would OOM.
+     * Default null (no thumbnail); sources override it.
+     */
+    fun thumbnail(index: Int, targetWidthPx: Int): Bitmap? = null
 }
 
 internal class PdfNativeRenderer(pdfFile: File) : NativePageSource {
@@ -273,6 +317,13 @@ internal class PdfNativeRenderer(pdfFile: File) : NativePageSource {
         }
     }
 
+    override fun thumbnail(index: Int, targetWidthPx: Int): Bitmap? {
+        // PdfRenderer renders at the requested width, so a
+        // small request IS a cheap thumbnail — no sampling
+        // dance needed (unlike CBZ, which decodes pixels).
+        return runCatching { renderPage(index, targetWidthPx) }.getOrNull()
+    }
+
     override fun close() {
         synchronized(lock) {
             runCatching { renderer.close() }
@@ -299,11 +350,51 @@ internal class PdfNativeRenderer(pdfFile: File) : NativePageSource {
  * particular used to return null for 565) or an out-of-memory
  * on a giant page — never the happy path, because 565's
  * banding on gradients is plainly visible on manhwa art.
+ *
+ * Backend: zip4j (Apache-2.0, GPL-compatible), not
+ * java.util.zip — the JDK reader cannot decrypt, so a
+ * password-protected archive used to fail every page with a
+ * corrupt-image error. zip4j reads plain archives exactly the
+ * same way and additionally decrypts (traditional ZipCrypto
+ * and AES) when a password is supplied. Entry NAMES still come
+ * from [CbzBook.imageEntryNames]: ZIP encrypts file data, not
+ * the central directory, so names list fine without a password.
  */
-internal class CbzNativeSource(zipFile: File) : NativePageSource {
+internal class CbzNativeSource(
+    zipFile: File,
+    password: CharArray? = null
+) : NativePageSource {
     private val lock = Any()
-    private val zip = ZipFile(zipFile)
+    private val zip = ZipFile(zipFile).apply {
+        if (password != null) setPassword(password)
+    }
     private val entries: List<String> = CbzBook.imageEntryNames(zipFile)
+
+    private fun headerFor(name: String): FileHeader? {
+        return runCatching {
+            zip.fileHeaders.firstOrNull { it.fileName == name }
+        }.getOrNull()
+    }
+
+    /**
+     * Validates the password by fully reading the first
+     * encrypted entry: zip4j verifies an AES password only once
+     * the entry is fully read (the auth code sits at the end),
+     * so a partial read cannot validate it. Unencrypted
+     * archives always pass. Called on IO by the viewer before
+     * the source is shown, so a wrong password asks again
+     * instead of failing every page.
+     */
+    fun probePassword(): Boolean {
+        synchronized(lock) {
+            val encrypted = runCatching {
+                zip.fileHeaders.firstOrNull { it.isEncrypted }
+            }.getOrNull() ?: return true
+            return runCatching {
+                zip.getInputStream(encrypted).use { it.readBytes() }
+            }.isSuccess
+        }
+    }
 
     override val pageCount: Int
         get() = entries.size
@@ -314,10 +405,10 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
     override fun nativePageSize(index: Int): Pair<Int, Int>? {
         synchronized(lock) {
             if (index < 0 || index >= entries.size) return null
-            val entry = zip.getEntry(entries[index]) ?: return null
+            val header = headerFor(entries[index]) ?: return null
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             runCatching {
-                zip.getInputStream(entry).use { stream ->
+                zip.getInputStream(header).use { stream ->
                     BitmapFactory.decodeStream(stream, null, bounds)
                 }
             }
@@ -326,7 +417,7 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             // swaps width and height, and the dual-page split
             // decision (landscape or not) must see the rotated
             // shape, not the stored one.
-            val degrees = exifDegrees(entry)
+            val degrees = exifDegrees(entries[index])
             return if (degrees == 90 || degrees == 270) {
                 bounds.outHeight to bounds.outWidth
             } else {
@@ -353,9 +444,9 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             // WebP falls through to the bitmap path with its
             // crop/resize/sharpen intact).
             if (!isAnimatedPage(index)) return null
-            val entry = zip.getEntry(entries[index]) ?: return null
+            val header = headerFor(entries[index]) ?: return null
             return runCatching {
-                val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                val bytes = zip.getInputStream(header).use { it.readBytes() }
                 ImageDecoder.decodeDrawable(
                     ImageDecoder.createSource(ByteBuffer.wrap(bytes))
                 )
@@ -372,12 +463,52 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
      * page. Each call needs its own stream: a consumed stream
      * cannot be read twice.
      */
-    private fun exifDegrees(entry: java.util.zip.ZipEntry): Int {
+    private fun exifDegrees(name: String): Int {
         return runCatching {
-            zip.getInputStream(entry).use { stream ->
+            val header = headerFor(name) ?: return@runCatching 0
+            zip.getInputStream(header).use { stream ->
                 ExifRotation.degreesFromStream(stream)
             }
         }.getOrDefault(0)
+    }
+
+    override fun thumbnail(index: Int, targetWidthPx: Int): Bitmap? {
+        synchronized(lock) {
+            if (index < 0 || index >= entries.size) return null
+            val header = headerFor(entries[index]) ?: return null
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            runCatching {
+                zip.getInputStream(header).use { stream ->
+                    BitmapFactory.decodeStream(stream, null, bounds)
+                }
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            // Sample down until the width is near the target
+            // (within 2x, so the scrub preview stays crisp)
+            // AND the height fits the 1200px cap — a tall strip
+            // sampled by width alone would still be a 480x4800
+            // bitmap, and a grid of those is an OOM.
+            var sample = 1
+            while ((bounds.outWidth / sample > targetWidthPx * 2 ||
+                bounds.outHeight / sample > 1200) && sample < 64
+            ) {
+                sample *= 2
+            }
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferQualityOverSpeed = true
+            }
+            val decoded = runCatching {
+                zip.getInputStream(header).use { stream ->
+                    BitmapFactory.decodeStream(stream, null, opts)
+                }
+            }.getOrNull() ?: return null
+            val degrees = exifDegrees(entries[index])
+            if (degrees == 0) return decoded
+            val rotated = rotateBitmap(decoded, degrees)
+            if (rotated !== decoded) decoded.recycle()
+            return rotated
+        }
     }
 
     override fun renderPage(index: Int, targetWidthPx: Int): Bitmap {
@@ -385,10 +516,10 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             if (index < 0 || index >= entries.size) {
                 throw IndexOutOfBoundsException("Comic page $index out of range")
             }
-            val entry = zip.getEntry(entries[index])
+            val header = headerFor(entries[index])
                 ?: throw IllegalArgumentException("Missing comic entry: ${entries[index]}")
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            zip.getInputStream(entry).use { stream ->
+            zip.getInputStream(header).use { stream ->
                 BitmapFactory.decodeStream(stream, null, bounds)
             }
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
@@ -401,7 +532,7 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             // The rotation itself is applied to the decoded
             // bitmap below, so the crop/resize/sharpen pipeline
             // downstream always sees the upright page.
-            val exifDegrees = exifDegrees(entry)
+            val exifDegrees = exifDegrees(entries[index])
             val effWidth =
                 if (exifDegrees == 90 || exifDegrees == 270) bounds.outHeight else bounds.outWidth
             val effHeight =
@@ -447,7 +578,7 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             // only the visible window's pages are alive.
             fun decodeAs(config: Bitmap.Config, sampleSize: Int): Bitmap? {
                 return runCatching {
-                    zip.getInputStream(entry).use { stream ->
+                    zip.getInputStream(header).use { stream ->
                         BitmapFactory.decodeStream(
                             stream, null,
                             BitmapFactory.Options().apply {
@@ -495,21 +626,17 @@ internal class CbzNativeSource(zipFile: File) : NativePageSource {
             val decoded = bitmap
                 ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
             if (exifDegrees == 0) return decoded
-            val matrix = android.graphics.Matrix().apply {
-                postRotate(exifDegrees.toFloat())
-            }
-            val rotated = Bitmap.createBitmap(
-                decoded, 0, 0, decoded.width, decoded.height, matrix, true
-            )
+            val rotated = rotateBitmap(decoded, exifDegrees)
             if (rotated !== decoded) decoded.recycle()
             return rotated
         }
     }
 
     override fun close() {
-        synchronized(lock) {
-            runCatching { zip.close() }
-        }
+        // No-op on purpose: zip4j parses the central directory
+        // at construction (its handle is closed after parsing)
+        // and opens a fresh handle per stream, so there is no
+        // persistent handle to close — unlike java.util.zip.
     }
 
     companion object {
@@ -625,7 +752,7 @@ fun PdfReaderRoute(
                 book = entity!!,
                 dao = dao,
                 onClose = onClose,
-                sourceFactory = { CbzNativeSource(bookFile) },
+                sourceFactory = { pw -> CbzNativeSource(bookFile, pw) },
                 loadingRes = R.string.cbz_native_loading,
                 errorRes = R.string.cbz_native_error
             )
@@ -696,7 +823,7 @@ private fun ZipReaderRoute(
                 book = book,
                 dao = dao,
                 onClose = onClose,
-                sourceFactory = { CbzNativeSource(resolvedFile) },
+                sourceFactory = { pw -> CbzNativeSource(resolvedFile, pw) },
                 loadingRes = R.string.cbz_native_loading,
                 errorRes = R.string.cbz_native_error
             )
@@ -714,7 +841,7 @@ private fun ZipReaderRoute(
  * order, so bookkeeping stays in pages even though the pager
  * moves in pairs.
  */
-private sealed interface DualPair {
+internal sealed interface DualPair {
     val firstPage: Int
 
     /** The book's last page, alone (odd page count). */
@@ -736,7 +863,7 @@ private sealed interface DualPair {
  * that fails for a page treats it as portrait: the page still
  * pairs, it just never splits on its own.
  */
-private fun buildDualPairs(source: NativePageSource, pageCount: Int): List<DualPair> {
+internal fun buildDualPairs(source: NativePageSource, pageCount: Int): List<DualPair> {
     val pairs = mutableListOf<DualPair>()
     var i = 0
     while (i < pageCount) {
@@ -764,7 +891,7 @@ private fun buildDualPairs(source: NativePageSource, pageCount: Int): List<DualP
  * (and to 0 for a page before every pair, which cannot happen
  * for a real book but keeps the pager index in range).
  */
-private fun pairIndexForPage(pairs: List<DualPair>, page: Int): Int {
+internal fun pairIndexForPage(pairs: List<DualPair>, page: Int): Int {
     for ((index, pair) in pairs.withIndex()) {
         when (pair) {
             is DualPair.Single -> if (pair.firstPage == page) return index
@@ -787,7 +914,7 @@ private fun NativeImageBookViewer(
     book: BookEntity,
     dao: BookDao,
     onClose: () -> Unit,
-    sourceFactory: () -> NativePageSource,
+    sourceFactory: (CharArray?) -> NativePageSource,
     loadingRes: Int,
     errorRes: Int
 ) {
@@ -798,24 +925,79 @@ private fun NativeImageBookViewer(
         PrefsStore(context.applicationContext)
     }
     val savedModeKey by prefs.readingMode.collectAsState(initial = "paged")
-    val modeNow = ReadingMode.fromKey(savedModeKey)
+    val comicModeKey by prefs.comicReadingMode.collectAsState(initial = null)
+    // Comic mode: the comic viewer's own key, falling back to
+    // the shared key while unset (see PrefsStore: comics have
+    // three modes now, the EPUB reader understands two, and
+    // sharing one key would make the EPUB reader misbehave in
+    // horizontal-strip mode).
+    val modeNow = ReadingMode.fromKey(comicModeKey ?: savedModeKey)
     val isPaged = modeNow == ReadingMode.PAGED_HORIZONTAL
+    val isHorizontalStrip = modeNow == ReadingMode.HORIZONTAL_STRIP
+    // Per-book viewer extras (bookmarks, exact strip offset),
+    // kept out of Room on purpose — see ReaderExtrasStore.
+    val extras = remember(context.applicationContext) {
+        ReaderExtrasStore(context.applicationContext)
+    }
+
+    val directionRtl by prefs.comicDirectionRtl.collectAsState(initial = true)
+    val sharpen by prefs.comicSharpen.collectAsState(initial = false)
+    val sharpenLevel by prefs.comicSharpenLevel.collectAsState(initial = 5)
+    val upscaleMode by prefs.comicUpscaleMode.collectAsState(initial = "cubic")
+    val filterGray by prefs.comicFilterGray.collectAsState(initial = false)
+    val filterContrast by prefs.comicFilterContrast.collectAsState(initial = false)
+    val filterInvert by prefs.comicFilterInvert.collectAsState(initial = false)
+    val viewRotation by prefs.comicRotation.collectAsState(initial = 0)
+    val volumeKeysOn by prefs.comicVolumeKeys.collectAsState(initial = false)
+    val bookmarks by extras.bookmarks(book.id).collectAsState(initial = emptySet())
+    val manualCropRects by extras.cropRects(book.id).collectAsState(initial = emptyMap())
+    // Effective book direction at the current view rotation:
+    // 180 mirrors the layout (ComicScreen's rotation rule), so
+    // the pager direction and the dual-pair order both flip.
+    val effectiveRtl = directionRtl != (viewRotation == 180)
+    val pairDirection = if (effectiveRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
 
     var source by remember { mutableStateOf<NativePageSource?>(null) }
     var openError by remember { mutableStateOf(false) }
+    // Encrypted-archive password (ComicScreen's ZIP password
+    // support): null until the user supplies one. The open
+    // effect restarts when it changes, so submitting the
+    // dialog retries the open with the password. Session-only
+    // by design — a password is never persisted.
+    var zipPassword by remember { mutableStateOf<CharArray?>(null) }
+    var showPasswordDialog by remember { mutableStateOf(false) }
+    var passwordWrong by remember { mutableStateOf(false) }
     var totalChaptersFixed by remember { mutableStateOf(false) }
 
     // Open on IO: renderer/zip construction parses the file header
     // and must never block the main thread on a big book.
-    LaunchedEffect(book.id, book.filePath) {
+    LaunchedEffect(book.id, book.filePath, zipPassword) {
         val opened = withContext(Dispatchers.IO) {
-            runCatching { sourceFactory() }.getOrNull()
+            runCatching { sourceFactory(zipPassword) }.getOrNull()
         }
         if (opened == null || opened.pageCount <= 0) {
             runCatching { opened?.close() }
             openError = true
         } else {
-            source = opened
+            // Encrypted entries the password cannot open (or
+            // no password yet): ask, do not show a broken book.
+            // The probe runs on IO (it reads a full entry).
+            // The source is closed; the viewer stays on the
+            // loading state under the dialog, and dismissing
+            // the dialog without a password lands on the error
+            // screen (see the dialog's onDismissRequest).
+            val probeOk = if (opened is CbzNativeSource) {
+                withContext(Dispatchers.IO) { opened.probePassword() }
+            } else {
+                true
+            }
+            if (!probeOk) {
+                runCatching { opened.close() }
+                passwordWrong = zipPassword != null
+                showPasswordDialog = true
+            } else {
+                source = opened
+            }
         }
     }
     // THE "zip file closed" FIX: `source` is a MutableState, so
@@ -897,6 +1079,7 @@ private fun NativeImageBookViewer(
         if (dualPage && dualPairs != null) dualPairs!!.size else pageCount
 
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
+    val rowState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
     val pagerState = rememberPagerState(
         initialPage = initialPage,
         pageCount = { pagerPageCount }
@@ -986,7 +1169,10 @@ private fun NativeImageBookViewer(
     // restore must not read currentPage after the flip — it would
     // read 0 and lose the place).
     var pendingModeTarget by remember { mutableStateOf<Int?>(null) }
-    LaunchedEffect(pageCount, isPaged) {
+    // Keys include isHorizontalStrip: vertical -> horizontal
+    // keeps isPaged false, so without it the effect would not
+    // restart and the new strip would sit at page 0.
+    LaunchedEffect(pageCount, isPaged, isHorizontalStrip) {
         if (pageCount <= 0) return@LaunchedEffect
         val target = pendingModeTarget?.also { pendingModeTarget = null }
             ?: if (!restoredPage) {
@@ -1010,7 +1196,20 @@ private fun NativeImageBookViewer(
                     }
                 runCatching { pagerState.scrollToPage(pagerTarget) }
             } else {
-                runCatching { listState.scrollToItem(target) }
+                // Exact strip offset (ComicScreen's fractional
+                // page offset): the strip lands where it was,
+                // not at the top of the page. The offset key is
+                // shared by both strips — an out-of-range pixel
+                // offset simply clamps, so a mode switch cannot
+                // break the landing.
+                val offset = runCatching {
+                    extras.scrollOffset(book.id).first()
+                }.getOrDefault(0)
+                if (isHorizontalStrip) {
+                    runCatching { rowState.scrollToItem(target, offset) }
+                } else {
+                    runCatching { listState.scrollToItem(target, offset) }
+                }
             }
         }
     }
@@ -1047,7 +1246,7 @@ private fun NativeImageBookViewer(
     // already holds it. Accepting it would, on a dual toggle,
     // save the transient pair index as a page number before the
     // correction effect below lands the pager on the right pair.
-    LaunchedEffect(listState, pagerState, pageCount, isPaged, dualPage, dualPairs) {
+    LaunchedEffect(listState, rowState, pagerState, pageCount, isPaged, isHorizontalStrip, dualPage, dualPairs) {
         if (pageCount <= 0) return@LaunchedEffect
         var first = true
         if (isPaged) {
@@ -1067,7 +1266,15 @@ private fun NativeImageBookViewer(
                 }
             }
         } else {
-            snapshotFlow { listState.firstVisibleItemIndex }.collect { page ->
+            // Both strips track the same way; the active one
+            // also saves its exact scroll offset, so a close
+            // mid-page restores mid-page (see the restore
+            // effect). Offset saves ride the page-change rate
+            // — one DataStore edit per page, never per frame.
+            val active = if (isHorizontalStrip) rowState else listState
+            snapshotFlow {
+                active.firstVisibleItemIndex to active.firstVisibleItemScrollOffset
+            }.collect { (page, offset) ->
                 if (first) {
                     first = false
                     return@collect
@@ -1075,8 +1282,37 @@ private fun NativeImageBookViewer(
                 if (page in 0 until pageCount) {
                     currentPage = page
                     savePage(page)
+                    scope.launch { extras.setScrollOffset(book.id, offset) }
                 }
             }
+        }
+    }
+
+    // Fractional slider position for continuous modes
+    // (ComicScreen's fractional page offset): index + the
+    // fraction of the first visible page scrolled past, so the
+    // slider sits between pages while a page is half-scrolled
+    // instead of snapping to integers. Tracked in a flow:
+    // layoutInfo is not composition-observable, but the scroll
+    // offset changes every scroll frame, so the flow emits
+    // continuously while scrolling and the size read is fresh.
+    var stripPosition by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(listState, rowState, isHorizontalStrip, pageCount) {
+        if (pageCount <= 0) return@LaunchedEffect
+        val active = if (isHorizontalStrip) rowState else listState
+        snapshotFlow {
+            active.firstVisibleItemIndex to active.firstVisibleItemScrollOffset
+        }.collect { (index, offset) ->
+            val first = index.coerceIn(0, pageCount - 1)
+            val info = active.layoutInfo.visibleItemsInfo
+                .firstOrNull { it.index == first }
+            val fraction = if (info != null && info.size > 0) {
+                (offset.toFloat() / info.size).coerceIn(0f, 1f)
+            } else {
+                0f
+            }
+            stripPosition = (first + fraction)
+                .coerceIn(0f, (pageCount - 1).toFloat())
         }
     }
 
@@ -1114,23 +1350,52 @@ private fun NativeImageBookViewer(
                 if (flushedSecond != null) xpCreditPage(flushedSecond)
             }
             savePage(currentPage, force = true)
+            if (!isPaged) {
+                val offset = if (isHorizontalStrip) {
+                    rowState.firstVisibleItemScrollOffset
+                } else {
+                    listState.firstVisibleItemScrollOffset
+                }
+                runCatching { extras.setScrollOffset(book.id, offset) }
+            }
             onClose()
         }
     }
 
+    // Top-bar icon cycles all three modes (paged -> vertical
+    // strip -> horizontal strip -> paged); the sheet rows pick
+    // one directly through setMode below. Both write the
+    // comic viewer's own key, never the shared EPUB key.
     fun toggleMode() {
-        val next = if (isPaged) {
-            ReadingMode.CONTINUOUS_VERTICAL
-        } else {
-            ReadingMode.PAGED_HORIZONTAL
+        val next = when (modeNow) {
+            ReadingMode.PAGED_HORIZONTAL -> ReadingMode.CONTINUOUS_VERTICAL
+            ReadingMode.CONTINUOUS_VERTICAL -> ReadingMode.HORIZONTAL_STRIP
+            ReadingMode.HORIZONTAL_STRIP -> ReadingMode.PAGED_HORIZONTAL
         }
         pendingModeTarget = currentPage
         scope.launch {
             withContext(Dispatchers.IO) {
-                prefs.setReadingMode(next.key)
+                prefs.setComicReadingMode(next.key)
             }
         }
     }
+
+    fun setMode(mode: ReadingMode) {
+        if (mode == modeNow) return
+        pendingModeTarget = currentPage
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                prefs.setComicReadingMode(mode.key)
+            }
+        }
+    }
+
+    // Rotate action: cycles the view rotation 0 -> 90 -> 180
+    // -> 270 -> 0 (persisted, so it survives reopening). The
+    // pipeline rotates bitmap pages, the ImageView rotates
+    // animated ones; 180 also mirrors navigation (see
+    // effectiveRtl above).
+
 
     /** Direct jump (slider, restore, zoom): never animates through pages. */
     fun jumpTo(page: Int) {
@@ -1146,6 +1411,8 @@ private fun NativeImageBookViewer(
                         target
                     }
                 runCatching { pagerState.scrollToPage(pagerTarget) }
+            } else if (isHorizontalStrip) {
+                runCatching { rowState.scrollToItem(target) }
             } else {
                 runCatching { listState.scrollToItem(target) }
             }
@@ -1170,6 +1437,8 @@ private fun NativeImageBookViewer(
                 } else {
                     runCatching { pagerState.animateScrollToPage(target) }
                 }
+            } else if (isHorizontalStrip) {
+                runCatching { rowState.scrollToItem(target) }
             } else {
                 runCatching { listState.scrollToItem(target) }
             }
@@ -1208,6 +1477,86 @@ private fun NativeImageBookViewer(
     // where text buttons have room.
     var chromeVisible by remember { mutableStateOf(true) }
     var showViewSettings by remember { mutableStateOf(false) }
+    var showOverview by remember { mutableStateOf(false) }
+    var showBookmarks by remember { mutableStateOf(false) }
+    var showCropEditor by remember { mutableStateOf(false) }
+    // Double-tap support: the chrome toggle waits 300ms to
+    // tell a single tap from the first tap of a double-tap
+    // (the same window the page containers use for their
+    // double-tap zoom). A second tap inside the window clears
+    // the pending toggle — the container zooms instead — so a
+    // double-tap never flickers the chrome. Cost: every chrome
+    // toggle takes 300ms (the standard PhotoView trade-off).
+    var pendingTapMs by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(pendingTapMs) {
+        val t = pendingTapMs ?: return@LaunchedEffect
+        delay(300)
+        if (pendingTapMs == t) {
+            chromeVisible = !chromeVisible
+            pendingTapMs = null
+        }
+    }
+    // Volume-key focus: the tap surface holds focus while the
+    // switch is on, so the volume keys reach it. Focus is
+    // re-requested when the sheet closes (the sheet steals it
+    // while open); in touch mode a tap does not move focus, so
+    // the top-bar buttons never steal it.
+    fun cycleRotation() {
+        val next = when (viewRotation) {
+            0 -> 90
+            90 -> 180
+            180 -> 270
+            else -> 0
+        }
+        scope.launch { prefs.setComicRotation(next) }
+    }
+
+    // Capture action: saves the CURRENT page to the gallery
+    // (Pictures/Novelfa, via the existing ImageSaver — no
+    // permission, no picker). What is saved is the page as
+    // decoded (native pixels + EXIF rotation), NOT the
+    // displayed pipeline output: crop/filters/sharpen live in
+    // the item and re-running them here would duplicate the
+    // pipeline and drift from it. The original page is the
+    // honest thing to save.
+    fun capturePage() {
+        val src = source ?: return
+        val page = currentPage
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bitmap = src.renderPage(page, screenWidthPx)
+                    try {
+                        val stream = ByteArrayOutputStream()
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                        val name = "${book.title} p${page + 1}.png"
+                            .replace('/', '-')
+                            .replace('\\', '-')
+                        ImageSaver.saveToGallery(
+                            context,
+                            ImageSaveTarget(null, stream.toByteArray(), name, "image/png")
+                        ).getOrThrow()
+                    } finally {
+                        bitmap.recycle()
+                    }
+                }
+            }
+            result.onSuccess { name ->
+                snackbar.showSnackbar(
+                    context.getString(R.string.comic_page_saved, name)
+                )
+            }.onFailure {
+                snackbar.showSnackbar(context.getString(R.string.comic_save_failed))
+            }
+        }
+    }
+
+    val volumeFocus = remember { FocusRequester() }
+    LaunchedEffect(volumeKeysOn, showViewSettings) {
+        if (volumeKeysOn && !showViewSettings) {
+            volumeFocus.requestFocus()
+        }
+    }
     val viewSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     // Scrub preview, not a live move (ComicScreen's page move
     // preview, number-only: a thumbnail would decode a page per
@@ -1238,9 +1587,6 @@ private fun NativeImageBookViewer(
     // page-direction / filter-sharp settings, same defaults):
     // fit-width, right-to-left, sharpen off.
     val fitMode by prefs.comicFitMode.collectAsState(initial = "width")
-    val directionRtl by prefs.comicDirectionRtl.collectAsState(initial = true)
-    val sharpen by prefs.comicSharpen.collectAsState(initial = false)
-    val sharpenLevel by prefs.comicSharpenLevel.collectAsState(initial = 5)
     val currentChapterIndex = chapters.indexOfLast { it.firstPageIndex <= currentPage }
     val currentChapter = chapters.getOrNull(currentChapterIndex)
 
@@ -1308,10 +1654,10 @@ private fun NativeImageBookViewer(
                         // not composable, so the label is resolved
                         // here, never hardcoded.)
                         val modeDescription = stringResource(
-                            if (isPaged) {
-                                R.string.mode_horizontal
-                            } else {
-                                R.string.mode_vertical_continuous
+                            when {
+                                isPaged -> R.string.mode_horizontal
+                                isHorizontalStrip -> R.string.mode_horizontal_continuous
+                                else -> R.string.mode_vertical_continuous
                             }
                         )
                         IconButton(
@@ -1321,10 +1667,10 @@ private fun NativeImageBookViewer(
                             }
                         ) {
                             AppIcon(
-                                if (isPaged) {
-                                    AppIconKind.Pages
-                                } else {
-                                    AppIconKind.Scroll
+                                when {
+                                    isPaged -> AppIconKind.Pages
+                                    isHorizontalStrip -> AppIconKind.HorizontalScroll
+                                    else -> AppIconKind.Scroll
                                 },
                                 tint = LocalContentColor.current,
                                 size = 19.dp
@@ -1365,6 +1711,42 @@ private fun NativeImageBookViewer(
                                 },
                                 size = 19.dp
                             )
+                        }
+                        // Bookmark toggle for the current page
+                        // (a per-page bookmark, not a chapter):
+                        // filled when this page is bookmarked,
+                        // outline otherwise. One tap toggles;
+                        // the list lives in the sheet. Hidden
+                        // until the book is open (pageCount 0
+                        // has no page to bookmark).
+                        if (pageCount > 0) {
+                            val bookmarked = currentPage in bookmarks
+                            val bookmarkDescription =
+                                stringResource(R.string.comic_bookmark)
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        extras.toggleBookmark(book.id, currentPage)
+                                    }
+                                },
+                                modifier = Modifier.semantics {
+                                    contentDescription = bookmarkDescription
+                                }
+                            ) {
+                                AppIcon(
+                                    if (bookmarked) {
+                                        AppIconKind.Bookmark
+                                    } else {
+                                        AppIconKind.BookmarkAdd
+                                    },
+                                    tint = if (bookmarked) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        LocalContentColor.current
+                                    },
+                                    size = 19.dp
+                                )
+                            }
                         }
                         IconButton(onClick = { showViewSettings = true }) {
                             AppIcon(
@@ -1409,6 +1791,22 @@ private fun NativeImageBookViewer(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         val preview = sliderPreview
+                        // Scrub thumbnail: while the thumb is
+                        // dragged, a small preview of the page
+                        // it WOULD land on — beyond ComicScreen's
+                        // number-only preview. The thumbnail is
+                        // a cheap sampled decode (never the full
+                        // pipeline), so scrubbing stays smooth.
+                        if (preview != null) {
+                            PageThumbnail(
+                                source = source,
+                                page = preview,
+                                modifier = Modifier.width(120.dp)
+                                    .heightIn(max = 160.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
                         Text(
                             text = stringResource(
                                 R.string.page_indicator,
@@ -1423,7 +1821,8 @@ private fun NativeImageBookViewer(
                             }
                         )
                         Slider(
-                            value = (sliderPreview ?: currentPage).toFloat(),
+                            value = sliderPreview?.toFloat()
+                                ?: if (isPaged) currentPage.toFloat() else stripPosition,
                             onValueChange = { v ->
                                 sliderPreview =
                                     v.toInt().coerceIn(0, pageCount - 1)
@@ -1462,8 +1861,37 @@ private fun NativeImageBookViewer(
         // never toggles the chrome by accident.
         Box(
             modifier = Modifier.fillMaxSize().padding(padding)
+                .focusRequester(volumeFocus)
+                .focusable()
+                .onPreviewKeyEvent { event ->
+                    // Volume-key turning (opt-in switch in the
+                    // sheet, default off): volume down = next
+                    // page, volume up = previous. Consuming the
+                    // key stops the system volume UI — that is
+                    // the point of the switch, not a side effect.
+                    if (!volumeKeysOn || event.type != KeyEventType.KeyDown) {
+                        false
+                    } else when (event.key) {
+                        Key.VolumeDown -> {
+                            stepTo(currentPage + 1)
+                            true
+                        }
+                        Key.VolumeUp -> {
+                            stepTo(currentPage - 1)
+                            true
+                        }
+                        else -> false
+                    }
+                }
                 .pointerInput(Unit) {
-                    detectTapGestures(onTap = { chromeVisible = !chromeVisible })
+                    detectTapGestures(onTap = {
+                        val now = System.currentTimeMillis()
+                        if (pendingTapMs != null && now - pendingTapMs!! < 300) {
+                            pendingTapMs = null
+                        } else {
+                            pendingTapMs = now
+                        }
+                    })
                 }
         ) {
             when {
@@ -1505,8 +1933,15 @@ private fun NativeImageBookViewer(
                     // set_img_page_direction_pager): the pager
                     // already reads right-to-left in this RTL
                     // layout, so left-to-right is the reversed
-                    // layout, not a different component.
-                    reverseLayout = !directionRtl,
+                    // layout, not a different component. At 180
+                    // view rotation the layout mirrors
+                    // (ComicScreen's rotation rule), so the
+                    // direction flips with it.
+                    reverseLayout = if (viewRotation == 180) {
+                        directionRtl
+                    } else {
+                        !directionRtl
+                    },
                     beyondViewportPageCount = 1
                 ) { pagerIdx ->
                     // One item, one set of parameters: the only
@@ -1530,6 +1965,12 @@ private fun NativeImageBookViewer(
                             fitMode = fitMode,
                             sharpen = sharpen,
                             sharpenLevel = sharpenLevel,
+                            upscaleMode = upscaleMode,
+                            filterGray = filterGray,
+                            filterContrast = filterContrast,
+                            filterInvert = filterInvert,
+                            viewRotation = viewRotation,
+                            manualCropRect = manualCropRects[page],
                             halfSide = halfSide
                         )
                     }
@@ -1539,17 +1980,28 @@ private fun NativeImageBookViewer(
                         when (val pair = pairs!![pagerIdx]) {
                             is DualPair.Single -> singleItem(pair.firstPage)
                             is DualPair.Pair -> {
-                                // Row follows the layout
-                                // direction: in RTL the first
-                                // child sits on the right, in LTR
-                                // on the left — so (first, second)
-                                // is reading order in both.
-                                Row(Modifier.fillMaxSize()) {
-                                    Box(Modifier.weight(1f).fillMaxHeight()) {
-                                        singleItem(pair.firstPage)
-                                    }
-                                    Box(Modifier.weight(1f).fillMaxHeight()) {
-                                        singleItem(pair.secondPage)
+                                // The pair is laid out in the
+                                // BOOK direction, not the UI
+                                // locale's: the provider makes the
+                                // first child sit on the reading
+                                // side (right for RTL books, left
+                                // for LTR) even when the UI locale
+                                // disagrees — the old bare Row
+                                // followed the UI locale and put
+                                // LTR-book pairs backwards in an
+                                // RTL UI. The provider also
+                                // carries the 180 mirror (see
+                                // pairDirection above).
+                                CompositionLocalProvider(
+                                    LocalLayoutDirection provides pairDirection
+                                ) {
+                                    Row(Modifier.fillMaxSize()) {
+                                        Box(Modifier.weight(1f).fillMaxHeight()) {
+                                            singleItem(pair.firstPage)
+                                        }
+                                        Box(Modifier.weight(1f).fillMaxHeight()) {
+                                            singleItem(pair.secondPage)
+                                        }
                                     }
                                 }
                             }
@@ -1563,17 +2015,73 @@ private fun NativeImageBookViewer(
                                 // first child per direction, so
                                 // (first-read half, second half)
                                 // lands correctly in both.
+                                // First-read half mirrors with
+                                // the layout (see pairDirection):
+                                // RTL reads the right half first,
+                                // LTR the left half, 180 swaps it.
                                 val (firstSide, secondSide) =
-                                    if (directionRtl) 2 to 1 else 1 to 2
-                                Row(Modifier.fillMaxSize()) {
-                                    Box(Modifier.weight(1f).fillMaxHeight()) {
-                                        singleItem(pair.firstPage, firstSide)
-                                    }
-                                    Box(Modifier.weight(1f).fillMaxHeight()) {
-                                        singleItem(pair.firstPage, secondSide)
+                                    if (effectiveRtl) 2 to 1 else 1 to 2
+                                CompositionLocalProvider(
+                                    LocalLayoutDirection provides pairDirection
+                                ) {
+                                    Row(Modifier.fillMaxSize()) {
+                                        Box(Modifier.weight(1f).fillMaxHeight()) {
+                                            singleItem(pair.firstPage, firstSide)
+                                        }
+                                        Box(Modifier.weight(1f).fillMaxHeight()) {
+                                            singleItem(pair.firstPage, secondSide)
+                                        }
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            isHorizontalStrip -> {
+                val activeSource = source!!
+                // ComicScreen's horizontal strip: the mirror of
+                // the vertical one — each page fills the strip
+                // HEIGHT, pages sit side by side, no vertical
+                // scroll. Laid out in the book's direction (see
+                // the dual-pair provider above), so an RTL book
+                // starts on the right. Pinch zoom and pan live
+                // on the page itself, like the vertical strip.
+                CompositionLocalProvider(
+                    LocalLayoutDirection provides pairDirection
+                ) {
+                    LazyRow(
+                        state = rowState,
+                        modifier = Modifier.fillMaxSize()
+                            .background(pageBg),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(pageCount) { page ->
+                            NativePageItem(
+                                source = activeSource,
+                                page = page,
+                                renderWidthPx = renderWidthPx,
+                                paged = false,
+                                zoomFactor = zoomFactors[zoomIndex],
+                                cropMargin = cutMargin,
+                                cropPadH = cropPadH,
+                                cropPadV = cropPadV,
+                                paddingRatio = paddingRatio,
+                                pageBg = pageBg,
+                                screenWidthPx = screenWidthPx,
+                                screenHeightPx = screenHeightPx,
+                                fitMode = fitMode,
+                                sharpen = sharpen,
+                                sharpenLevel = sharpenLevel,
+                                upscaleMode = upscaleMode,
+                                filterGray = filterGray,
+                                filterContrast = filterContrast,
+                                filterInvert = filterInvert,
+                                viewRotation = viewRotation,
+                                manualCropRect = manualCropRects[page],
+                                horizontalStrip = true
+                            )
                         }
                     }
                 }
@@ -1603,7 +2111,13 @@ private fun NativeImageBookViewer(
                             screenHeightPx = screenHeightPx,
                             fitMode = fitMode,
                             sharpen = sharpen,
-                            sharpenLevel = sharpenLevel
+                            sharpenLevel = sharpenLevel,
+                            upscaleMode = upscaleMode,
+                            filterGray = filterGray,
+                            filterContrast = filterContrast,
+                            filterInvert = filterInvert,
+                            viewRotation = viewRotation,
+                            manualCropRect = manualCropRects[page]
                         )
                     }
                 }
@@ -1660,6 +2174,195 @@ private fun NativeImageBookViewer(
         )
     }
 
+    // Bookmarks: the per-page marks from the top-bar toggle.
+    // Tapping one jumps to that page (same jump as the
+    // slider); removing one is the toggle on that page. An
+    // empty list states it plainly instead of showing a
+    // blank dialog.
+    if (showBookmarks) {
+        AlertDialog(
+            onDismissRequest = { showBookmarks = false },
+            title = { Text(stringResource(R.string.comic_bookmarks)) },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (bookmarks.isEmpty()) {
+                        Text(stringResource(R.string.comic_no_bookmarks))
+                    } else {
+                        bookmarks.sorted().forEach { page ->
+                            TextButton(
+                                onClick = {
+                                    showBookmarks = false
+                                    jumpTo(page)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.page_indicator, page + 1, pageCount
+                                    ),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textAlign = TextAlign.Start,
+                                    color = if (page == currentPage) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        LocalContentColor.current
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showBookmarks = false }) {
+                    Text(stringResource(R.string.close))
+                }
+            }
+        )
+    }
+
+    // Page overview: a thumbnail grid of the whole book, tap
+    // to jump. Cells decode their own cheap thumbnails on
+    // composition (like the scrub preview) and recycle them on
+    // dispose, so a 500-page book never holds 500 bitmaps —
+    // only the visible cells do. The current page gets a
+    // primary border.
+    if (showOverview && source != null) {
+        val overviewSource = source!!
+        AlertDialog(
+            onDismissRequest = { showOverview = false },
+            title = { Text(stringResource(R.string.comic_overview)) },
+            text = {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier.fillMaxWidth()
+                        .heightIn(max = 420.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(pageCount) { page ->
+                        Box(
+                            modifier = Modifier.fillMaxWidth()
+                                .aspectRatio(0.7f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(
+                                    width = if (page == currentPage) 2.dp else 0.dp,
+                                    color = if (page == currentPage) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        Color.Transparent
+                                    },
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .clickable {
+                                    showOverview = false
+                                    jumpTo(page)
+                                }
+                        ) {
+                            PageThumbnail(
+                                source = overviewSource,
+                                page = page,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showOverview = false }) {
+                    Text(stringResource(R.string.close))
+                }
+            }
+        )
+    }
+
+    // Encrypted-archive password dialog: shown when the open
+    // probe fails (no password yet, or a wrong one). Submitting
+    // restarts the open with the password; cancelling lands on
+    // the error screen instead of a spinner that never ends.
+    if (showPasswordDialog) {
+        var passwordText by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = {
+                showPasswordDialog = false
+                openError = true
+            },
+            title = { Text(stringResource(R.string.comic_zip_password)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (passwordWrong) {
+                        Text(
+                            text = stringResource(R.string.comic_password_wrong),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    TextField(
+                        value = passwordText,
+                        onValueChange = { passwordText = it },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password
+                        )
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = passwordText.isNotEmpty(),
+                    onClick = {
+                        zipPassword = passwordText.toCharArray()
+                        showPasswordDialog = false
+                    }
+                ) {
+                    Text(stringResource(R.string.ok))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showPasswordDialog = false
+                    openError = true
+                }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    // Manual crop editor (ComicScreen's CropActivity, as a
+    // full-screen dialog instead of an activity): the current
+    // page, its saved rect (or the full frame), corner drags
+    // to resize, inside drags to move. Apply saves the rect
+    // (persisted per page, unlike ComicScreen's session-only
+    // view tag); Reset clears the saved rect.
+    if (showCropEditor) {
+        val cropSource = source
+        if (cropSource != null) {
+            CropEditorDialog(
+                source = cropSource,
+                page = currentPage,
+                viewRotation = viewRotation,
+                screenWidthPx = screenWidthPx,
+                initialRect = manualCropRects[currentPage],
+                onApply = { rect ->
+                    showCropEditor = false
+                    scope.launch { extras.setCropRect(book.id, currentPage, rect) }
+                },
+                onReset = {
+                    showCropEditor = false
+                    scope.launch { extras.setCropRect(book.id, currentPage, null) }
+                },
+                onDismiss = { showCropEditor = false }
+            )
+        }
+    }
+
     // View settings sheet (the gear in the top bar): everything
     // that used to crowd the top bar as text buttons, plus the
     // page background. It stays open while adjusting, so zoom,
@@ -1684,9 +2387,9 @@ private fun NativeImageBookViewer(
                     text = stringResource(R.string.comic_view_settings),
                     style = MaterialTheme.typography.titleMedium
                 )
-                // Mode: a real choice, not two buttons one of
-                // which is mysteriously disabled. Both rows are
-                // always tappable and the active one is
+                // Mode: a real choice, not buttons one of
+                // which is mysteriously disabled. All three rows
+                // are always tappable and the active one is
                 // highlighted — the old pair (one enabled, one
                 // dimmed) read as "one of these is broken",
                 // which is how vertical mode stayed
@@ -1701,13 +2404,19 @@ private fun NativeImageBookViewer(
                         icon = AppIconKind.Pages,
                         label = stringResource(R.string.mode_horizontal),
                         selected = isPaged,
-                        onClick = { if (!isPaged) toggleMode() }
+                        onClick = { setMode(ReadingMode.PAGED_HORIZONTAL) }
                     )
                     SheetChoiceRow(
                         icon = AppIconKind.Scroll,
                         label = stringResource(R.string.mode_vertical_continuous),
-                        selected = !isPaged,
-                        onClick = { if (isPaged) toggleMode() }
+                        selected = !isPaged && !isHorizontalStrip,
+                        onClick = { setMode(ReadingMode.CONTINUOUS_VERTICAL) }
+                    )
+                    SheetChoiceRow(
+                        icon = AppIconKind.HorizontalScroll,
+                        label = stringResource(R.string.mode_horizontal_continuous),
+                        selected = isHorizontalStrip,
+                        onClick = { setMode(ReadingMode.HORIZONTAL_STRIP) }
                     )
                 }
                 // Dual page (ComicScreen's 2p view): two pages
@@ -2122,6 +2831,156 @@ private fun NativeImageBookViewer(
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
+                // Colour filters (ComicScreen's filter dialog:
+                // gray / contrast / invert). All default off,
+                // bitmap pages only — animated pages play as-is.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.comic_filter_gray),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Switch(
+                        checked = filterGray,
+                        onCheckedChange = { checked ->
+                            scope.launch { prefs.setComicFilterGray(checked) }
+                        }
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.comic_filter_contrast),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Switch(
+                        checked = filterContrast,
+                        onCheckedChange = { checked ->
+                            scope.launch { prefs.setComicFilterContrast(checked) }
+                        }
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.comic_filter_invert),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Switch(
+                        checked = filterInvert,
+                        onCheckedChange = { checked ->
+                            scope.launch { prefs.setComicFilterInvert(checked) }
+                        }
+                    )
+                }
+                // Upscale interpolation (ComicScreen's
+                // set_img_filter_upscale_mode): Linear is the
+                // cheap 2-tap, Cubic the previous default,
+                // Lanczos the sharpest (and slowest). Upscale
+                // only — downscale stays area-average.
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = stringResource(R.string.comic_upscale_mode),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    SheetChoiceRow(
+                        label = stringResource(R.string.comic_upscale_linear),
+                        selected = upscaleMode == "linear",
+                        onClick = {
+                            scope.launch { prefs.setComicUpscaleMode("linear") }
+                        }
+                    )
+                    SheetChoiceRow(
+                        label = stringResource(R.string.comic_upscale_cubic),
+                        selected = upscaleMode == "cubic",
+                        onClick = {
+                            scope.launch { prefs.setComicUpscaleMode("cubic") }
+                        }
+                    )
+                    SheetChoiceRow(
+                        label = stringResource(R.string.comic_upscale_lanczos),
+                        selected = upscaleMode == "lanczos",
+                        onClick = {
+                            scope.launch { prefs.setComicUpscaleMode("lanczos") }
+                        }
+                    )
+                }
+                // Volume-key turning (default off: volume keys
+                // normally adjust volume, and hijacking them is
+                // a choice, not a default).
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.comic_volume_keys),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Switch(
+                        checked = volumeKeysOn,
+                        onCheckedChange = { checked ->
+                            scope.launch { prefs.setComicVolumeKeys(checked) }
+                        }
+                    )
+                }
+                // Actions: one-tap jobs, not settings. Capture
+                // and the dialogs close the sheet; Rotate stays
+                // open, so its label shows the new degrees.
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    SheetChoiceRow(
+                        icon = AppIconKind.Capture,
+                        label = stringResource(R.string.comic_capture),
+                        selected = false,
+                        onClick = {
+                            showViewSettings = false
+                            capturePage()
+                        }
+                    )
+                    SheetChoiceRow(
+                        icon = AppIconKind.Rotate,
+                        label = stringResource(R.string.comic_rotate) +
+                            " · $viewRotation°",
+                        selected = false,
+                        onClick = { cycleRotation() }
+                    )
+                    SheetChoiceRow(
+                        icon = AppIconKind.Crop,
+                        label = stringResource(R.string.comic_manual_crop),
+                        selected = false,
+                        onClick = {
+                            showViewSettings = false
+                            showCropEditor = true
+                        }
+                    )
+                    SheetChoiceRow(
+                        icon = AppIconKind.Grid,
+                        label = stringResource(R.string.comic_overview),
+                        selected = false,
+                        onClick = {
+                            showViewSettings = false
+                            showOverview = true
+                        }
+                    )
+                    SheetChoiceRow(
+                        icon = AppIconKind.Bookmark,
+                        label = stringResource(R.string.comic_bookmarks),
+                        selected = false,
+                        onClick = {
+                            showViewSettings = false
+                            showBookmarks = true
+                        }
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
@@ -2131,6 +2990,307 @@ private fun NativeImageBookViewer(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Manual crop editor: the current page at fit size, with a
+ * draggable rect over it — corners resize, dragging inside
+ * moves the whole rect (ComicScreen's CropImageView behaviour,
+ * reimplemented: no third-party crop widget, just a Canvas
+ * overlay and drag gestures). Coordinates are fractions of
+ * the displayed page, so the saved rect applies at any decode
+ * size. The dim outside the rect is four strips (no blend
+ * modes, no layers); the handles are primary squares.
+ */
+@Composable
+private fun CropEditorDialog(
+    source: NativePageSource,
+    page: Int,
+    viewRotation: Int,
+    screenWidthPx: Int,
+    initialRect: CropRect?,
+    onApply: (CropRect) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(source, page, viewRotation) {
+        val decoded = withContext(Dispatchers.IO) {
+            runCatching {
+                val raw = source.renderPage(page, screenWidthPx)
+                if (viewRotation != 0) {
+                    val rotated = rotateBitmap(raw, viewRotation)
+                    if (rotated !== raw) raw.recycle()
+                    rotated
+                } else {
+                    raw
+                }
+            }.getOrNull()
+        }
+        bitmap = decoded
+    }
+    DisposableEffect(Unit) {
+        onDispose { bitmap?.recycle() }
+    }
+    // Immutable data class: no copy needed, the drag code
+    // replaces the state instead of mutating it.
+    var rect by remember {
+        mutableStateOf(initialRect ?: CropRect(0f, 0f, 1f, 1f))
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+            Column(Modifier.fillMaxSize()) {
+                var areaSize by remember { mutableStateOf(IntSize.Zero) }
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                        .onSizeChanged { areaSize = it },
+                    contentAlignment = Alignment.Center
+                ) {
+                    val bmp = bitmap
+                    if (bmp != null && areaSize.width > 0 && areaSize.height > 0) {
+                        val ratio = bmp.width.toFloat() / bmp.height
+                        val areaRatio = areaSize.width.toFloat() / areaSize.height
+                        // Contain: bound by width for wide pages,
+                        // by height for tall ones — so the box
+                        // IS the displayed image, and overlay
+                        // fractions map to it exactly.
+                        val boxModifier = if (ratio >= areaRatio) {
+                            Modifier.fillMaxWidth().aspectRatio(ratio)
+                        } else {
+                            Modifier.fillMaxHeight().aspectRatio(ratio)
+                        }
+                        Box(
+                            modifier = boxModifier.pointerInput(rect) {
+                                // Drag target: nearest corner
+                                // within 8% of the small side,
+                                // else a move when inside, else
+                                // ignored (a tap outside the rect
+                                // does nothing — no new rect).
+                                var target = -1
+                                detectDragGestures(
+                                    onDragStart = { offset ->
+                                        val w = size.width.toFloat()
+                                        val h = size.height.toFloat()
+                                        val threshold =
+                                            minOf(w, h) * 0.08f
+                                        val fx = offset.x / w
+                                        val fy = offset.y / h
+                                        val corners = listOf(
+                                            rect.left to rect.top,
+                                            rect.right to rect.top,
+                                            rect.left to rect.bottom,
+                                            rect.right to rect.bottom
+                                        )
+                                        target = corners.indexOfFirst { (cx, cy) ->
+                                            val dx = (fx - cx) * w
+                                            val dy = (fy - cy) * h
+                                            dx * dx + dy * dy < threshold * threshold
+                                        }
+                                        if (target < 0 &&
+                                            fx in rect.left..rect.right &&
+                                            fy in rect.top..rect.bottom
+                                        ) {
+                                            target = 4
+                                        }
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        if (target < 0) return@detectDragGestures
+                                        val w = size.width.toFloat()
+                                        val h = size.height.toFloat()
+                                        val dx = dragAmount.x / w
+                                        val dy = dragAmount.y / h
+                                        val min = 0.05f
+                                        var next = rect
+                                        when (target) {
+                                            0 -> next = next.copy(
+                                                left = (next.left + dx).coerceIn(0f, next.right - min),
+                                                top = (next.top + dy).coerceIn(0f, next.bottom - min)
+                                            )
+                                            1 -> next = next.copy(
+                                                right = (next.right + dx).coerceIn(next.left + min, 1f),
+                                                top = (next.top + dy).coerceIn(0f, next.bottom - min)
+                                            )
+                                            2 -> next = next.copy(
+                                                left = (next.left + dx).coerceIn(0f, next.right - min),
+                                                bottom = (next.bottom + dy).coerceIn(next.top + min, 1f)
+                                            )
+                                            3 -> next = next.copy(
+                                                right = (next.right + dx).coerceIn(next.left + min, 1f),
+                                                bottom = (next.bottom + dy).coerceIn(next.top + min, 1f)
+                                            )
+                                            else -> {
+                                                // Move: clamp the
+                                                // whole rect into
+                                                // the frame.
+                                                val shiftX = dx.coerceIn(
+                                                    -next.left, 1f - next.right
+                                                )
+                                                val shiftY = dy.coerceIn(
+                                                    -next.top, 1f - next.bottom
+                                                )
+                                                next = next.copy(
+                                                    left = next.left + shiftX,
+                                                    right = next.right + shiftX,
+                                                    top = next.top + shiftY,
+                                                    bottom = next.bottom + shiftY
+                                                )
+                                            }
+                                        }
+                                        rect = next
+                                    }
+                                )
+                            }
+                        ) {
+                            Image(
+                                bitmap = bmp.asImageBitmap(),
+                                contentDescription = null,
+                                contentScale = ContentScale.FillBounds,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            // MaterialTheme.colorScheme is a
+                            // @Composable read: it must happen
+                            // here, in the composable scope — not
+                            // inside the Canvas lambda below,
+                            // which is a DrawScope and cannot
+                            // call composables (that was a
+                            // compile error).
+                            val cropPrimary =
+                                MaterialTheme.colorScheme.primary
+                            Canvas(Modifier.fillMaxSize()) {
+                                val w = size.width
+                                val h = size.height
+                                val l = rect.left * w
+                                val t = rect.top * h
+                                val r = rect.right * w
+                                val b = rect.bottom * h
+                                val dim = Color.Black.copy(alpha = 0.55f)
+                                drawRect(
+                                    dim,
+                                    androidx.compose.ui.geometry.Offset.Zero,
+                                    androidx.compose.ui.geometry.Size(w, t)
+                                )
+                                drawRect(
+                                    dim,
+                                    androidx.compose.ui.geometry.Offset(0f, b),
+                                    androidx.compose.ui.geometry.Size(w, h - b)
+                                )
+                                drawRect(
+                                    dim,
+                                    androidx.compose.ui.geometry.Offset.Zero,
+                                    androidx.compose.ui.geometry.Size(l, h)
+                                )
+                                drawRect(
+                                    dim,
+                                    androidx.compose.ui.geometry.Offset(r, 0f),
+                                    androidx.compose.ui.geometry.Size(w - r, h)
+                                )
+                                drawRect(
+                                    Color.White,
+                                    androidx.compose.ui.geometry.Offset(l, t),
+                                    androidx.compose.ui.geometry.Size(r - l, b - t),
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                        width = 2.dp.toPx()
+                                    )
+                                )
+                                val handle = 14.dp.toPx()
+                                listOf(
+                                    l to t, r to t, l to b, r to b
+                                ).forEach { (cx, cy) ->
+                                    drawRect(
+                                        cropPrimary,
+                                        androidx.compose.ui.geometry.Offset(
+                                            cx - handle / 2, cy - handle / 2
+                                        ),
+                                        androidx.compose.ui.geometry.Size(handle, handle)
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        CircularProgressIndicator()
+                    }
+                }
+                Text(
+                    text = stringResource(R.string.comic_crop_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LocalContentColor.current.copy(alpha = 0.7f),
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                    textAlign = TextAlign.Center
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = { onApply(rect) }) {
+                        Text(stringResource(R.string.comic_crop_apply))
+                    }
+                    TextButton(onClick = onReset) {
+                        Text(stringResource(R.string.comic_crop_reset))
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.close))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A cheap page thumbnail (scrub preview, overview grid):
+ * a sampled decode through the source's thumbnail path —
+ * never the full pipeline — recycled when the cell leaves
+ * composition. The dispose read is live on purpose (same
+ * pattern as NativePageItem): the state object this closure
+ * captures belongs to this remember instance, so a page
+ * change disposes against the OLD instance's bitmap while
+ * the effect restart above already recycled it.
+ */
+@Composable
+private fun PageThumbnail(
+    source: NativePageSource?,
+    page: Int,
+    modifier: Modifier,
+    contentScale: ContentScale
+) {
+    var thumb by remember { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(source, page) {
+        val old = thumb
+        thumb = null
+        old?.recycle()
+        if (source == null) return@LaunchedEffect
+        thumb = withContext(Dispatchers.IO) {
+            runCatching { source.thumbnail(page, 240) }.getOrNull()
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { thumb?.recycle() }
+    }
+    val bmp = thumb
+    if (bmp != null) {
+        Image(
+            bitmap = bmp.asImageBitmap(),
+            contentDescription = null,
+            contentScale = contentScale,
+            modifier = modifier.background(Color(0xFF1E1E1E))
+        )
+    } else {
+        Box(
+            modifier = modifier.background(Color(0xFF1E1E1E)),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp
+            )
         }
     }
 }
@@ -2220,13 +3380,15 @@ private const val MAX_SOFTWARE_PIXELS = 8_000_000L
 private fun AnimatedPageImage(
     drawable: Drawable,
     modifier: Modifier,
-    scaleType: ImageView.ScaleType
+    scaleType: ImageView.ScaleType,
+    rotation: Float = 0f
 ) {
     AndroidView(
         factory = { context ->
             ImageView(context).apply { this.scaleType = scaleType }
         },
         update = { view ->
+            view.rotation = rotation
             view.setImageDrawable(drawable)
             (drawable as? Animatable)?.start()
         },
@@ -2270,6 +3432,29 @@ private fun NativePageItem(
     fitMode: String = "width",
     sharpen: Boolean = false,
     sharpenLevel: Int = 0,
+    // Upscale interpolation ("linear" / "cubic" / "lanczos",
+    // default cubic = the behaviour before this setting).
+    upscaleMode: String = "cubic",
+    // ComicScreen's colour filters, all default off, applied
+    // after sharpen, bitmap pages only.
+    filterGray: Boolean = false,
+    filterContrast: Boolean = false,
+    filterInvert: Boolean = false,
+    // View rotation, degrees clockwise (0/90/180/270). The
+    // Rotate action cycles it; 180 also mirrors navigation
+    // direction (see the viewer). Animated pages rotate via
+    // the ImageView, bitmap pages in the pipeline below.
+    viewRotation: Int = 0,
+    // Horizontal strip: the page fills the strip HEIGHT (not
+    // width) and the resize target is height-based. Paged is
+    // always false with this on; it only changes the strip
+    // geometry, never the page order.
+    horizontalStrip: Boolean = false,
+    // Manual crop rect, in FRACTIONS of the displayed page
+    // (0..1, from the crop editor): when set it replaces the
+    // auto-crop for this page — the user drew it by hand.
+    // Null = no manual crop (auto-crop as before).
+    manualCropRect: CropRect? = null,
     // Dual-page half: 0 = the whole page, 1 = its left half,
     // 2 = its right half (IMAGE coordinates — the pair lays the
     // halves out in reading order). A half item renders its
@@ -2277,22 +3462,22 @@ private fun NativePageItem(
     // page squeezed into the slot.
     halfSide: Int = 0
 ) {
-    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableStateOf<Bitmap?>(null) }
+    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf<Bitmap?>(null) }
     // An animated drawable (GIF / animated WebP pages only).
     // When one is present the bitmap path is skipped entirely:
     // the drawable IS the page, frames and all — a bitmap would
     // freeze it on frame one, which is what the viewer did
     // before this change.
-    var drawable by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableStateOf<Drawable?>(null) }
-    var failed by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableStateOf(false) }
+    var drawable by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf<Drawable?>(null) }
+    var failed by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf(false) }
     // The render error itself, shown under the failure text: the
     // old code threw it away (getOrNull), so a phone-only tester
     // could only ever report "it failed" and the cause stayed
     // invisible. The message names the entry and the reason
     // (unreadable image, missing entry, unsupported compression),
     // which is what a screenshot of this screen needs to carry.
-    var failMessage by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableStateOf<String?>(null) }
-    var retry by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableIntStateOf(0) }
+    var failMessage by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf<String?>(null) }
+    var retry by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableIntStateOf(0) }
     // Zoom re-render (ComicScreen's tile refinement,
     // coarse-grained): the pipeline sizes the bitmap to the
     // display width, so a 2x pinch would otherwise just upscale
@@ -2305,7 +3490,7 @@ private fun NativePageItem(
     // keys: a re-render must swap the bitmap under the live
     // zoom container (which keeps its scale), not dispose the
     // container and snap the page back to 1x mid-pinch.
-    var renderScale by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) { mutableIntStateOf(1) }
+    var renderScale by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableIntStateOf(1) }
     // Threshold-guarded: the container reports every pinch move,
     // but only a threshold crossing re-renders.
     val onPinchScale: (Float) -> Unit = { s ->
@@ -2316,7 +3501,7 @@ private fun NativePageItem(
         }
     }
 
-    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, renderScale) {
+    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect, renderScale) {
         // No bitmap/drawable nulling here on purpose: every key
         // above except renderScale is also a remember key, so a
         // page/parameter change already resets the states to
@@ -2352,12 +3537,38 @@ private fun NativePageItem(
         val rendered = withContext(Dispatchers.IO) {
             runCatching {
                 // The pipeline mirrors ComicScreen's per-page
-                // filter order: crop, then upscale, then sharpen.
+                // filter order — view rotation first (so crop
+                // detection sees the page as displayed), then
+                // crop, upscale, sharpen, colour filters.
                 // Each step replaces the bitmap and recycles the
                 // previous one, so only one full-size bitmap per
                 // item is ever alive.
                 var current = source.renderPage(page, renderWidthPx)
-                if (cropMargin) {
+                if (viewRotation != 0) {
+                    val rotated = rotateBitmap(current, viewRotation)
+                    if (rotated !== current) {
+                        current.recycle()
+                        current = rotated
+                    }
+                }
+                if (manualCropRect != null) {
+                    // Manual crop wins over auto-crop for this
+                    // page: the rect is fractions of the
+                    // (already rotated) page, from the editor.
+                    val l = (manualCropRect.left * current.width).toInt()
+                        .coerceIn(0, current.width - 1)
+                    val t = (manualCropRect.top * current.height).toInt()
+                        .coerceIn(0, current.height - 1)
+                    val r = (manualCropRect.right * current.width).toInt()
+                        .coerceIn(l + 1, current.width)
+                    val b = (manualCropRect.bottom * current.height).toInt()
+                        .coerceIn(t + 1, current.height)
+                    if (r > l && b > t) {
+                        val cropped = Bitmap.createBitmap(current, l, t, r - l, b - t)
+                        current.recycle()
+                        current = cropped
+                    }
+                } else if (cropMargin) {
                     val rect = detectContentRect(current, cropPadH, cropPadV)
                     if (rect != null) {
                         // createBitmap copies: the uncropped
@@ -2417,6 +3628,18 @@ private fun NativePageItem(
                 val displayWidthPx = (screenWidthPx * renderScale)
                     .let { if (halfSide != 0) it / 2 else it }
                 val resizeTarget: Pair<Int, Int>? = when {
+                    // Horizontal strip: the display size is the
+                    // strip HEIGHT (screen height x re-render
+                    // scale), width follows the aspect — the
+                    // mirror of the vertical strip's width-based
+                    // target below. Checked first: a strip item
+                    // is paged=false, so it would otherwise
+                    // fall into the vertical branch.
+                    horizontalStrip && screenHeightPx > 0 -> {
+                        val displayHeightPx = screenHeightPx * renderScale
+                        (displayHeightPx * current.width / current.height)
+                            .coerceAtLeast(1) to displayHeightPx
+                    }
                     !paged && displayWidthPx > 0 ->
                         displayWidthPx to
                             (displayWidthPx * current.height / current.width)
@@ -2430,13 +3653,24 @@ private fun NativePageItem(
                             .coerceAtLeast(1) to screenHeightPx
                     else -> null
                 }
-                if (resizeTarget != null &&
-                    current.width.toLong() * current.height <= MAX_SOFTWARE_PIXELS
-                ) {
+                if (resizeTarget != null) {
                     val (targetW, targetH) = resizeTarget
-                    if (current.width != targetW) {
+                    // TARGET-side budget, added after a real
+                    // hole was found: the old check only looked
+                    // at the current size, so a small page
+                    // zoomed to 2x (3M px native -> 23M px
+                    // target on a tall strip) passed it and
+                    // materialized a 90MB+ bitmap with its
+                    // transient copies — an OOM on a phone.
+                    // Oversized targets keep the native bitmap
+                    // for the GPU path, exactly like oversized
+                    // sources.
+                    if (current.width.toLong() * current.height <= MAX_SOFTWARE_PIXELS &&
+                        targetW.toLong() * targetH <= MAX_SOFTWARE_PIXELS &&
+                        current.width != targetW
+                    ) {
                         val resized = if (current.width < targetW) {
-                            upscaleBicubic(current, targetW, targetH)
+                            upscaleByMode(current, targetW, targetH, upscaleMode)
                         } else {
                             resizeBox(current, targetW, targetH)
                         }
@@ -2453,6 +3687,39 @@ private fun NativePageItem(
                     if (sharp !== current) {
                         current.recycle()
                         current = sharp
+                    }
+                }
+                // ComicScreen's colour filters, after sharpen:
+                // grayscale, contrast (histogram equalisation
+                // on luma), invert. Same 8M budget as sharpen;
+                // animated pages skip them (they have no
+                // bitmap to filter — the drawable branch above
+                // never reaches this pipeline).
+                if (filterGray &&
+                    current.width.toLong() * current.height <= MAX_SOFTWARE_PIXELS
+                ) {
+                    val gray = grayscale(current)
+                    if (gray !== current) {
+                        current.recycle()
+                        current = gray
+                    }
+                }
+                if (filterContrast &&
+                    current.width.toLong() * current.height <= MAX_SOFTWARE_PIXELS
+                ) {
+                    val contrasted = contrastHistEq(current)
+                    if (contrasted !== current) {
+                        current.recycle()
+                        current = contrasted
+                    }
+                }
+                if (filterInvert &&
+                    current.width.toLong() * current.height <= MAX_SOFTWARE_PIXELS
+                ) {
+                    val inverted = invertColors(current)
+                    if (inverted !== current) {
+                        current.recycle()
+                        current = inverted
                     }
                 }
                 // Dual-page half, LAST: crop/resize/sharpen all
@@ -2509,7 +3776,7 @@ private fun NativePageItem(
     // onSuccess above). Reading state in onDispose is safe
     // here precisely because the state object, not the value,
     // is what the closure holds.
-    DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide) {
+    DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) {
         onDispose {
             bitmap?.recycle()
             (drawable as? Animatable)?.stop()
@@ -2546,6 +3813,7 @@ private fun NativePageItem(
                             contentAlignment = Alignment.Center
                         ) {
                             AnimatedPageImage(
+                                rotation = viewRotation.toFloat(),
                                 drawable = anim,
                                 scaleType = ImageView.ScaleType.FIT_CENTER,
                                 modifier = Modifier
@@ -2571,6 +3839,7 @@ private fun NativePageItem(
                                         .toInt().toDp()
                                 }
                                 AnimatedPageImage(
+                                    rotation = viewRotation.toFloat(),
                                     drawable = anim,
                                     scaleType = ImageView.ScaleType.FIT_CENTER,
                                     modifier = Modifier
@@ -2587,6 +3856,7 @@ private fun NativePageItem(
                             contentAlignment = Alignment.Center
                         ) {
                             AnimatedPageImage(
+                                rotation = viewRotation.toFloat(),
                                 drawable = anim,
                                 scaleType = ImageView.ScaleType.FIT_XY,
                                 modifier = Modifier.fillMaxSize(shrink)
@@ -2601,6 +3871,7 @@ private fun NativePageItem(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             AnimatedPageImage(
+                                rotation = viewRotation.toFloat(),
                                 drawable = anim,
                                 scaleType = ImageView.ScaleType.FIT_CENTER,
                                 modifier = Modifier
@@ -2618,10 +3889,16 @@ private fun NativePageItem(
                 // ZoomablePageContainer): the sheet's zoom steps
                 // no longer change this display, pinch does.
                 ZoomablePageContainer(
-                    modifier = Modifier.fillMaxWidth(shrink)
-                        .aspectRatio(ratio)
+                    // Horizontal strip: fill the strip height
+                    // instead of the width (see horizontalStrip).
+                    modifier = if (horizontalStrip) {
+                        Modifier.fillMaxHeight(shrink).aspectRatio(ratio)
+                    } else {
+                        Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
+                    }
                 ) {
                     AnimatedPageImage(
+                        rotation = viewRotation.toFloat(),
                         drawable = anim,
                         scaleType = ImageView.ScaleType.FIT_CENTER,
                         modifier = Modifier.fillMaxSize()
@@ -2770,8 +4047,13 @@ private fun NativePageItem(
                 // width by the pipeline above, so fillMaxWidth
                 // draws it 1:1 (up to the padding shrink).
                 ZoomablePageContainer(
-                    modifier = Modifier.fillMaxWidth(shrink)
-                        .aspectRatio(ratio),
+                    // Horizontal strip: fill the strip height
+                    // instead of the width (see horizontalStrip).
+                    modifier = if (horizontalStrip) {
+                        Modifier.fillMaxHeight(shrink).aspectRatio(ratio)
+                    } else {
+                        Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
+                    },
                     onScaleChange = onPinchScale
                 ) {
                     Image(
@@ -2818,7 +4100,7 @@ private fun NativePageItem(
                 }
             } else {
                 Column(
-                    modifier = Modifier.fillMaxWidth().height(200.dp)
+                    modifier = if (horizontalStrip) Modifier.fillMaxHeight().width(200.dp) else Modifier.fillMaxWidth().height(200.dp)
                         .background(Color.White),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
@@ -2850,7 +4132,7 @@ private fun NativePageItem(
                 modifier = if (paged) {
                     Modifier.fillMaxSize()
                 } else {
-                    Modifier.fillMaxWidth().height(200.dp)
+                    if (horizontalStrip) Modifier.fillMaxHeight().width(200.dp) else Modifier.fillMaxWidth().height(200.dp)
                 },
                 contentAlignment = Alignment.Center
             ) {

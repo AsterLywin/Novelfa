@@ -289,6 +289,290 @@ private fun boxBlur(pixels: IntArray, width: Int, height: Int): IntArray {
     return out
 }
 
+/**
+ * Bilinear upscale (ComicScreen's Linear interpolation): the
+ * cheap 2-tap cousin of bicubic, for the upscale-mode setting.
+ * Same separable structure as [upscaleBicubic], linear weights.
+ */
+fun upscaleBilinear(src: Bitmap, targetWidth: Int, targetHeight: Int): Bitmap {
+    if (targetWidth <= 0 || targetHeight <= 0 ||
+        (targetWidth == src.width && targetHeight == src.height)
+    ) {
+        return src
+    }
+    val sw = src.width
+    val sh = src.height
+    val srcPixels = IntArray(sw * sh)
+    src.getPixels(srcPixels, 0, sw, 0, 0, sw, sh)
+    val mid = IntArray(targetWidth * sh)
+    val xScale = sw.toFloat() / targetWidth
+    for (x in 0 until targetWidth) {
+        val srcX = (x + 0.5f) * xScale - 0.5f
+        val base = floor(srcX).toInt()
+        val t = srcX - base
+        for (y in 0 until sh) {
+            var a = 0f
+            var r = 0f
+            var g = 0f
+            var b = 0f
+            for (k in 0..1) {
+                val sx = (base + k).coerceIn(0, sw - 1)
+                val px = srcPixels[y * sw + sx]
+                val weight = if (k == 0) 1f - t else t
+                a += ((px ushr 24) and 0xFF) * weight
+                r += ((px ushr 16) and 0xFF) * weight
+                g += ((px ushr 8) and 0xFF) * weight
+                b += (px and 0xFF) * weight
+            }
+            mid[y * targetWidth + x] =
+                (a.toInt().coerceIn(0, 255) shl 24) or
+                    (r.toInt().coerceIn(0, 255) shl 16) or
+                    (g.toInt().coerceIn(0, 255) shl 8) or
+                    b.toInt().coerceIn(0, 255)
+        }
+    }
+    val out = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+    val outPixels = IntArray(targetWidth * targetHeight)
+    val yScale = sh.toFloat() / targetHeight
+    for (y in 0 until targetHeight) {
+        val srcY = (y + 0.5f) * yScale - 0.5f
+        val base = floor(srcY).toInt()
+        val t = srcY - base
+        for (x in 0 until targetWidth) {
+            var a = 0f
+            var r = 0f
+            var g = 0f
+            var b = 0f
+            for (k in 0..1) {
+                val sy = (base + k).coerceIn(0, sh - 1)
+                val px = mid[sy * targetWidth + x]
+                val weight = if (k == 0) 1f - t else t
+                a += ((px ushr 24) and 0xFF) * weight
+                r += ((px ushr 16) and 0xFF) * weight
+                g += ((px ushr 8) and 0xFF) * weight
+                b += (px and 0xFF) * weight
+            }
+            outPixels[y * targetWidth + x] =
+                (a.toInt().coerceIn(0, 255) shl 24) or
+                    (r.toInt().coerceIn(0, 255) shl 16) or
+                    (g.toInt().coerceIn(0, 255) shl 8) or
+                    b.toInt().coerceIn(0, 255)
+        }
+    }
+    out.setPixels(outPixels, 0, targetWidth, 0, 0, targetWidth, targetHeight)
+    return out
+}
+
+/** Lanczos-3 kernel: sinc(x) * sinc(x/3), zero outside |x| < 3. */
+private fun lanczos3(x: Float): Float {
+    if (x == 0f) return 1f
+    val ax = kotlin.math.abs(x)
+    if (ax >= 3f) return 0f
+    val piX = Math.PI.toFloat() * x
+    val sinc = kotlin.math.sin(piX) / piX
+    val piX3 = piX / 3f
+    val sinc3 = kotlin.math.sin(piX3) / piX3
+    return sinc * sinc3
+}
+
+/**
+ * Lanczos-3 upscale (ComicScreen's Lanczos interpolation, its
+ * default): 6 taps per axis, weights renormalised per output
+ * pixel so brightness never shifts. The sharpest of the three
+ * upscale modes — and the slowest, which is why it shares the
+ * caller's 8M-pixel software budget instead of running wild.
+ */
+fun upscaleLanczos(src: Bitmap, targetWidth: Int, targetHeight: Int): Bitmap {
+    if (targetWidth <= 0 || targetHeight <= 0 ||
+        (targetWidth == src.width && targetHeight == src.height)
+    ) {
+        return src
+    }
+    val sw = src.width
+    val sh = src.height
+    val srcPixels = IntArray(sw * sh)
+    src.getPixels(srcPixels, 0, sw, 0, 0, sw, sh)
+    val taps = 3
+    val mid = IntArray(targetWidth * sh)
+    val xScale = sw.toFloat() / targetWidth
+    for (x in 0 until targetWidth) {
+        val srcX = (x + 0.5f) * xScale - 0.5f
+        val base = floor(srcX).toInt()
+        val w = FloatArray(taps * 2) { lanczos3(srcX - (base + it - taps + 1)) }
+        var wSum = 0f
+        for (v in w) wSum += v
+        if (wSum != 0f) {
+            for (i in w.indices) w[i] /= wSum
+        }
+        for (y in 0 until sh) {
+            var a = 0f
+            var r = 0f
+            var g = 0f
+            var b = 0f
+            for (k in 0 until taps * 2) {
+                val sx = (base + k - taps + 1).coerceIn(0, sw - 1)
+                val px = srcPixels[y * sw + sx]
+                val weight = w[k]
+                a += ((px ushr 24) and 0xFF) * weight
+                r += ((px ushr 16) and 0xFF) * weight
+                g += ((px ushr 8) and 0xFF) * weight
+                b += (px and 0xFF) * weight
+            }
+            mid[y * targetWidth + x] =
+                (a.toInt().coerceIn(0, 255) shl 24) or
+                    (r.toInt().coerceIn(0, 255) shl 16) or
+                    (g.toInt().coerceIn(0, 255) shl 8) or
+                    b.toInt().coerceIn(0, 255)
+        }
+    }
+    val out = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+    val outPixels = IntArray(targetWidth * targetHeight)
+    val yScale = sh.toFloat() / targetHeight
+    for (y in 0 until targetHeight) {
+        val srcY = (y + 0.5f) * yScale - 0.5f
+        val base = floor(srcY).toInt()
+        val w = FloatArray(taps * 2) { lanczos3(srcY - (base + it - taps + 1)) }
+        var wSum = 0f
+        for (v in w) wSum += v
+        if (wSum != 0f) {
+            for (i in w.indices) w[i] /= wSum
+        }
+        for (x in 0 until targetWidth) {
+            var a = 0f
+            var r = 0f
+            var g = 0f
+            var b = 0f
+            for (k in 0 until taps * 2) {
+                val sy = (base + k - taps + 1).coerceIn(0, sh - 1)
+                val px = mid[sy * targetWidth + x]
+                val weight = w[k]
+                a += ((px ushr 24) and 0xFF) * weight
+                r += ((px ushr 16) and 0xFF) * weight
+                g += ((px ushr 8) and 0xFF) * weight
+                b += (px and 0xFF) * weight
+            }
+            outPixels[y * targetWidth + x] =
+                (a.toInt().coerceIn(0, 255) shl 24) or
+                    (r.toInt().coerceIn(0, 255) shl 16) or
+                    (g.toInt().coerceIn(0, 255) shl 8) or
+                    b.toInt().coerceIn(0, 255)
+        }
+    }
+    out.setPixels(outPixels, 0, targetWidth, 0, 0, targetWidth, targetHeight)
+    return out
+}
+
+/** Upscale by the named mode: "linear", "lanczos", anything else = cubic. */
+fun upscaleByMode(src: Bitmap, targetWidth: Int, targetHeight: Int, mode: String): Bitmap {
+    return when (mode) {
+        "linear" -> upscaleBilinear(src, targetWidth, targetHeight)
+        "lanczos" -> upscaleLanczos(src, targetWidth, targetHeight)
+        else -> upscaleBicubic(src, targetWidth, targetHeight)
+    }
+}
+
+/** Grayscale (ComicScreen's gray filter): luma per pixel, alpha kept. */
+fun grayscale(src: Bitmap): Bitmap {
+    val w = src.width
+    val h = src.height
+    val pixels = IntArray(w * h)
+    src.getPixels(pixels, 0, w, 0, 0, w, h)
+    for (i in pixels.indices) {
+        val px = pixels[i]
+        val luma = ((px ushr 16) and 0xFF) * 299 +
+            ((px ushr 8) and 0xFF) * 587 +
+            (px and 0xFF) * 114
+        val gray = (luma / 1000).coerceIn(0, 255)
+        pixels[i] = (px and -0x1000000) or (gray shl 16) or (gray shl 8) or gray
+    }
+    val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    out.setPixels(pixels, 0, w, 0, 0, w, h)
+    return out
+}
+
+/**
+ * Contrast by histogram equalisation on luma (ComicScreen's
+ * contrast filter): the luma histogram is stretched to the full
+ * range, and each channel is scaled by the luma ratio so hues
+ * survive. A flat page (one luma value) maps to itself — the
+ * equalisation denominator is guarded, so it cannot divide by
+ * zero or wash the page white.
+ */
+fun contrastHistEq(src: Bitmap): Bitmap {
+    val w = src.width
+    val h = src.height
+    val pixels = IntArray(w * h)
+    src.getPixels(pixels, 0, w, 0, 0, w, h)
+    val hist = IntArray(256)
+    val lumas = IntArray(pixels.size)
+    for (i in pixels.indices) {
+        val px = pixels[i]
+        val luma = (((px ushr 16) and 0xFF) * 299 +
+            ((px ushr 8) and 0xFF) * 587 +
+            (px and 0xFF) * 114) / 1000
+        lumas[i] = luma
+        hist[luma]++
+    }
+    val cdf = IntArray(256)
+    var run = 0
+    for (v in 0 until 256) {
+        run += hist[v]
+        cdf[v] = run
+    }
+    val cdfMin = cdf.firstOrNull { it > 0 } ?: 0
+    val total = pixels.size
+    val denom = (total - cdfMin).coerceAtLeast(1)
+    for (i in pixels.indices) {
+        val px = pixels[i]
+        val luma = lumas[i]
+        val newLuma = ((cdf[luma] - cdfMin) * 255 / denom).coerceIn(0, 255)
+        if (luma == 0) {
+            pixels[i] = (px and -0x1000000) or (newLuma shl 16) or (newLuma shl 8) or newLuma
+        } else {
+            val factor = newLuma.toFloat() / luma
+            val r = (((px ushr 16) and 0xFF) * factor).toInt().coerceIn(0, 255)
+            val g = (((px ushr 8) and 0xFF) * factor).toInt().coerceIn(0, 255)
+            val b = ((px and 0xFF) * factor).toInt().coerceIn(0, 255)
+            pixels[i] = (px and -0x1000000) or (r shl 16) or (g shl 8) or b
+        }
+    }
+    val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    out.setPixels(pixels, 0, w, 0, 0, w, h)
+    return out
+}
+
+/** Invert (ComicScreen's invert filter): 255 - value per channel, alpha kept. */
+fun invertColors(src: Bitmap): Bitmap {
+    val w = src.width
+    val h = src.height
+    val pixels = IntArray(w * h)
+    src.getPixels(pixels, 0, w, 0, 0, w, h)
+    for (i in pixels.indices) {
+        val px = pixels[i]
+        pixels[i] = (px and -0x1000000) or
+            ((255 - ((px ushr 16) and 0xFF)) shl 16) or
+            ((255 - ((px ushr 8) and 0xFF)) shl 8) or
+            (255 - (px and 0xFF))
+    }
+    val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    out.setPixels(pixels, 0, w, 0, 0, w, h)
+    return out
+}
+
+/**
+ * Rotate a bitmap by 0/90/180/270 degrees clockwise. 0 returns
+ * the input itself; anything else returns a new bitmap. Shared
+ * by the EXIF path (source) and the view-rotation path
+ * (pipeline), so the two rotations never drift apart.
+ */
+fun rotateBitmap(src: Bitmap, degrees: Int): Bitmap {
+    val d = ((degrees % 360) + 360) % 360
+    if (d == 0) return src
+    val matrix = android.graphics.Matrix().apply { postRotate(d.toFloat()) }
+    val rotated = Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
+    return rotated
+}
+
 fun sharpenUnsharp(src: Bitmap, level: Int): Bitmap {
     if (level <= 0) return src
     val w = src.width

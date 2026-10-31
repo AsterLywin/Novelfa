@@ -39,12 +39,15 @@ import androidx.compose.ui.unit.IntSize
  *   the list takes over and scrolls from there — the same
  *   hand-over PhotoView does at its bounds.
  * - Taps are never consumed, so the chrome toggle (the outer
- *   tap surface) keeps working on a tap. Deliberately NO
- *   double-tap zoom: the chrome toggle fires on the first tap
- *   up, so a double-tap would toggle the chrome twice (a
- *   flicker) unless single taps were delayed by ~300ms, which
- *   would make every chrome toggle feel laggy. Pinch is the
- *   zoom; double-tap can come back if that trade-off is wanted.
+ *   tap surface) keeps working on a tap.
+ * - Double-tap zoom (ComicScreen's double-tap modes, simplified
+ *   to one): a double-tap toggles 1x <-> 2x, zooming around the
+ *   tap point — the tapped detail lands under the finger. The
+ *   trade-off, stated plainly: the viewer delays its chrome
+ *   toggle by 300ms to tell a single tap from the first tap of
+ *   a double-tap (the same window PhotoView apps use), so every
+ *   chrome toggle now takes 300ms. Without that delay a
+ *   double-tap would toggle the chrome twice (a flicker).
  *
  * Limits, stated plainly: the touch area is the page's layout
  * box — a zoomed image draws beyond it (graphicsLayer does not
@@ -71,11 +74,17 @@ fun ZoomablePageContainer(
     // Plain state, not Animatable: the gesture loop runs in a
     // restricted suspension scope, where Animatable's suspend
     // snapTo/stop are not callable — and nothing here animates
-    // (double-tap zoom was deliberately left out, see above),
-    // so direct assignment is all the loop needs.
+    // (double-tap zoom snaps, it does not animate), so direct
+    // assignment is all the loop needs.
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
+    // Last tap-up, for double-tap detection: a second tap-up
+    // within 300ms and near the first is a double-tap, not two
+    // single taps. Reset to 0 after a double-tap, so a third
+    // quick tap starts fresh (a triple-tap is not a gesture).
+    var lastTapUpMs by remember { mutableStateOf(0L) }
+    var lastTapPos by remember { mutableStateOf(Offset.Zero) }
 
     fun clampOffset(o: Offset, s: Float): Offset {
         val maxX = ((boxSize.width * s - boxSize.width) / 2f).coerceAtLeast(0f)
@@ -96,6 +105,7 @@ fun ZoomablePageContainer(
                 awaitPointerEventScope {
                 while (true) {
                     val down = awaitFirstDown()
+                    val downPos = down.position
                     var pinch = false
                     var pastSlop = false
                     var prevCentroid = Offset.Zero
@@ -189,6 +199,47 @@ fun ZoomablePageContainer(
                             // At scale 1: never consume. The list
                             // scrolls vertically; sideways drags
                             // do nothing (no horizontal scroll).
+                        }
+                    }
+                    // The gesture ended (no pointers pressed).
+                    // A tap is a gesture that never passed slop
+                    // and never pinched: it was never consumed
+                    // above, so the chrome toggle saw it too —
+                    // but a double-tap is two taps, and only
+                    // this container knows the tap landed on
+                    // THIS page, so it owns the zoom decision.
+                    if (!pastSlop) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastTapUpMs < 300 &&
+                            (downPos - lastTapPos).getDistance() < slop * 4
+                        ) {
+                            // Double-tap: 1x <-> 2x around the
+                            // tap point (same focal math as the
+                            // pinch). onScaleChange fires so the
+                            // sharper re-render kicks in at 2x.
+                            lastTapUpMs = 0L
+                            if (scale > 1.05f) {
+                                scale = 1f
+                                offset = Offset.Zero
+                                onScaleChange(1f)
+                            } else {
+                                val newScale = 2f
+                                val center = Offset(
+                                    boxSize.width / 2f,
+                                    boxSize.height / 2f
+                                )
+                                offset = clampOffset(
+                                    (downPos - center) *
+                                        (1f - newScale / scale) +
+                                        offset * (newScale / scale),
+                                    newScale
+                                )
+                                scale = newScale
+                                onScaleChange(newScale)
+                            }
+                        } else {
+                            lastTapUpMs = now
+                            lastTapPos = downPos
                         }
                     }
                 }
