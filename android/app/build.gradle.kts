@@ -20,7 +20,14 @@ val releaseKeyPassword: String? =
 android {
     namespace = "com.novelfa.reader"
     compileSdk = 35
-    defaultConfig { applicationId = "com.novelfa.reader"; minSdk = 29; targetSdk = 35; versionCode = 2; versionName = "1.0.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    // Pinned to the side-by-side NDK that is actually installed
+    // (and that the AVIF engine was verified against): without
+    // this, AGP demands its own default NDK (26.1.10909125) and
+    // fails project configuration with "NDK not configured"
+    // the moment externalNativeBuild exists. On a fresh machine
+    // the SDK Manager installs this exact version on demand.
+    ndkVersion = "28.2.13676358"
+    defaultConfig { applicationId = "com.novelfa.reader"; minSdk = 29; targetSdk = 35; versionCode = 2; versionName = "1.0.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"; ndk { abiFilters += "arm64-v8a"; abiFilters += "armeabi-v7a" } }
     if (releaseKeystorePath != null) {
         signingConfigs {
             create("release") {
@@ -35,6 +42,14 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    // AVIF engine (libavif + libaom, see src/main/cpp/CMakeLists.txt):
+    // built per ABI by externalNativeBuild. The two pinned
+    // releases download at configure time (FetchContent), so no
+    // third-party sources or binaries are checked in. If CMake
+    // is missing on the build machine, Android Studio offers to
+    // install it — the Kotlin code degrades gracefully without
+    // the .so (AVIF pages fail, everything else works).
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt") } }
 }
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.10.00")

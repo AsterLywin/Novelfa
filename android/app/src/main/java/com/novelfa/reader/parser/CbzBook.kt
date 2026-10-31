@@ -11,9 +11,15 @@ import java.util.zip.ZipFile
  *
  * Rules, shared by the importer (validation + page count) and the
  * native viewer (on-demand decode):
- * - Only image entries count: jpg/jpeg, png, webp, gif, bmp.
- *   Anything else (ComicInfo.xml, covers in other formats, text
- *   files) is ignored, never a page.
+ * - Only image entries count: jpg/jpeg, png, webp, gif, bmp,
+ *   avif. Anything else (ComicInfo.xml, covers in other
+ *   formats, text files) is ignored, never a page. AVIF joined
+ *   the list with the native libavif engine: without it an
+ *   .avif entry would be listed but fail every decode, and a
+ *   dropped page beats a failed page.
+ * - TIFF is still NOT a page: there is no platform decoder and
+ *   no native TIFF engine in the app (same reason AVIF waited
+ *   for its engine).
  * - Directories, macOS `__MACOSX/` junk and dot-files are ignored.
  * - Order is NATURAL, not lexicographic: `page-2.jpg` before
  *   `page-10.jpg`, and folder paths sort before their contents, so
@@ -34,7 +40,8 @@ import java.util.zip.ZipFile
  */
 object CbzBook {
 
-    private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")
+    private val IMAGE_EXTENSIONS =
+        setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "avif")
 
     fun isImageEntry(name: String): Boolean {
         if (name.endsWith('/')) return false

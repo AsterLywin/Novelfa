@@ -376,6 +376,21 @@ internal class CbzNativeSource(
         }.getOrNull()
     }
 
+    // AVIF pages (native libavif engine, see AvifDecoder): the
+    // BitmapFactory path cannot decode them on any API level —
+    // platform AVIF exists only from API 31 and the app's minSdk
+    // is 29 — so AVIF entries take their own branch in all three
+    // decode functions below, reading the entry bytes once and
+    // letting the engine validate (extension alone is not proof:
+    // a misnamed file must fail the page, not crash it).
+    private fun isAvifEntry(name: String): Boolean =
+        name.endsWith(".avif", ignoreCase = true)
+
+    private fun avifBytes(header: FileHeader): ByteArray? =
+        runCatching {
+            zip.getInputStream(header).use { it.readBytes() }
+        }.getOrNull()
+
     /**
      * Validates the password by fully reading the first
      * encrypted entry: zip4j verifies an AES password only once
@@ -406,6 +421,10 @@ internal class CbzNativeSource(
         synchronized(lock) {
             if (index < 0 || index >= entries.size) return null
             val header = headerFor(entries[index]) ?: return null
+            if (isAvifEntry(entries[index])) {
+                val bytes = avifBytes(header) ?: return null
+                return AvifDecoder.decodeBounds(bytes)
+            }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             runCatching {
                 zip.getInputStream(header).use { stream ->
@@ -476,6 +495,29 @@ internal class CbzNativeSource(
         synchronized(lock) {
             if (index < 0 || index >= entries.size) return null
             val header = headerFor(entries[index]) ?: return null
+            if (isAvifEntry(entries[index])) {
+                val bytes = avifBytes(header) ?: return null
+                val decoded = AvifDecoder.decode(bytes) ?: return null
+                // Same caps as the sampled path below: width near
+                // the target (within 2x, so the scrub preview
+                // stays crisp) and height under the 1200px cap.
+                // libavif has no sampled decode, so the full
+                // frame decodes first and scales down here.
+                if (decoded.width <= targetWidthPx * 2 &&
+                    decoded.height <= 1200
+                ) {
+                    return decoded
+                }
+                val scale = minOf(
+                    targetWidthPx * 2.0 / decoded.width,
+                    1200.0 / decoded.height
+                )
+                val tw = (decoded.width * scale).toInt().coerceAtLeast(1)
+                val th = (decoded.height * scale).toInt().coerceAtLeast(1)
+                val scaled = resizeBox(decoded, tw, th)
+                if (scaled !== decoded) decoded.recycle()
+                return scaled
+            }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             runCatching {
                 zip.getInputStream(header).use { stream ->
@@ -518,6 +560,33 @@ internal class CbzNativeSource(
             }
             val header = headerFor(entries[index])
                 ?: throw IllegalArgumentException("Missing comic entry: ${entries[index]}")
+            if (isAvifEntry(entries[index])) {
+                val bytes = avifBytes(header)
+                    ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
+                val decoded = AvifDecoder.decode(bytes)
+                    ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
+                // Ceiling: the same 8192 x 16384 cap as the
+                // sampled path below. libavif has no sampled
+                // decode, so an over-ceiling AVIF decodes full
+                // and scales down here; the transient full-size
+                // allocation is the v1 trade-off (an OOM lands
+                // on the page's failure placeholder like any
+                // other undecodable page).
+                if (decoded.width <= MAX_DECODE_WIDTH &&
+                    decoded.height <= MAX_DECODE_HEIGHT
+                ) {
+                    return decoded
+                }
+                val scale = minOf(
+                    MAX_DECODE_WIDTH.toDouble() / decoded.width,
+                    MAX_DECODE_HEIGHT.toDouble() / decoded.height
+                )
+                val tw = (decoded.width * scale).toInt().coerceAtLeast(1)
+                val th = (decoded.height * scale).toInt().coerceAtLeast(1)
+                val scaled = resizeBox(decoded, tw, th)
+                if (scaled !== decoded) decoded.recycle()
+                return scaled
+            }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             zip.getInputStream(header).use { stream ->
                 BitmapFactory.decodeStream(stream, null, bounds)
