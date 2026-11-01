@@ -365,6 +365,39 @@ object PdfParser {
                     }
                 }
             }
+            if (trailerDict == null) {
+                // Broken-startxref recovery (proven 2026-11-01 on a
+                // Word-produced 402-page Persian PDF whose trailer
+                // says startxref 3054807 while the xref table itself
+                // starts at 3039721 — that number points into the
+                // middle of an xref entry, at no table or object
+                // boundary at all): the xref walk above then breaks
+                // before reading any trailer, the linear scan above
+                // recovers the object offsets, but WITHOUT a trailer
+                // pageObjectNumbers() still returns empty ("PDF has
+                // no pages") and the reader falls back to rendering
+                // all 402 text pages as images behind a bare spinner.
+                // Readers that open this file (poppler, pdfium, Edge)
+                // all repair it by scanning, so do the same: take the
+                // last trailer dict in the file — the real trailer
+                // sits at EOF, after every object — and accept it only
+                // if it names a /Root, so a stray "trailer" string
+                // inside a content stream can never be mistaken for
+                // one. When no such dict exists the old behaviour is
+                // unchanged (empty page list, caller falls back).
+                var searchFrom = text.length
+                while (true) {
+                    val idx = text.lastIndexOf("trailer", searchFrom - 1)
+                    if (idx < 0) break
+                    val dictStart = text.indexOf("<<", idx + 7)
+                    val dict = if (dictStart >= 0) balancedDict(text, dictStart) else null
+                    if (dict != null && refIn(dict, "Root") != null) {
+                        trailerDict = dict
+                        break
+                    }
+                    searchFrom = idx
+                }
+            }
             // A trailer without /Encrypt (or a file whose trailers were
             // all unreadable) simply stays unencrypted.
             trailerDict?.let { ensureSecurity(it) }
@@ -1141,7 +1174,14 @@ object PdfParser {
         }
 
         private fun decodeFilters(dict: String, data: ByteArray): ByteArray? {
-            val filterText = Regex("/Filter\\s*(\\[[^\\]]*\\]|/\\S+)").find(dict)
+            // The filter value is ONE name token (or an array of them),
+            // never "everything up to the next space": Word writes
+            // "/Filter/FlateDecode/Length 2147" with no spaces, and the
+            // old /\S+ swallowed "/FlateDecode/Length", so "Length"
+            // was then treated as an unknown filter and EVERY stream
+            // in a Word PDF — content, CMap, everything — decoded to
+            // null, leaving every page text-less (proven 2026-11-01).
+            val filterText = Regex("/Filter\\s*(\\[[^\\]]*\\]|/[A-Za-z0-9]+)").find(dict)
                 ?.groupValues?.get(1) ?: return data
             val filters = Regex("/([A-Za-z0-9]+)").findAll(filterText)
                 .map { it.groupValues[1] }.toList()
@@ -1490,7 +1530,13 @@ object PdfParser {
                 lines += extractLines(content, resources)
             }
             if (lines.isEmpty()) return emptyList()
-            val gaps = lines.mapNotNull { it.gap.takeIf { g -> g > 0 } }.sorted()
+            // Visual-to-logical, per LINE (not per paragraph: a
+            // paragraph joins several lines, and reversing across
+            // lines would scramble line order). See visualToLogical.
+            val logicalLines = lines.map { line ->
+                line.copy(text = visualToLogical(line.text))
+            }
+            val gaps = logicalLines.mapNotNull { it.gap.takeIf { g -> g > 0 } }.sorted()
             val median = gaps.getOrNull(gaps.size / 2) ?: 0.0
             val threshold = maxOf(median * 1.6, 4.0)
             val paragraphs = mutableListOf<String>()
@@ -1501,7 +1547,7 @@ object PdfParser {
                     current.clear()
                 }
             }
-            for (line in lines) {
+            for (line in logicalLines) {
                 if (current.isNotEmpty()) current.append(' ')
                 current.append(line.text)
                 if (line.gap > threshold) flushPara()
@@ -1515,6 +1561,77 @@ object PdfParser {
             if (direct != null) return direct
             val ref = refIn(pageDict, "Resources") ?: return null
             return dictOf(ref)
+        }
+
+        /**
+         * True when this document was produced by Microsoft Word
+         * (Creator/Producer in the Info dict). Word is the one
+         * producer proven to write complex-script text in VISUAL
+         * order — glyphs left-to-right as displayed — instead of
+         * logical (reading) order, so its Persian/Arabic lines must
+         * be converted back (see visualToLogical). Every other
+         * producer keeps logical order and must NOT be converted:
+         * reversing a logical RTL line would break a book that
+         * already reads correctly, so the gate is Word-only until
+         * another visual-order producer is proven with a sample.
+         */
+        private var wordProducerCache: Boolean? = null
+
+        private fun isWordProducer(): Boolean {
+            wordProducerCache?.let { return it }
+            val result = run {
+                val trailer = trailerDict ?: return@run false
+                val infoNum = refIn(trailer, "Info") ?: return@run false
+                val raw = rawObject(infoNum) ?: return@run false
+                val producer = stringAfterKey(raw, "Producer", infoNum) ?: ""
+                val creator = stringAfterKey(raw, "Creator", infoNum) ?: ""
+                producer.contains("Word", ignoreCase = true) ||
+                    creator.contains("Word", ignoreCase = true)
+            }
+            wordProducerCache = result
+            return result
+        }
+
+        private fun isRtlChar(c: Char): Boolean {
+            val o = c.code
+            // Digits are NOT RTL letters: Arabic-Indic 0660-0669 and
+            // Persian 06F0-06F9 read left-to-right even inside RTL
+            // text, so counting them as RTL reversed "۲۱۴" into
+            // "۴۱۲" and "۱۰" into "۰۱" (proven 2026-11-01). A pure
+            // digit word is therefore kept as-is by visualToLogical.
+            if (o in 0x0660..0x0669 || o in 0x06F0..0x06F9) return false
+            return (o in 0x0590..0x05FF) || (o in 0x0600..0x06FF) ||
+                (o in 0x0750..0x077F) || (o in 0xFB50..0xFDFF) ||
+                (o in 0xFE70..0xFEFF)
+        }
+
+        /**
+         * Visual-to-logical for one Word line. A visual RTL line is
+         * its logical line with word order reversed and each RTL
+         * word's letters reversed — digits and Latin words stay in
+         * their own order (a number reads left-to-right even inside
+         * RTL text, so reversing it would turn ۲۱۴ into ۴۱۲).
+         * Punctuation attached to a word reverses with it, which
+         * puts a sentence-final period back at the end. Lines that
+         * are not RTL-majority (English lines in a Word book, code,
+         * numbers) are already logical and are left untouched, as
+         * are all lines of non-Word documents.
+         */
+        private fun visualToLogical(line: String): String {
+            if (!isWordProducer()) return line
+            var rtl = 0
+            var latin = 0
+            for (c in line) {
+                if (isRtlChar(c)) rtl++
+                else if (c in 'A'..'Z' || c in 'a'..'z') latin++
+            }
+            if (rtl <= latin) return line
+            val words = line.split(' ')
+            val out = ArrayList<String>(words.size)
+            for (w in words.asReversed()) {
+                out += if (w.any { isRtlChar(it) }) w.reversed() else w
+            }
+            return out.joinToString(" ")
         }
 
         private data class Line(val text: String, val gap: Double)
@@ -1670,10 +1787,34 @@ object PdfParser {
             val dict = dictOf(ref) ?: return null
             val subtype = nameIn(dict, "Subtype")
             if (subtype == "Type0") {
-                val descRefs = arrayRefs(dict, "DescendantFonts")
-                val descNum = descRefs.firstOrNull() ?: return null
-                val desc = dictOf(descNum) ?: return null
-                val toUnicode = toUnicodeMap(refIn(desc, "ToUnicode"))
+                // ToUnicode lives on the Type0 dict itself (the spec's
+                // Type0 entry), NOT on the descendant CIDFont — the old
+                // code read it from the descendant and so always got
+                // null for real Type0 fonts, leaving every CID code
+                // unmapped. Word adds two more wrinkles (proven
+                // 2026-11-01): DescendantFonts is an indirect
+                // reference to an ARRAY object ("/DescendantFonts
+                // 16 0 R" where object 16 is "[17 0 R]", 17 being the
+                // CIDFont), not a direct "[17 0 R]" array — so resolve
+                // that indirection for the fallback lookup below, and
+                // never let a missing/unreadable descendant kill the
+                // font: the parent's ToUnicode alone is enough to
+                // decode the text.
+                val parentToUnicode = toUnicodeMap(refIn(dict, "ToUnicode"))
+                val descToUnicode = if (parentToUnicode != null) null else run {
+                    val descNum = arrayRefs(dict, "DescendantFonts").firstOrNull()
+                        ?: refIn(dict, "DescendantFonts")?.let { refNum ->
+                            val raw = rawObject(refNum)?.trimStart()
+                            if (raw != null && raw.startsWith("[")) {
+                                Regex("(\\d+)\\s+\\d+\\s+R").find(raw)
+                                    ?.groupValues?.get(1)?.toIntOrNull() ?: refNum
+                            } else refNum
+                        }
+                    descNum?.let { dictOf(it) }
+                        ?.let { refIn(it, "ToUnicode") }
+                        ?.let { toUnicodeMap(it) }
+                }
+                val toUnicode = parentToUnicode ?: descToUnicode
                 val codeBytes = toUnicode?.codeBytes ?: 2
                 return FontInfo(toUnicode?.map ?: emptyMap(), codeBytes, emptyMap(), null)
             }
@@ -1713,17 +1854,26 @@ object PdfParser {
                 maxHi = maxOf(maxHi, m.groupValues[2].toIntOrNull(16) ?: 0)
             }
             val map = mutableMapOf<Int, String>()
-            val bfChar = Regex("beginbfchar(.*?)endbfchar", RegexOption.DOT_MATCHES_ALL)
-                .find(cmap)?.groupValues?.get(1) ?: ""
-            for (m in Regex("<([0-9A-Fa-f]+)>\\s*<([0-9A-Fa-f]+)>").findAll(bfChar)) {
-                val src = m.groupValues[1].toIntOrNull(16) ?: continue
-                map[src] = decodeCMapDst(m.groupValues[2])
+            // ALL blocks, not just the first: Word splits a CMap into
+            // many small blocks ("1 beginbfchar", "3 beginbfrange",
+            // "2 beginbfchar", …) and the old .find() read only the
+            // first block of each kind, so most CID codes stayed
+            // unmapped and fell through to Latin-1 garbage (proven
+            // 2026-11-01: 0x00BD printed as ½ instead of U+0646).
+            for (block in Regex("beginbfchar(.*?)endbfchar", RegexOption.DOT_MATCHES_ALL)
+                .findAll(cmap)) {
+                val bfChar = block.groupValues[1]
+                for (m in Regex("<([0-9A-Fa-f]+)>\\s*<([0-9A-Fa-f]+)>").findAll(bfChar)) {
+                    val src = m.groupValues[1].toIntOrNull(16) ?: continue
+                    map[src] = decodeCMapDst(m.groupValues[2])
+                }
             }
-            val bfRange = Regex("beginbfrange(.*?)endbfrange", RegexOption.DOT_MATCHES_ALL)
-                .find(cmap)?.groupValues?.get(1) ?: ""
-            for (m in Regex(
-                "<([0-9A-Fa-f]+)>\\s*<([0-9A-Fa-f]+)>\\s*(<([0-9A-Fa-f]+)>|\\[([^\\]]*)\\])"
-            ).findAll(bfRange)) {
+            for (block in Regex("beginbfrange(.*?)endbfrange", RegexOption.DOT_MATCHES_ALL)
+                .findAll(cmap)) {
+                val bfRange = block.groupValues[1]
+                for (m in Regex(
+                    "<([0-9A-Fa-f]+)>\\s*<([0-9A-Fa-f]+)>\\s*(<([0-9A-Fa-f]+)>|\\[([^\\]]*)\\])"
+                ).findAll(bfRange)) {
                 val lo = m.groupValues[1].toIntOrNull(16) ?: continue
                 val hi = m.groupValues[2].toIntOrNull(16) ?: continue
                 if (m.groupValues[4].isNotEmpty()) {
@@ -1739,6 +1889,7 @@ object PdfParser {
                     for ((k, code) in (lo..hi).withIndex()) {
                         if (k < dsts.size) map[code] = dsts[k]
                     }
+                }
                 }
             }
             if (map.isEmpty()) return null
