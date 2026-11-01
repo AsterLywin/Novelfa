@@ -21,7 +21,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -2261,7 +2262,57 @@ private fun NativeImageBookViewer(
                                     if (target != null) jumpTo(target)
                                 },
                                 valueRange = 0f..(pageCount - 1).coerceAtLeast(0).toFloat(),
-                                steps = (pageCount - 2).coerceIn(0, 1000)
+                                // Snapping stays (steps), but the
+                                // stops are not drawn: the old
+                                // dotted track read as clutter.
+                                // Clean round thumb + a rounded
+                                // 6dp track, mirrored in RTL.
+                                steps = (pageCount - 2).coerceIn(0, 1000),
+                                thumb = {
+                                    Box(
+                                        Modifier.size(20.dp)
+                                            .background(
+                                                MaterialTheme.colorScheme.primary,
+                                                CircleShape
+                                            )
+                                    )
+                                },
+                                track = { state ->
+                                    val range = state.valueRange
+                                    val fraction =
+                                        if (range.endInclusive > range.start) {
+                                            ((state.value - range.start) /
+                                                (range.endInclusive - range.start))
+                                                .coerceIn(0f, 1f)
+                                        } else {
+                                            0f
+                                        }
+                                    val isRtl =
+                                        LocalLayoutDirection.current ==
+                                            LayoutDirection.Rtl
+                                    Box(
+                                        Modifier.fillMaxWidth().height(6.dp)
+                                            .clip(RoundedCornerShape(50))
+                                            .background(
+                                                MaterialTheme.colorScheme.surfaceVariant
+                                            )
+                                    ) {
+                                        Box(
+                                            Modifier.fillMaxHeight()
+                                                .fillMaxWidth(fraction)
+                                                .align(
+                                                    if (isRtl) {
+                                                        Alignment.CenterEnd
+                                                    } else {
+                                                        Alignment.CenterStart
+                                                    }
+                                                )
+                                                .background(
+                                                    MaterialTheme.colorScheme.primary
+                                                )
+                                        )
+                                    }
+                                }
                             )
                         }
                         IconButton(
@@ -3255,47 +3306,81 @@ private fun CropEditorDialog(
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             Column(Modifier.fillMaxSize()) {
                 var areaSize by remember { mutableStateOf(IntSize.Zero) }
+                val density = LocalDensity.current
+                val scrollState = rememberScrollState()
+                // 80% of the screen width, vertically scrollable:
+                // a tall webtoon strip used to be contain-fit,
+                // so it shrank to a narrow ribbon; now it is
+                // wide and the strip scrolls. A short page is
+                // still centred (the wrapper below is at least
+                // the area height).
                 Box(
                     modifier = Modifier.weight(1f).fillMaxWidth()
+                        .verticalScroll(scrollState)
                         .onSizeChanged { areaSize = it },
-                    contentAlignment = Alignment.Center
+                    contentAlignment = Alignment.TopCenter
                 ) {
                     val bmp = bitmap
                     if (bmp != null && areaSize.width > 0 && areaSize.height > 0) {
                         val ratio = bmp.width.toFloat() / bmp.height
-                        val areaRatio = areaSize.width.toFloat() / areaSize.height
-                        // Contain: bound by width for wide pages,
-                        // by height for tall ones — so the box
-                        // IS the displayed image, and overlay
-                        // fractions map to it exactly.
-                        val boxModifier = if (ratio >= areaRatio) {
-                            Modifier.fillMaxWidth().aspectRatio(ratio)
-                        } else {
-                            Modifier.fillMaxHeight().aspectRatio(ratio)
-                        }
+                        val imageHeightPx =
+                            0.8f * areaSize.width.toFloat() / ratio
                         Box(
-                            modifier = boxModifier.pointerInput(rect) {
-                                // Drag target: nearest corner
-                                // within 8% of the small side,
-                                // else a move when inside, else
-                                // ignored (a tap outside the rect
-                                // does nothing — no new rect).
-                                var target = -1
-                                detectDragGestures(
-                                    onDragStart = { offset ->
+                            modifier = Modifier.fillMaxWidth()
+                                .height(
+                                    with(density) {
+                                        maxOf(
+                                            imageHeightPx,
+                                            areaSize.height.toFloat()
+                                        ).toDp()
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                        // The box IS the displayed image, so
+                        // overlay fractions map to it exactly.
+                        val boxModifier = Modifier
+                            .fillMaxWidth(0.8f)
+                            .aspectRatio(ratio)
+                        Box(
+                            modifier = boxModifier.pointerInput(Unit) {
+                                // Stable key on purpose, and a
+                                // hand-written loop, not
+                                // detectDragGestures: the old
+                                // pointerInput(rect) restarted
+                                // the detector on every drag
+                                // event, so a corner drag died
+                                // after its first pixel and the
+                                // rect never visibly moved (the
+                                // reported "crop does nothing").
+                                // The loop reads the live rect
+                                // state each event instead.
+                                // Target: nearest corner within
+                                // 8% of the small side, else a
+                                // move when inside and the rect
+                                // has room to move. Anything
+                                // else is never consumed, so
+                                // the vertical scroll above
+                                // takes the drag; a tap outside
+                                // the rect does nothing.
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        val down =
+                                            awaitFirstDown(requireUnconsumed = false)
                                         val w = size.width.toFloat()
                                         val h = size.height.toFloat()
+                                        if (w <= 0f || h <= 0f) continue
                                         val threshold =
                                             minOf(w, h) * 0.08f
-                                        val fx = offset.x / w
-                                        val fy = offset.y / h
+                                        val fx = down.position.x / w
+                                        val fy = down.position.y / h
                                         val corners = listOf(
                                             rect.left to rect.top,
                                             rect.right to rect.top,
                                             rect.left to rect.bottom,
                                             rect.right to rect.bottom
                                         )
-                                        target = corners.indexOfFirst { (cx, cy) ->
+                                        var target = corners.indexOfFirst { (cx, cy) ->
                                             val dx = (fx - cx) * w
                                             val dy = (fy - cy) * h
                                             dx * dx + dy * dy < threshold * threshold
@@ -3304,55 +3389,85 @@ private fun CropEditorDialog(
                                             fx in rect.left..rect.right &&
                                             fy in rect.top..rect.bottom
                                         ) {
-                                            target = 4
+                                            target = if (rect.left > 0f ||
+                                                rect.top > 0f ||
+                                                rect.right < 1f ||
+                                                rect.bottom < 1f
+                                            ) 4 else -1
                                         }
-                                    },
-                                    onDrag = { change, dragAmount ->
-                                        if (target < 0) return@detectDragGestures
-                                        val w = size.width.toFloat()
-                                        val h = size.height.toFloat()
-                                        val dx = dragAmount.x / w
-                                        val dy = dragAmount.y / h
-                                        val min = 0.05f
-                                        var next = rect
-                                        when (target) {
-                                            0 -> next = next.copy(
-                                                left = (next.left + dx).coerceIn(0f, next.right - min),
-                                                top = (next.top + dy).coerceIn(0f, next.bottom - min)
-                                            )
-                                            1 -> next = next.copy(
-                                                right = (next.right + dx).coerceIn(next.left + min, 1f),
-                                                top = (next.top + dy).coerceIn(0f, next.bottom - min)
-                                            )
-                                            2 -> next = next.copy(
-                                                left = (next.left + dx).coerceIn(0f, next.right - min),
-                                                bottom = (next.bottom + dy).coerceIn(next.top + min, 1f)
-                                            )
-                                            3 -> next = next.copy(
-                                                right = (next.right + dx).coerceIn(next.left + min, 1f),
-                                                bottom = (next.bottom + dy).coerceIn(next.top + min, 1f)
-                                            )
-                                            else -> {
-                                                // Move: clamp the
-                                                // whole rect into
-                                                // the frame.
-                                                val shiftX = dx.coerceIn(
-                                                    -next.left, 1f - next.right
-                                                )
-                                                val shiftY = dy.coerceIn(
-                                                    -next.top, 1f - next.bottom
-                                                )
-                                                next = next.copy(
-                                                    left = next.left + shiftX,
-                                                    right = next.right + shiftX,
-                                                    top = next.top + shiftY,
-                                                    bottom = next.bottom + shiftY
-                                                )
+                                        if (target < 0) {
+                                            // Not a crop gesture:
+                                            // drain without
+                                            // consuming, so the
+                                            // scroll handles it.
+                                            var done = false
+                                            while (!done) {
+                                                val ev = awaitPointerEvent()
+                                                if (ev.changes.none { it.pressed }) {
+                                                    done = true
+                                                }
                                             }
+                                            continue
                                         }
-                                        rect = next
+                                        val min = 0.05f
+                                        var active = true
+                                        while (active) {
+                                            val ev = awaitPointerEvent()
+                                            val pressed =
+                                                ev.changes.filter { it.pressed }
+                                            if (pressed.isEmpty()) {
+                                                active = false
+                                                break
+                                            }
+                                            val change = pressed[0]
+                                            val dragAmount =
+                                                change.positionChange()
+                                            if (dragAmount ==
+                                                androidx.compose.ui.geometry.Offset.Zero
+                                            ) continue
+                                            val dx = dragAmount.x / w
+                                            val dy = dragAmount.y / h
+                                            var next = rect
+                                            when (target) {
+                                                0 -> next = next.copy(
+                                                    left = (next.left + dx).coerceIn(0f, next.right - min),
+                                                    top = (next.top + dy).coerceIn(0f, next.bottom - min)
+                                                )
+                                                1 -> next = next.copy(
+                                                    right = (next.right + dx).coerceIn(next.left + min, 1f),
+                                                    top = (next.top + dy).coerceIn(0f, next.bottom - min)
+                                                )
+                                                2 -> next = next.copy(
+                                                    left = (next.left + dx).coerceIn(0f, next.right - min),
+                                                    bottom = (next.bottom + dy).coerceIn(next.top + min, 1f)
+                                                )
+                                                3 -> next = next.copy(
+                                                    right = (next.right + dx).coerceIn(next.left + min, 1f),
+                                                    bottom = (next.bottom + dy).coerceIn(next.top + min, 1f)
+                                                )
+                                                else -> {
+                                                    // Move: clamp
+                                                    // the whole rect
+                                                    // into the frame.
+                                                    val shiftX = dx.coerceIn(
+                                                        -next.left, 1f - next.right
+                                                    )
+                                                    val shiftY = dy.coerceIn(
+                                                        -next.top, 1f - next.bottom
+                                                    )
+                                                    next = next.copy(
+                                                        left = next.left + shiftX,
+                                                        right = next.right + shiftX,
+                                                        top = next.top + shiftY,
+                                                        bottom = next.bottom + shiftY
+                                                    )
+                                                }
+                                            }
+                                            rect = next
+                                            change.consume()
+                                        }
                                     }
-                                )
+                                }
                             }
                         ) {
                             Image(
@@ -3419,6 +3534,7 @@ private fun CropEditorDialog(
                                     )
                                 }
                             }
+                        }
                         }
                     } else {
                         CircularProgressIndicator()
@@ -3775,8 +3891,10 @@ private fun NativePageItem(
     halfSide: Int = 0,
     // Tap on this page: the viewer passes handlePageTap, which
     // toggles the chrome after the 300ms double-tap window.
-    // Handled here, at the item, for the reason in the viewer
-    // comment above handlePageTap.
+    // Reported by the passive listener on this item's outer
+    // Box (see there) — the ONLY tap source now, so a tap
+    // can never fire twice (a second report inside the
+    // window would cancel the pending toggle).
     onTap: () -> Unit = {},
     // The viewer's page-return park (see
     // NativePageBitmapCache). Null = today's behaviour exactly:
@@ -4156,14 +4274,43 @@ private fun NativePageItem(
     // detectTapGestures here, wrapping the zoom/scroll owners,
     // and on the phone that killed them: after that build a
     // tap did not toggle the chrome, and pinch zoom and
-    // scroll/pager turns stopped working too. So this Box is
-    // plain, and the tap lives INSIDE the page's own gesture
-    // owner instead: ZoomablePageContainer for strip and
-    // paged fit-width pages, and the leaf image for the
-    // paged fit modes that have no zoom container. A tap on
-    // a button inside (retry) is consumed by that button, so
-    // it never toggles the chrome.
-    Box {
+    // scroll/pager turns stopped working too. And c78a032's
+    // tap inside ZoomablePageContainer's loop never fired
+    // on the phone either — its awaitFirstDown skips downs
+    // another detector already consumed. So the tap lives
+    // here, as a PASSIVE listener: it takes every down
+    // (requireUnconsumed = false) and never consumes
+    // anything, so it can neither starve nor be starved
+    // by the zoom/pan/scroll/pager detectors below. It
+    // fires only for a lone pointer that lifts without
+    // passing slop, and skips ups a button inside already
+    // consumed (the retry button), so a tap on one never
+    // toggles the chrome.
+    Box(
+        modifier = Modifier.pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val downPos = down.position
+                    var isTap = true
+                    var upConsumed = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val pressed = event.changes.filter { it.pressed }
+                        if (pressed.size > 1) isTap = false
+                        if (pressed.isEmpty()) {
+                            upConsumed = event.changes.any { it.isConsumed }
+                            break
+                        }
+                        if ((pressed[0].position - downPos).getDistance() >
+                            viewConfiguration.touchSlop
+                        ) isTap = false
+                    }
+                    if (isTap && !upConsumed) onTap()
+                }
+            }
+        }
+    ) {
     when {
         drawable != null -> {
             // Animated page: the drawable plays as-is. Crop,
@@ -4199,7 +4346,6 @@ private fun NativePageItem(
                                 modifier = Modifier
                                     .fillMaxHeight(shrink)
                                     .aspectRatio(ratio)
-                                    .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                             )
                         }
                     }
@@ -4226,7 +4372,6 @@ private fun NativePageItem(
                                     modifier = Modifier
                                         .width(nativeWidthDp)
                                         .aspectRatio(ratio)
-                                        .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                                 )
                             }
                         }
@@ -4242,7 +4387,6 @@ private fun NativePageItem(
                                 drawable = anim,
                                 scaleType = ImageView.ScaleType.FIT_XY,
                                 modifier = Modifier.fillMaxSize(shrink)
-                                    .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                             )
                         }
                     }
@@ -4260,7 +4404,6 @@ private fun NativePageItem(
                                 modifier = Modifier
                                     .fillMaxWidth(shrink)
                                     .aspectRatio(ratio)
-                                    .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                             )
                         }
                     }
@@ -4280,7 +4423,6 @@ private fun NativePageItem(
                     } else {
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
                     },
-                    onTap = { onTap() }
                 ) {
                     AnimatedPageImage(
                         rotation = viewRotation.toFloat(),
@@ -4333,7 +4475,6 @@ private fun NativePageItem(
                                     .fillMaxHeight(shrink)
                                     .aspectRatio(ratio)
                                     .background(Color.White)
-                                    .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                             )
                         }
                     }
@@ -4359,7 +4500,6 @@ private fun NativePageItem(
                                         .width(nativeWidthDp)
                                         .aspectRatio(ratio)
                                         .background(Color.White)
-                                        .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                                 )
                             }
                         }
@@ -4376,7 +4516,6 @@ private fun NativePageItem(
                                 contentScale = ContentScale.FillBounds,
                                 modifier = Modifier
                                     .fillMaxSize(shrink)
-                                        .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                                     .background(Color.White)
                             )
                         }
@@ -4412,7 +4551,6 @@ private fun NativePageItem(
                                     .fillMaxWidth(shrink)
                                     .aspectRatio(ratio),
                                 onScaleChange = onPinchScale,
-                                onTap = { onTap() }
                             ) {
                                 Image(
                                     bitmap = bmp.asImageBitmap(),
@@ -4444,7 +4582,6 @@ private fun NativePageItem(
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
                     },
                     onScaleChange = onPinchScale,
-                    onTap = { onTap() }
                 ) {
                     Image(
                         bitmap = bmp.asImageBitmap(),
@@ -4464,8 +4601,7 @@ private fun NativePageItem(
             // faint grey on white).
             if (paged) {
                 Column(
-                    modifier = Modifier.fillMaxSize().background(Color.White)
-                    .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) },
+                    modifier = Modifier.fillMaxSize().background(Color.White),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -4492,8 +4628,7 @@ private fun NativePageItem(
             } else {
                 Column(
                     modifier = (if (horizontalStrip) Modifier.fillMaxHeight().width(200.dp) else Modifier.fillMaxWidth().height(200.dp))
-                        .background(Color.White)
-                        .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) },
+                        .background(Color.White),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -4525,7 +4660,7 @@ private fun NativePageItem(
                     Modifier.fillMaxSize()
                 } else {
                     if (horizontalStrip) Modifier.fillMaxHeight().width(200.dp) else Modifier.fillMaxWidth().height(200.dp)
-                }).pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) },
+                }),
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator()

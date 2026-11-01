@@ -38,9 +38,12 @@ import androidx.compose.ui.unit.IntSize
  *   image any further in that direction is NOT consumed, so
  *   the list takes over and scrolls from there — the same
  *   hand-over PhotoView does at its bounds.
- * - Taps are never consumed, and are reported via onTap, so
- *   the chrome toggle works without an ancestor detector
- *   starving pinch/pan/scroll (the 6c4ee982 regression).
+ * - Taps are never consumed here; the chrome toggle for them
+ *   comes from the page item's passive listener (see
+ *   NativePageItem), which reports without consuming, so no
+ *   detector starves another (the 6c4ee982 regression was an
+ *   ancestor detector that consumed; the c78a032 tap inside
+ *   this loop never fired on the phone).
  * - Double-tap zoom (ComicScreen's double-tap modes, simplified
  *   to one): a double-tap toggles 1x <-> 2x, zooming around the
  *   tap point — the tapped detail lands under the finger. The
@@ -81,16 +84,14 @@ private const val MAX_ZOOM = 4f
 @Composable
 fun ZoomablePageContainer(
     modifier: Modifier,
-    // Tap on this page, fired for EVERY tap-up (including the
-    // taps of a double-tap): the viewer delays the chrome
-    // toggle 300ms and cancels it on the second tap, so the
-    // double-tap still zooms without flickering the chrome.
-    // This is the page's ONLY tap source now: an ancestor
-    // detectTapGestures on the page item (6c4ee982) killed
-    // pinch zoom and scroll/pager turns on the phone, so the
-    // tap must live inside the gesture owner that already
-    // handles pinch/pan, never above it.
-    onTap: () -> Unit = {},
+    // No tap reporting here anymore: the page item's outer
+    // Box reports taps with a passive listener (see
+    // NativePageItem), which can neither starve nor be
+    // starved by this loop. This loop still tracks tap-ups
+    // itself, but only for its double-tap zoom below — the
+    // chrome toggle must come from exactly one source, or a
+    // second report inside the viewer's 300ms window would
+    // cancel the pending toggle.
     // Reports the SETTLED scale (1..4) — once per gesture, when
     // the fingers lift, plus once per double-tap. The caller
     // uses it to re-render the page sharper once the settled
@@ -255,16 +256,12 @@ fun ZoomablePageContainer(
                     }
                     // A tap is a gesture that never passed slop
                     // and never pinched: it was never consumed
-                    // above — and it is reported here, inside
-                    // this owner, so no ancestor detector can
-                    // starve the pinch/pan/scroll detectors.
-                    // Every tap-up reports, so the viewer's
-                    // 300ms pending logic can cancel the first
-                    // tap of a double-tap; only this container
+                    // above. The chrome toggle for it comes
+                    // from the page item's passive listener,
+                    // not from here — only this container
                     // knows the tap landed on THIS page, so it
-                    // owns the zoom decision below.
+                    // owns the double-tap zoom decision below.
                     if (!pastSlop) {
-                        onTap()
                         val now = System.currentTimeMillis()
                         if (now - lastTapUpMs < 300 &&
                             (downPos - lastTapPos).getDistance() < slop * 4

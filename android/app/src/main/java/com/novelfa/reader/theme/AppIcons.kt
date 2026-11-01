@@ -74,7 +74,11 @@ enum class AppIconKind(val data: String, val duo: Boolean = false) {
     // native viewer does not have yet (page bookmarks, page
     // capture, rotation lock, pinch-zoom toggle) and are
     // intentionally unwired until those features exist.
-    Crop("M6,2 H2 V6 M10,14 H14 V10"),
+    // Classic crop frame: two large opposite corners whose
+    // arms reach toward the centre. The old two short
+    // 4-unit corners read as stray brackets at small sizes;
+    // 6-unit arms make the crop frame unmistakable.
+    Crop("M8,2 H2 V8 M8,14 H14 V8"),
     Padding("M7,8 H2 M4.5,5.5 L2,8 L4.5,10.5 M9,8 H14 M11.5,5.5 L14,8 L11.5,10.5"),
     Minus("M2.5,8 H13.5"),
     Bookmark("M4,2 H12 V14 L8,11 L4,14 Z", duo = true),
