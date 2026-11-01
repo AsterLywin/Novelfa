@@ -1566,6 +1566,26 @@ private fun NativeImageBookViewer(
             pendingTapMs = null
         }
     }
+    // Tap on a page itself toggles the chrome, ComicScreen-style:
+    // tap once -> bars hide, tap again -> bars show. The 300ms
+    // pending window above is what keeps a double-tap (zoom)
+    // from toggling: a second tap inside the window cancels
+    // the pending toggle instead of starting a new one.
+    // This handler is called by the page ITEM, not by the outer
+    // tap surface (see the page Box below): the outer surface
+    // sat outside LazyColumn / HorizontalPager, so a tap on a
+    // page had to survive those gesture detectors first — and
+    // on the phone it did not, so tapping the image did
+    // nothing. The item sits inside the list/pager, so its
+    // tap fires before those detectors can swallow it.
+    fun handlePageTap() {
+        val now = System.currentTimeMillis()
+        if (pendingTapMs != null && now - pendingTapMs!! < 300) {
+            pendingTapMs = null
+        } else {
+            pendingTapMs = now
+        }
+    }
     // Volume-key focus: the tap surface holds focus while the
     // switch is on, so the volume keys reach it. Focus is
     // re-requested when the sheet closes (the sheet steals it
@@ -1667,18 +1687,17 @@ private fun NativeImageBookViewer(
     // the page underneath and toggling the chrome.
     val chromeTapSource = remember { MutableInteractionSource() }
     Box(modifier = Modifier.fillMaxSize()) {
-        // The tap surface for the chrome toggle: the whole page
-        // area, ALWAYS full-screen. The bars below are an
-        // overlay on top of this Box (not Scaffold insets), so
-        // hiding them never resizes or moves this Box: the
+        // The page area, ALWAYS full-screen. The bars below are
+        // an overlay on top of this Box (not Scaffold insets),
+        // so hiding them never resizes or moves this Box: the
         // page stays exactly where it was, and hiding only
         // uncovers the strip of page that was under the bars.
-        // That was the bug: Scaffold padding made the page
-        // area grow by the bars' height on every hide, so the
-        // image visibly jumped / the window "got bigger".
-        // Buttons inside (retry, close) consume their own
-        // taps, so a tap on one never toggles the chrome by
-        // accident.
+        // Tap-to-hide lives on the page ITEM itself (see
+        // NativePageItem), not on this Box: a tap surface here,
+        // outside LazyColumn / HorizontalPager, never reliably
+        // received taps on a page. Buttons inside (retry,
+        // close) consume their own taps, so a tap on one never
+        // toggles the chrome by accident.
         Box(
             modifier = Modifier.fillMaxSize()
                 .focusRequester(volumeFocus)
@@ -1703,21 +1722,14 @@ private fun NativeImageBookViewer(
                         else -> false
                     }
                 }
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = {
-                        val now = System.currentTimeMillis()
-                        if (pendingTapMs != null && now - pendingTapMs!! < 300) {
-                            pendingTapMs = null
-                        } else {
-                            pendingTapMs = now
-                        }
-                    })
-                }
         ) {
             when {
                 openError -> {
                     Box(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTapGestures(onTap = { handlePageTap() })
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1731,7 +1743,10 @@ private fun NativeImageBookViewer(
                 }
                 source == null -> {
                     Box(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTapGestures(onTap = { handlePageTap() })
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1791,7 +1806,8 @@ private fun NativeImageBookViewer(
                             filterInvert = filterInvert,
                             viewRotation = viewRotation,
                             manualCropRect = manualCropRects[page],
-                            halfSide = halfSide
+                            halfSide = halfSide,
+                            onTap = { handlePageTap() }
                         )
                     }
                     if (!useDual) {
@@ -1903,7 +1919,8 @@ private fun NativeImageBookViewer(
                                 filterInvert = filterInvert,
                                 viewRotation = viewRotation,
                                 manualCropRect = manualCropRects[page],
-                                horizontalStrip = true
+                                horizontalStrip = true,
+                                onTap = { handlePageTap() }
                             )
                         }
                     }
@@ -1943,7 +1960,8 @@ private fun NativeImageBookViewer(
                             filterContrast = filterContrast,
                             filterInvert = filterInvert,
                             viewRotation = viewRotation,
-                            manualCropRect = manualCropRects[page]
+                            manualCropRect = manualCropRects[page],
+                            onTap = { handlePageTap() }
                         )
                     }
                 }
@@ -3565,7 +3583,12 @@ private fun NativePageItem(
     // halves out in reading order). A half item renders its
     // half at the slot width (half the screen), never the full
     // page squeezed into the slot.
-    halfSide: Int = 0
+    halfSide: Int = 0,
+    // Tap on this page: the viewer passes handlePageTap, which
+    // toggles the chrome after the 300ms double-tap window.
+    // Handled here, at the item, for the reason in the viewer
+    // comment above handlePageTap.
+    onTap: () -> Unit = {}
 ) {
     var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf<Bitmap?>(null) }
     // An animated drawable (GIF / animated WebP pages only).
@@ -3891,6 +3914,21 @@ private fun NativePageItem(
     }
 
     val density = LocalDensity.current
+    // Tap-to-hide chrome, at the page itself: this Box wraps
+    // every branch below (bitmap, animated, failed, loading),
+    // so a tap anywhere on the page reaches it before
+    // LazyColumn / HorizontalPager can swallow it. A tap on a
+    // button inside (retry) is consumed by that button, so
+    // detectTapGestures sees a consumed up-event and does not
+    // fire here — tapping retry never toggles the chrome.
+    // A drag/scroll never fires here either: detectTapGestures
+    // only fires on a tap, and a drag is consumed by the list
+    // or pager before its up-event.
+    Box(
+        modifier = Modifier.pointerInput(Unit) {
+            detectTapGestures(onTap = { onTap() })
+        }
+    ) {
     when {
         drawable != null -> {
             // Animated page: the drawable plays as-is. Crop,
@@ -4246,5 +4284,6 @@ private fun NativePageItem(
                 CircularProgressIndicator()
             }
         }
+    }
     }
 }
