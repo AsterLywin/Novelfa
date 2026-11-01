@@ -1156,6 +1156,31 @@ private fun NativeImageBookViewer(
     )
     var currentPage by remember { mutableIntStateOf(initialPage) }
 
+    // Page-return bitmap park — ComicScreen's pager trick
+    // (fx1's drawable map), in Novelfa's own form. Today a page
+    // that leaves composition loses its bitmap: the pager's
+    // beyond-viewport window is 1 and the strips dispose items
+    // as soon as they leave the viewport, so going back to a
+    // page re-runs the whole pipeline (zip stream + decode +
+    // EXIF rotate + Sobel crop + resize + sharpen + filters).
+    // ComicScreen instead parks the finished drawable of the
+    // pages around the current one, keyed by page URI, and a
+    // re-created page takes its parked drawable instead of
+    // re-decoding. This cache is that park, for finished
+    // bitmaps: an item hands its bitmap to the cache when it
+    // leaves composition, and a new item for the same page and
+    // the same render parameters takes it back. Animated pages
+    // never park (an Animatable drawable has a playback
+    // lifecycle a parked bitmap does not). The cache is
+    // per-book: a new book gets a fresh cache, and the close
+    // effect below frees the old book's parked bitmaps — a
+    // stale bitmap from another book can never be served for
+    // the same page number.
+    val pageBitmapCache = remember(book.id) { NativePageBitmapCache() }
+    DisposableEffect(book.id) {
+        onDispose { pageBitmapCache.close() }
+    }
+
     // XP for native books (PDF/CBZ/ZIP pages): the EPUB reader had XP
     // from the start, native books had none — a PDF novel or a manhwa
     // earned nothing. Same rules as the EPUB path, with page = unit:
@@ -1571,13 +1596,15 @@ private fun NativeImageBookViewer(
     // pending window above is what keeps a double-tap (zoom)
     // from toggling: a second tap inside the window cancels
     // the pending toggle instead of starting a new one.
-    // This handler is called by the page ITEM, not by the outer
-    // tap surface (see the page Box below): the outer surface
-    // sat outside LazyColumn / HorizontalPager, so a tap on a
-    // page had to survive those gesture detectors first — and
-    // on the phone it did not, so tapping the image did
-    // nothing. The item sits inside the list/pager, so its
-    // tap fires before those detectors can swallow it.
+    // This handler is called by the page's OWN gesture owner,
+    // never by an ancestor detector: first the outer surface
+    // outside LazyColumn / HorizontalPager did not receive
+    // taps at all, then an ancestor detector on the page item
+    // (6c4ee982) killed pinch zoom and scroll/pager turns on
+    // the phone. Now ZoomablePageContainer reports the tap
+    // from inside its pinch/pan loop, and the paged fit modes
+    // report it from the leaf image — so no detector sits
+    // above a scroll, pager, or zoom detector.
     fun handlePageTap() {
         val now = System.currentTimeMillis()
         if (pendingTapMs != null && now - pendingTapMs!! < 300) {
@@ -1692,12 +1719,12 @@ private fun NativeImageBookViewer(
         // so hiding them never resizes or moves this Box: the
         // page stays exactly where it was, and hiding only
         // uncovers the strip of page that was under the bars.
-        // Tap-to-hide lives on the page ITEM itself (see
-        // NativePageItem), not on this Box: a tap surface here,
-        // outside LazyColumn / HorizontalPager, never reliably
-        // received taps on a page. Buttons inside (retry,
-        // close) consume their own taps, so a tap on one never
-        // toggles the chrome by accident.
+        // Tap-to-hide lives inside the page's own gesture
+        // owner (see NativePageItem), not on this Box: a tap
+        // surface here, outside LazyColumn / HorizontalPager,
+        // never reliably received taps on a page. Buttons
+        // inside (retry, close) consume their own taps, so a
+        // tap on one never toggles the chrome by accident.
         Box(
             modifier = Modifier.fillMaxSize()
                 .focusRequester(volumeFocus)
@@ -1807,7 +1834,8 @@ private fun NativeImageBookViewer(
                             viewRotation = viewRotation,
                             manualCropRect = manualCropRects[page],
                             halfSide = halfSide,
-                            onTap = { handlePageTap() }
+                            onTap = { handlePageTap() },
+                            bitmapCache = pageBitmapCache
                         )
                     }
                     if (!useDual) {
@@ -1920,7 +1948,8 @@ private fun NativeImageBookViewer(
                                 viewRotation = viewRotation,
                                 manualCropRect = manualCropRects[page],
                                 horizontalStrip = true,
-                                onTap = { handlePageTap() }
+                                onTap = { handlePageTap() },
+                                bitmapCache = pageBitmapCache
                             )
                         }
                     }
@@ -1961,7 +1990,8 @@ private fun NativeImageBookViewer(
                             filterInvert = filterInvert,
                             viewRotation = viewRotation,
                             manualCropRect = manualCropRects[page],
-                            onTap = { handlePageTap() }
+                            onTap = { handlePageTap() },
+                            bitmapCache = pageBitmapCache
                         )
                     }
                 }
@@ -3524,12 +3554,115 @@ private fun AnimatedPageImage(
 }
 
 /**
+ * ComicScreen's page-return park (its pager adapter's drawable
+ * map, fx1), as a bitmap cache for this viewer. A finished
+ * bitmap is parked here when its item leaves composition, and
+ * a new item for the same page and the same render parameters
+ * takes it back instead of re-running the whole pipeline.
+ *
+ * This is NOT a shared bitmap: take() removes the bitmap from
+ * the park, so at any moment exactly one live item owns it —
+ * a parked bitmap is drawn by nobody, and the old rule that
+ * forbade sharing a bitmap between two live items still holds
+ * (a recycled bitmap being drawn is a crash, and this cache
+ * can never produce one: eviction recycles only parked, i.e.
+ * undrawn, bitmaps, and take() never returns a recycled one).
+ * The park is bounded — 4 entries, and only bitmaps within
+ * the software pixel budget park at all, so a giant tall page
+ * keeps today's recycle-on-leave behaviour instead of
+ * bloating the park — and it is main-thread-only by
+ * construction: takes happen in remember initial values and
+ * parks in onDispose, both on the main thread, while the
+ * decode pipeline hands its finished bitmap over through
+ * state. close() is the viewer's exit: it also makes any
+ * late park (an item disposing after the viewer) recycle on
+ * the spot instead of leaking into a dead cache.
+ *
+ * What it does NOT do, on purpose: it does not keep a disk
+ * cache of extracted entries (ComicScreen's kp4 extraction
+ * cache) — the zip stream decode is the cheap part here, and
+ * the park already skips the expensive part (decode + rotate
+ * + crop + resize + filters) entirely on a return — and it
+ * does not park animated drawables, whose playback lifecycle
+ * a bitmap does not have.
+ */
+private class NativePageBitmapCache(
+    private val maxEntries: Int = 4
+) {
+    /** Every render parameter the item's remember keys carry:
+     * a parked bitmap is only valid for exactly this set. */
+    data class Key(
+        val page: Int,
+        val renderWidthPx: Int,
+        val cropMargin: Boolean,
+        val cropPadH: Int,
+        val cropPadV: Int,
+        val fitMode: String,
+        val sharpen: Boolean,
+        val sharpenLevel: Int,
+        val screenWidthPx: Int,
+        val screenHeightPx: Int,
+        val halfSide: Int,
+        val upscaleMode: String,
+        val filterGray: Boolean,
+        val filterContrast: Boolean,
+        val filterInvert: Boolean,
+        val viewRotation: Int,
+        val horizontalStrip: Boolean,
+        val manualCropRect: CropRect?
+    )
+
+    // Access-ordered, so the eldest entry is the least
+    // recently returned-to page — the one a reader is least
+    // likely to flip back to next.
+    private val parked = object : LinkedHashMap<Key, Bitmap>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<Key, Bitmap>
+        ): Boolean {
+            if (size > maxEntries) {
+                eldest.value.takeUnless { it.isRecycled }?.recycle()
+                return true
+            }
+            return false
+        }
+    }
+    private var closed = false
+
+    /** Take the parked bitmap for [key], if any. Ownership
+     * moves to the caller: the bitmap leaves the park. */
+    fun take(key: Key): Bitmap? {
+        if (closed) return null
+        val bitmap = parked.remove(key) ?: return null
+        return if (bitmap.isRecycled) null else bitmap
+    }
+
+    /** Park [bitmap] under [key]. False means it was NOT
+     * parked (closed cache, recycled bitmap, or over the pixel
+     * budget) and the caller must recycle it itself. */
+    fun park(key: Key, bitmap: Bitmap): Boolean {
+        if (closed || bitmap.isRecycled) return false
+        if (bitmap.width.toLong() * bitmap.height > MAX_SOFTWARE_PIXELS) return false
+        parked[key] = bitmap
+        return true
+    }
+
+    /** Free every parked bitmap and refuse later parks. */
+    fun close() {
+        if (closed) return
+        closed = true
+        parked.values.forEach { if (!it.isRecycled) it.recycle() }
+        parked.clear()
+    }
+}
+
+/**
  * One original page. The bitmap is owned by THIS item: rendered on
  * IO when the item is composed, recycled when it leaves
- * composition. Sharing bitmaps through a cache was rejected on
- * purpose — a recycled bitmap still being drawn by another item
- * is a crash, and the visible window already bounds how many
- * items are alive at once, so a shared cache buys nothing here.
+ * composition — unless the viewer's bitmap park holds it for a
+ * return visit (see NativePageBitmapCache: take() moves
+ * ownership to this item, and onDispose parks it back instead
+ * of recycling, so going back to a page shows its finished
+ * bitmap at once instead of re-rendering it from scratch).
  *
  * In vertical mode the strip is ComicScreen's: every page fills
  * the strip width, one below the other, no horizontal scroll —
@@ -3588,9 +3721,34 @@ private fun NativePageItem(
     // toggles the chrome after the 300ms double-tap window.
     // Handled here, at the item, for the reason in the viewer
     // comment above handlePageTap.
-    onTap: () -> Unit = {}
+    onTap: () -> Unit = {},
+    // The viewer's page-return park (see
+    // NativePageBitmapCache). Null = today's behaviour exactly:
+    // render on compose, recycle on dispose, no parking.
+    bitmapCache: NativePageBitmapCache? = null
 ) {
-    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf<Bitmap?>(null) }
+    // The park key: exactly the remember keys below, so a
+    // parked bitmap is only ever reused for the identical
+    // render. A mode switch composes the new item before the
+    // old one disposes, so a switch can miss the park (the old
+    // bitmap parks a moment too late) — a wasted re-render
+    // once, never a bitmap shared between two live items.
+    val cacheKey = NativePageBitmapCache.Key(
+        page, renderWidthPx, cropMargin, cropPadH, cropPadV,
+        fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx,
+        halfSide, upscaleMode, filterGray, filterContrast, filterInvert,
+        viewRotation, horizontalStrip, manualCropRect
+    )
+    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf(bitmapCache?.take(cacheKey)) }
+    // True only on a park hit: the first effect run for this
+    // item instance must then skip the pipeline — the bitmap
+    // IS the finished render. Every later run (a zoom
+    // re-render, a retry) must decode again: a zoom re-render
+    // that skipped would freeze the page at 1x, and a retry
+    // that skipped would re-show the failure. The flag is
+    // keyed like the bitmap, so a parameter change gets a
+    // fresh flag with its fresh bitmap state.
+    var skipFirstRender by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf(bitmap != null) }
     // An animated drawable (GIF / animated WebP pages only).
     // When one is present the bitmap path is skipped entirely:
     // the drawable IS the page, frames and all — a bitmap would
@@ -3645,6 +3803,17 @@ private fun NativePageItem(
         // simply stays until its replacement arrives).
         failed = false
         failMessage = null
+        // Park hit: this item already holds its finished
+        // bitmap (taken from the cache in remember above), so
+        // there is nothing to render — and running the
+        // pipeline anyway would throw the parked bitmap away
+        // and re-decode it, which is exactly the bug this
+        // cache fixes. Consumed once: later runs of this
+        // effect (zoom re-render, retry) must decode.
+        if (skipFirstRender) {
+            skipFirstRender = false
+            return@LaunchedEffect
+        }
         // The bitmap this run replaces, recycled once its
         // replacement lands (not in onDispose: the dispose
         // effect below is keyed without renderScale, so it
@@ -3895,40 +4064,50 @@ private fun NativePageItem(
             failMessage = it.message ?: it.javaClass.simpleName
         }
     }
-    // Recycle the bitmap this item owns when it leaves
-    // composition. The read is live on purpose: the state object
-    // this closure captures belongs to this remember instance,
-    // so a key change (new page/parameters) disposes against the
-    // OLD instance's bitmap, while a zoom re-render — which is
-    // NOT a key of this effect — swaps the bitmap without
-    // disposing, and the dispose then frees the final bitmap,
-    // not a stale one (the swapped-out ones were freed in
-    // onSuccess above). Reading state in onDispose is safe
-    // here precisely because the state object, not the value,
-    // is what the closure holds.
+    // Hand the bitmap this item owns back when it leaves
+    // composition: park it in the viewer's cache for a return
+    // visit, or recycle it when there is no park (or the park
+    // refuses it — closed viewer, oversized bitmap). Only a
+    // 1x bitmap parks: a 2x zoom re-render is a zoom artefact,
+    // not the page's base render, and parking it would serve
+    // a double-size bitmap as the page's next 1x view. The
+    // read is live on purpose: the state object this closure
+    // captures belongs to this remember instance, so a key
+    // change (new page/parameters) disposes against the OLD
+    // instance's bitmap under the OLD key, while a zoom
+    // re-render — which is NOT a key of this effect — swaps
+    // the bitmap without disposing, and the dispose then
+    // parks or frees the final bitmap, not a stale one (the
+    // swapped-out ones were freed in onSuccess above).
+    // Reading state in onDispose is safe here precisely
+    // because the state object, not the value, is what the
+    // closure holds.
     DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) {
         onDispose {
-            bitmap?.recycle()
+            val owned = bitmap
+            if (owned != null && !owned.isRecycled) {
+                val parked = bitmapCache != null && renderScale == 1 &&
+                    bitmapCache.park(cacheKey, owned)
+                if (!parked) owned.recycle()
+            }
             (drawable as? Animatable)?.stop()
         }
     }
 
     val density = LocalDensity.current
-    // Tap-to-hide chrome, at the page itself: this Box wraps
-    // every branch below (bitmap, animated, failed, loading),
-    // so a tap anywhere on the page reaches it before
-    // LazyColumn / HorizontalPager can swallow it. A tap on a
-    // button inside (retry) is consumed by that button, so
-    // detectTapGestures sees a consumed up-event and does not
-    // fire here — tapping retry never toggles the chrome.
-    // A drag/scroll never fires here either: detectTapGestures
-    // only fires on a tap, and a drag is consumed by the list
-    // or pager before its up-event.
-    Box(
-        modifier = Modifier.pointerInput(Unit) {
-            detectTapGestures(onTap = { onTap() })
-        }
-    ) {
+    // Tap-to-hide chrome, at the page itself — but NOT as an
+    // ancestor detector on this Box. 6c4ee982 put a
+    // detectTapGestures here, wrapping the zoom/scroll owners,
+    // and on the phone that killed them: after that build a
+    // tap did not toggle the chrome, and pinch zoom and
+    // scroll/pager turns stopped working too. So this Box is
+    // plain, and the tap lives INSIDE the page's own gesture
+    // owner instead: ZoomablePageContainer for strip and
+    // paged fit-width pages, and the leaf image for the
+    // paged fit modes that have no zoom container. A tap on
+    // a button inside (retry) is consumed by that button, so
+    // it never toggles the chrome.
+    Box {
     when {
         drawable != null -> {
             // Animated page: the drawable plays as-is. Crop,
@@ -3964,6 +4143,7 @@ private fun NativePageItem(
                                 modifier = Modifier
                                     .fillMaxHeight(shrink)
                                     .aspectRatio(ratio)
+                                    .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                             )
                         }
                     }
@@ -3990,6 +4170,7 @@ private fun NativePageItem(
                                     modifier = Modifier
                                         .width(nativeWidthDp)
                                         .aspectRatio(ratio)
+                                        .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                                 )
                             }
                         }
@@ -4005,6 +4186,7 @@ private fun NativePageItem(
                                 drawable = anim,
                                 scaleType = ImageView.ScaleType.FIT_XY,
                                 modifier = Modifier.fillMaxSize(shrink)
+                                    .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                             )
                         }
                     }
@@ -4022,6 +4204,7 @@ private fun NativePageItem(
                                 modifier = Modifier
                                     .fillMaxWidth(shrink)
                                     .aspectRatio(ratio)
+                                    .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                             )
                         }
                     }
@@ -4040,7 +4223,8 @@ private fun NativePageItem(
                         Modifier.fillMaxHeight(shrink).aspectRatio(ratio)
                     } else {
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
-                    }
+                    },
+                    onTap = { onTap() }
                 ) {
                     AnimatedPageImage(
                         rotation = viewRotation.toFloat(),
@@ -4093,6 +4277,7 @@ private fun NativePageItem(
                                     .fillMaxHeight(shrink)
                                     .aspectRatio(ratio)
                                     .background(Color.White)
+                                    .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                             )
                         }
                     }
@@ -4118,6 +4303,7 @@ private fun NativePageItem(
                                         .width(nativeWidthDp)
                                         .aspectRatio(ratio)
                                         .background(Color.White)
+                                        .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                                 )
                             }
                         }
@@ -4134,6 +4320,7 @@ private fun NativePageItem(
                                 contentScale = ContentScale.FillBounds,
                                 modifier = Modifier
                                     .fillMaxSize(shrink)
+                                        .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
                                     .background(Color.White)
                             )
                         }
@@ -4168,7 +4355,8 @@ private fun NativePageItem(
                                 modifier = Modifier
                                     .fillMaxWidth(shrink)
                                     .aspectRatio(ratio),
-                                onScaleChange = onPinchScale
+                                onScaleChange = onPinchScale,
+                                onTap = { onTap() }
                             ) {
                                 Image(
                                     bitmap = bmp.asImageBitmap(),
@@ -4199,7 +4387,8 @@ private fun NativePageItem(
                     } else {
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
                     },
-                    onScaleChange = onPinchScale
+                    onScaleChange = onPinchScale,
+                    onTap = { onTap() }
                 ) {
                     Image(
                         bitmap = bmp.asImageBitmap(),
@@ -4219,7 +4408,8 @@ private fun NativePageItem(
             // faint grey on white).
             if (paged) {
                 Column(
-                    modifier = Modifier.fillMaxSize().background(Color.White),
+                    modifier = Modifier.fillMaxSize().background(Color.White)
+                    .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -4245,8 +4435,9 @@ private fun NativePageItem(
                 }
             } else {
                 Column(
-                    modifier = if (horizontalStrip) Modifier.fillMaxHeight().width(200.dp) else Modifier.fillMaxWidth().height(200.dp)
-                        .background(Color.White),
+                    modifier = (if (horizontalStrip) Modifier.fillMaxHeight().width(200.dp) else Modifier.fillMaxWidth().height(200.dp))
+                        .background(Color.White)
+                        .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -4274,11 +4465,11 @@ private fun NativePageItem(
         }
         else -> {
             Box(
-                modifier = if (paged) {
+                modifier = (if (paged) {
                     Modifier.fillMaxSize()
                 } else {
                     if (horizontalStrip) Modifier.fillMaxHeight().width(200.dp) else Modifier.fillMaxWidth().height(200.dp)
-                },
+                }).pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) },
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator()
