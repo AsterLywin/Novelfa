@@ -1337,8 +1337,11 @@ object HtmlBuilder {
             watchLateImages();
             // After the watch: backdrops must never be watched as late
             // images (they load from cache and would only cause extra
-            // repagination cycles), so marking runs last.
+            // repagination cycles), so marking runs last — and
+            // centering runs right after it, so image pages (already
+            // centered by CSS) are skipped via their fresh class.
             markImagePages();
+            centerShortPages();
             if (Math.abs(stageW() - buildW) >= 2 || Math.abs(stageH() - buildH) >= 2) {
                 scheduleRepaginate();
             }
@@ -1405,6 +1408,43 @@ object HtmlBuilder {
             }
             bg.appendChild(clone);
             pg.insertBefore(bg, pg.firstChild);
+        }
+    }
+
+    // Vertical centering for SHORT text pages, paged mode only
+    // (this script ships only in paged documents, so vertical
+    // mode is untouched). Pagination packs blocks from the top,
+    // so a short page hugs the top with the remainder empty
+    // below; this pass shifts its content down by half the
+    // empty space, so top/bottom gaps are equal. Full pages
+    // are untouched (empty space ~0, shift ~0). The shift is
+    // extra padding-top, NOT flex: flex would re-lay blocks
+    // out and change the measured geometry, while padding only
+    // translates it down — nothing can overflow. Tall pages
+    // (content exceeds the page) and image pages (CSS already
+    // centers them) are skipped. Runs once per build on fresh
+    // page elements, so a stale shift never accumulates.
+    function centerShortPages() {
+        var i, pg, el, first, last, pr, fr, lr, visH, shift, padT;
+        for (i = 0; i < pages.length; i++) {
+            pg = pages[i];
+            if (!pg || !pg.el) continue;
+            el = pg.el;
+            if (el.className.indexOf('rdr-tall') >= 0) continue;
+            if (el.className.indexOf('rdr-imgpage') >= 0) continue;
+            first = el.firstElementChild;
+            last = el.lastElementChild;
+            if (!first || !last) continue;
+            pr = el.getBoundingClientRect();
+            fr = first.getBoundingClientRect();
+            lr = last.getBoundingClientRect();
+            if (!pr || !fr || !lr || pr.height <= 0) continue;
+            visH = lr.bottom - fr.top;
+            if (visH <= 0 || visH >= pr.height) continue;
+            shift = (pr.height - visH) / 2 - (fr.top - pr.top);
+            if (shift <= 1) continue;
+            try { padT = parseFloat(window.getComputedStyle(el).paddingTop) || 0; } catch (e) { padT = 16; }
+            el.style.paddingTop = (padT + shift) + 'px';
         }
     }
 
