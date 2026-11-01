@@ -8,19 +8,18 @@ import java.io.File
 /**
  * The PDF engine. PDF was already lazy at import (decrypt +
  * platform-renderer page-count validation only), so this engine
- * changes no import behaviour — it only gives PDF its own rendering
- * owner instead of sharing the old shared dispatch. Its open path
- * is the converted text/image path through [BookConverter]: text
- * first, page images for scanned pages, mixed books page by page.
+ * changes no import behaviour — it only gives PDF its own
+ * rendering owner instead of sharing the old shared dispatch.
  *
- * The native fixed-page viewer (platform PdfRenderer bitmaps, the
- * ReadEra fixed-page model) still exists in
- * [com.novelfa.reader.reader.PdfNativeReader] but stays unused: the
- * user reverted PDF to this converted path because the native
- * viewer cannot apply the reader font and was reported as broken
- * rendering. If it is ever wanted again, it belongs here, behind
- * this engine, as a user-chosen rendering mode — not as a second
- * dispatch in the reader.
+ * Reading: direct PDFs open in the native viewer
+ * ([com.novelfa.reader.reader.PdfiumNativeSource], routed in
+ * PdfReaderRoute) since 2026-11-01, when the user chose the
+ * PDFium engine over the converted path. This engine's
+ * converted text/image path through [BookConverter] (text
+ * first, page images for scanned pages, mixed books page by
+ * page) remains for PDFs carried inside a ZIP archive, which
+ * the archive engine still opens through the HTML reader —
+ * and as the fallback if native PDF routing ever reverts.
  */
 object PdfEngine : BookEngine {
     override val format: BookFormat = BookFormat.PDF

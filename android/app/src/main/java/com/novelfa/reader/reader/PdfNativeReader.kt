@@ -199,9 +199,14 @@ import kotlinx.coroutines.withContext
  *   button here changes the same preference the EPUB reader reads.
  *
  * Deliberate limits, stated not hidden:
- * - No text search, selection, annotation or XP credit yet for
- *   native books. Those need page-coordinate data the old XHTML
- *   path also threw away; they belong on top of this viewer.
+ * - No text search, selection or annotation yet for native
+ *   books. Those need the text layer on top of this viewer
+ *   (the FPDFText bridge exists for it); they belong there,
+ *   not bolted onto the bitmap path.
+ * - XP credit exists for native books (page-based, same
+ *   visited + dwell + once rules as the text reader, dual
+ *   pairs credited per page shown); a source without text
+ *   data credits the 1 XP floor per page.
  * - CBZ chapter folders become a chapter list (see
  *   [CbzBook.chaptersForEntries]): the top bar offers it as a
  *   one-tap jump to a chapter's first page, and a flat archive
@@ -209,8 +214,8 @@ import kotlinx.coroutines.withContext
  *   exactly as before.
  * - CBR (RAR) is not supported: it needs a RAR decoder.
  * - Password PDFs work only because import already stores them
- *   decrypted; the platform renderer cannot open an encrypted
- *   file at all, so this viewer never sees one.
+ *   decrypted; neither renderer can open an encrypted file
+ *   without a password, so this viewer never sees one.
  */
 
 /** One page source for the native viewer, PDF or CBZ alike. */
@@ -269,6 +274,14 @@ internal interface NativePageSource : Closeable {
      * Default null (no thumbnail); sources override it.
      */
     fun thumbnail(index: Int, targetWidthPx: Int): Bitmap? = null
+
+    /**
+     * Word count of one page, for native XP credit only.
+     * Default 0: a source without text data still credits the
+     * 1 XP floor per page. PDFium overrides it from the
+     * FPDFText bridge when the native library is present.
+     */
+    fun pageWords(index: Int): Int = 0
 }
 
 internal class PdfNativeRenderer(pdfFile: File) : NativePageSource {
@@ -756,20 +769,22 @@ fun PdfReaderRoute(
         }
         if (resolvedFile == null) resolveFailed = true
     }
-    // First-open cover backfill for native books (CBZ and
+    // First-open cover backfill for native books (PDF, CBZ and
     // image-only ZIPs), the counterpart of ReaderScreen's call
     // for text books: a register-only `content://` in-place
     // import never extracted the first page as a cover, so the
     // row still shows a generated cover or none. Restricted to
-    // CBZ/ZIP here so text books are not backfilled twice (the
-    // reader does those); the helper itself is idempotent, so
-    // a ZIP that also reaches the reader is still safe.
+    // native formats here so text books are not backfilled twice
+    // (the reader does those); the helper itself is idempotent,
+    // so a ZIP that also reaches the reader is still safe.
     LaunchedEffect(entity, resolvedFile) {
         val found = entity ?: return@LaunchedEffect
         val file = resolvedFile ?: return@LaunchedEffect
         if (found.importMode != "IN_PLACE") return@LaunchedEffect
         val format = BookFormat.detect(file) ?: return@LaunchedEffect
-        if (format != BookFormat.CBZ && format != BookFormat.ZIP) return@LaunchedEffect
+        if (format != BookFormat.PDF && format != BookFormat.CBZ &&
+            format != BookFormat.ZIP
+        ) return@LaunchedEffect
         CoverBackfill.backfill(context, dao, found, file)
     }
     when {
@@ -805,18 +820,37 @@ fun PdfReaderRoute(
                 CircularProgressIndicator()
             }
         }
-        // PDF routing REVERTED 2026-10-29 at the user's instruction:
-        // PDF books go back to ReaderScreen (the converted
-        // text/image path via the PDF engine), where the user's
-        // chosen font applies to the text — the native PdfRenderer
-        // viewer renders fixed PDF bitmaps, so it could never apply
-        // the user's font, and the user reports its rendering as
-        // broken. PdfNativeRenderer below is kept (currently unused)
-        // in case native PDF is ever wanted again; CBZ and
-        // image-only ZIPs keep the native viewer, since they never
-        // had a converted path. A ZIP carrying a book is NOT a
-        // comic: it is classified below and routed to ReaderScreen,
+        // PDF routing, 2026-11-01 (PDFium engine): PDF books open
+        // in the native viewer via PdfiumNativeSource — a fixed
+        // page rendered by PDFium, exactly as the document is.
+        // This REPLACES the 2026-10-29 revert (PDFs back to
+        // ReaderScreen's converted text/image path): the user
+        // chose the professional engine over that path, whose
+        // hand-written extractor broke on ASCII85 streams and
+        // visual-order Persian. Consequences, stated not hidden:
+        // the reader font does not apply to fixed PDF pages (no
+        // PDF viewer reflows text, Adobe included); search,
+        // highlight and selection for PDFs return with the text
+        // layer on top of this viewer, not yet in this step; XP
+        // credit for PDFs IS wired here (page-based, see the
+        // viewer). The converted path survives for PDFs carried
+        // inside a ZIP archive (classified below), which still
+        // open through the archive engine. CBZ and image-only
+        // ZIPs keep the native viewer, since they never had a
+        // converted path. A ZIP carrying a book is NOT a comic:
+        // it is classified below and routed to ReaderScreen,
         // where the archive engine opens the book inside it.
+        BookFormat.detect(resolvedFile!!) == BookFormat.PDF -> {
+            val bookFile = resolvedFile!!
+            NativeImageBookViewer(
+                book = entity!!,
+                dao = dao,
+                onClose = onClose,
+                sourceFactory = { PdfiumNativeSource(bookFile, context) },
+                loadingRes = R.string.pdf_native_loading,
+                errorRes = R.string.pdf_native_error
+            )
+        }
         BookFormat.detect(resolvedFile!!) == BookFormat.CBZ -> {
             val bookFile = resolvedFile!!
             NativeImageBookViewer(
@@ -972,6 +1006,7 @@ internal fun pairIndexForPage(pairs: List<DualPair>, page: Int): Int {
     }
     return pairs.indexOfLast { it.firstPage <= page }.coerceAtLeast(0)
 }
+
 
 /**
  * The native viewer itself, for PDF and CBZ alike. Render width is
@@ -1190,10 +1225,12 @@ private fun NativeImageBookViewer(
     // >= 5 s dwell via [XpSessionTracker], once per page per book
     // (XpLedger), private books excluded, and the book bonus from
     // XpStore (last page credited + >= 90% of pages) applies unchanged.
-    // Words are not extracted in the native viewer, so every page
-    // counts as words = 0, which the formula floors to 1 XP — the
-    // same result a typical ~500-word PDF page would give, and the
-    // only honest value for an image page.
+    // Words come from the page source when it has them
+    // ([NativePageSource.pageWords]: the PDFium bridge for
+    // PDFs); a source without text data reports 0, which the
+    // formula floors to 1 XP — the same result a typical
+    // ~500-word PDF page would give, and the only honest value
+    // for an image page.
     val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
     val xpTracker = remember(book.id) { XpSessionTracker() }
     // Lazy content-key rekeying (same as the EPUB reader): the first
@@ -1217,7 +1254,8 @@ private fun NativeImageBookViewer(
                 null
             }
             val key = xpResolver.resolve(book.id, hash)
-            XpStore(rankPrefs).creditUnit(key, page, 0, pageCount, book.isPrivate)
+            val words = source?.pageWords(page) ?: 0
+            XpStore(rankPrefs).creditUnit(key, page, words, pageCount, book.isPrivate)
         }
     }
     // Drive XP from currentPage, not from the pager/list tracking

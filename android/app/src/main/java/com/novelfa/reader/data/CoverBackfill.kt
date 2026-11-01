@@ -1,7 +1,10 @@
 package com.novelfa.reader.data
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.os.ParcelFileDescriptor
 import com.novelfa.reader.parser.BookFormat
+import com.shockwave.pdfium.PdfiumCore
 import com.novelfa.reader.parser.engine.CbzEngine
 import com.novelfa.reader.parser.engine.DocxEngine
 import com.novelfa.reader.parser.engine.EpubEngine
@@ -26,13 +29,14 @@ import kotlinx.coroutines.withContext
  *   in-place books already get their real cover at import from
  *   the engine metadata; touching them here would only risk
  *   clobbering a good cover.
- * - EPUB/DOCX/CBZ and image-only ZIPs: extract the real cover
- *   (EPUB cover entry, DOCX first body image, CBZ/ZIP first
- *   page) and replace whatever cover the row has — a generated
- *   cover from import is replaced, an already-backfilled real
- *   cover is re-extracted identically, so the job is idempotent
- *   and safe to run on every open.
- * - Every other format (TXT/MD/PDF, and ZIPs carrying books):
+ * - EPUB/DOCX/CBZ, image-only ZIPs and PDFs: extract the real
+ *   cover (EPUB cover entry, DOCX first body image, CBZ/ZIP
+ *   first page, PDF first page rendered by PDFium) and replace
+ *   whatever cover the row has — a generated cover from import
+ *   is replaced, an already-backfilled real cover is
+ *   re-extracted identically, so the job is idempotent and
+ *   safe to run on every open.
+ * - Every other format (TXT/MD, and ZIPs carrying books):
  *   there is no real cover to extract, so the job only fills a
  *   missing cover with a generated one, and leaves an existing
  *   cover alone.
@@ -69,6 +73,9 @@ object CoverBackfill {
                     }.getOrNull()
                     BookFormat.CBZ -> runCatching {
                         CbzEngine.metadata(resolvedFile, current.title, scratchDir) {}.coverFile
+                    }.getOrNull()
+                    BookFormat.PDF -> runCatching {
+                        pdfFirstPageCover(context, resolvedFile, scratchDir)
                     }.getOrNull()
                     BookFormat.ZIP -> {
                         val meta = runCatching {
@@ -119,6 +126,57 @@ object CoverBackfill {
                 }
                 runCatching { scratchDir.deleteRecursively() }
             }
+        }
+    }
+
+    /**
+     * Renders a PDF's first page as its cover (JPEG, 600px
+     * wide) — the PDFium equivalent of the CBZ first-page
+     * cover. Best-effort: any failure returns null (or throws
+     * into the caller's runCatching) and the caller falls back
+     * to the generated cover.
+     */
+    private fun pdfFirstPageCover(
+        context: Context,
+        pdfFile: File,
+        scratchDir: File
+    ): File? {
+        val core = PdfiumCore(context)
+        val pfd = ParcelFileDescriptor.open(
+            pdfFile, ParcelFileDescriptor.MODE_READ_ONLY
+        )
+        try {
+            val doc = core.newDocument(pfd)
+            try {
+                if (core.getPageCount(doc) <= 0) return null
+                val widthPt = core.getPageWidthPoint(doc, 0)
+                val heightPt = core.getPageHeightPoint(doc, 0)
+                val width = 600
+                val height = if (widthPt > 0) {
+                    (heightPt.toFloat() * width / widthPt.toFloat())
+                        .toInt().coerceAtLeast(1)
+                } else {
+                    width
+                }
+                val bitmap = Bitmap.createBitmap(
+                    width, height, Bitmap.Config.ARGB_8888
+                )
+                try {
+                    core.renderPageBitmap(doc, bitmap, 0, 0, 0, width, height)
+                    scratchDir.mkdirs()
+                    val dest = File(scratchDir, "cover.jpg")
+                    dest.outputStream().use { out ->
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                    }
+                    return dest.takeIf { it.exists() && it.length() > 0 }
+                } finally {
+                    bitmap.recycle()
+                }
+            } finally {
+                runCatching { core.closeDocument(doc) }
+            }
+        } finally {
+            runCatching { pfd.close() }
         }
     }
 }
