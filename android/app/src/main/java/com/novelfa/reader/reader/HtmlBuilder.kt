@@ -100,6 +100,16 @@ object HtmlBuilder {
         sb.append("code{word-break:break-word;}")
         sb.append("[data-theme=\"dark\"] [style*=\"background:#fff\" i],")
         sb.append("[data-theme=\"dark\"] [style*=\"background:white\" i]{background-color:transparent !important;}")
+        // Search + highlight marks. The highlight background comes
+        // from the mark's inline style (the chosen color); search
+        // marks use fixed bright colors so the current match reads
+        // in both themes.
+        sb.append("mark.rdr-find{background-color:#FF8C00 !important;color:#000 !important;}")
+        sb.append("mark.rdr-find-cur{background-color:#FFD400 !important;color:#000 !important;outline:2px solid #FF8C00;}")
+        // Highlight fills are all light, so the marked text stays dark
+        // in both themes (inherited light text on a light fill would
+        // be unreadable in dark mode).
+        sb.append("mark.rdr-hl{color:#000;}")
         sb.append("</style>")
         sb.append("<style id=\"rdrFontFace\">").append(fontFaceCss).append("</style>")
         sb.append("<style id=\"readerSpacing\">")
@@ -146,6 +156,11 @@ object HtmlBuilder {
         // Image-save taps (see IMAGE_JS): every build, paged and
         // vertical, so an image tap always opens the save dialog.
         sb.append("<script>").append(IMAGE_JS).append("</script>")
+        // In-chapter search + highlight marks + selection reporting
+        // (see SEARCH_JS / SELECT_JS): every build, paged and
+        // vertical. The mark styles live in the main style block.
+        sb.append("<script>").append(SEARCH_JS).append("</script>")
+        sb.append("<script>").append(SELECT_JS).append("</script>")
         if (paged) {
             // rdrPager: deterministic block-level pagination (see PAGER_JS).
             // Runs before <body> is parsed; its boot waits for
@@ -1342,6 +1357,8 @@ object HtmlBuilder {
             // centered by CSS) are skipped via their fresh class.
             markImagePages();
             centerShortPages();
+            // Re-apply search/highlight marks (rebuilds drop them).
+            try{if(window.__rdrAfterBuild)window.__rdrAfterBuild();}catch(e){}
             if (Math.abs(stageW() - buildW) >= 2 || Math.abs(stageH() - buildH) >= 2) {
                 scheduleRepaginate();
             }
@@ -1862,4 +1879,233 @@ object HtmlBuilder {
     }, true);
 })();"""
 
+    /**
+     * In-chapter search + text highlights, injected into EVERY reader
+     * document. Roots are scoped to one chapter div (.rdr-chap
+     * [data-idx]): paged docs hold a single chapter whose pages live
+     * in .rdr-strip (the hidden source would double-count), vertical
+     * docs hold a window of chapters. Highlight offsets are character
+     * offsets in that chapter's plain text (text nodes concatenated
+     * in order) — pagination re-slices the same text without loss,
+     * so offsets survive rebuilds. Search marks (.rdr-find) and
+     * highlight marks (.rdr-hl) nest safely: clearing one kind
+     * unwraps only its own marks. Kotlin stores the active query /
+     * highlight JSON in window vars so __rdrAfterBuild (called by
+     * PAGER_JS after every build) can replay them after a rebuild.
+     */
+    private const val SEARCH_JS = """// Novelfa in-chapter search + highlights — injected into EVERY reader document
+(function () {
+    function chapDiv(chap) {
+        if (chap === undefined || chap === null || chap < 0) return document.body;
+        var divs = document.querySelectorAll('.rdr-chap');
+        for (var i = 0; i < divs.length; i++) {
+            if (parseInt(divs[i].getAttribute('data-idx'), 10) === chap) return divs[i];
+        }
+        return document.body;
+    }
+    function searchRoot(chap) {
+        var div = chapDiv(chap);
+        var strip = div.querySelector ? div.querySelector('.rdr-strip') : null;
+        return strip ? strip : div;
+    }
+    function textNodes(root) {
+        var out = [], w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null), n;
+        while ((n = w.nextNode())) out.push(n);
+        return out;
+    }
+    function clearMarks(cls, root) {
+        var scope = root || document;
+        var marks = scope.querySelectorAll('mark.' + cls);
+        for (var i = marks.length - 1; i >= 0; i--) {
+            var m = marks[i], p = m.parentNode;
+            if (!p) continue;
+            while (m.firstChild) p.insertBefore(m.firstChild, m);
+            p.removeChild(m);
+            if (p.normalize) p.normalize();
+        }
+    }
+    window.rdrSearchClear = function () {
+        clearMarks('rdr-find', document);
+        window.__rdrFind = '';
+        window.__rdrFindCur = -1;
+    };
+    window.rdrSearchAll = function (q, chap) {
+        clearMarks('rdr-find', document);
+        window.__rdrFind = q || '';
+        window.__rdrFindChap = chap;
+        window.__rdrFindCur = -1;
+        if (!q) return 0;
+        var needle = q.toLowerCase();
+        var nodes = textNodes(searchRoot(chap));
+        var count = 0;
+        for (var ni = 0; ni < nodes.length; ni++) {
+            var node = nodes[ni], text = node.nodeValue, low = text.toLowerCase();
+            var hits = [], at = 0, k;
+            while ((k = low.indexOf(needle, at)) >= 0) { hits.push(k); at = k + needle.length; }
+            if (!hits.length) continue;
+            var parent = node.parentNode;
+            if (!parent) continue;
+            var frag = document.createDocumentFragment(), last = 0;
+            for (var h = 0; h < hits.length; h++) {
+                var s = hits[h];
+                if (s > last) frag.appendChild(document.createTextNode(text.slice(last, s)));
+                var mark = document.createElement('mark');
+                mark.className = 'rdr-find';
+                mark.setAttribute('data-find', String(count++));
+                mark.appendChild(document.createTextNode(text.slice(s, s + needle.length)));
+                frag.appendChild(mark);
+                last = s + needle.length;
+            }
+            if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+            parent.replaceChild(frag, node);
+        }
+        return count;
+    };
+    window.rdrSearchGo = function (i, chap) {
+        var root = searchRoot(chap);
+        var marks = root.querySelectorAll('mark.rdr-find');
+        if (!marks.length) return 'miss';
+        var idx = Math.max(0, Math.min(i, marks.length - 1));
+        var prev = document.querySelector('mark.rdr-find-cur');
+        if (prev) prev.classList.remove('rdr-find-cur');
+        var m = marks[idx];
+        m.classList.add('rdr-find-cur');
+        window.__rdrFindCur = idx;
+        var page = m.closest ? m.closest('.rdr-page') : null;
+        if (page && window.rdrGoToPage) {
+            var strip = root.querySelector ? root.querySelector('.rdr-strip') : null;
+            var pages = strip ? strip.querySelectorAll('.rdr-page') : [];
+            for (var p = 0; p < pages.length; p++) {
+                if (pages[p] === page) { window.rdrGoToPage(p); break; }
+            }
+        } else {
+            try { m.scrollIntoView({ block: 'center' }); } catch (e) { m.scrollIntoView(); }
+        }
+        return 'ok';
+    };
+    function offsetsForRange(range) {
+        var node = range.startContainer;
+        var div = node.nodeType === 1 ? node : node.parentElement;
+        div = div && div.closest ? div.closest('.rdr-chap') : null;
+        if (!div) return null;
+        var chap = parseInt(div.getAttribute('data-idx'), 10);
+        if (isNaN(chap)) return null;
+        var strip = div.querySelector('.rdr-strip');
+        var root = strip ? strip : div;
+        var nodes = textNodes(root), pos = 0, s = -1, e = -1;
+        for (var ni = 0; ni < nodes.length; ni++) {
+            if (nodes[ni] === range.startContainer) s = pos + range.startOffset;
+            if (nodes[ni] === range.endContainer) e = pos + range.endOffset;
+            pos += nodes[ni].nodeValue.length;
+        }
+        if (s < 0 || e < 0 || e <= s) return null;
+        return { chap: chap, s: s, e: e };
+    }
+    window.rdrSelectionRange = function () {
+        try {
+            var sel = window.getSelection();
+            if (!sel || sel.isCollapsed || sel.rangeCount === 0) return '';
+            var o = offsetsForRange(sel.getRangeAt(0));
+            return o ? (o.chap + ':' + o.s + '-' + o.e) : '';
+        } catch (e) { return ''; }
+    };
+    window.rdrHighlightSelection = function (color) {
+        try {
+            var sel = window.getSelection();
+            if (!sel || sel.isCollapsed || sel.rangeCount === 0) return '';
+            var range = sel.getRangeAt(0);
+            var o = offsetsForRange(range);
+            if (!o) return '';
+            var mark = document.createElement('mark');
+            mark.className = 'rdr-hl';
+            mark.setAttribute('data-hl', o.chap + ':' + o.s + '-' + o.e);
+            mark.style.backgroundColor = color;
+            try { range.surroundContents(mark); }
+            catch (e2) { var f = range.extractContents(); mark.appendChild(f); range.insertNode(mark); }
+            sel.removeAllRanges();
+            return o.chap + ':' + o.s + '-' + o.e;
+        } catch (e) { return ''; }
+    };
+    window.rdrApplyHighlights = function (json) {
+        clearMarks('rdr-hl', document);
+        var list;
+        try { list = JSON.parse(json); } catch (e) { return 'err'; }
+        if (!list || !list.length) return 'ok';
+        for (var li = 0; li < list.length; li++) {
+            var hl = list[li];
+            var div = chapDiv(hl.ch);
+            var strip = div.querySelector ? div.querySelector('.rdr-strip') : null;
+            var root = strip ? strip : div;
+            var nodes = textNodes(root), pos = 0, si = -1, ei = -1, so = 0, eo = 0;
+            for (var ni = 0; ni < nodes.length; ni++) {
+                var len = nodes[ni].nodeValue.length;
+                if (si < 0 && pos + len > hl.s) { si = ni; so = hl.s - pos; }
+                if (pos + len >= hl.e) { ei = ni; eo = hl.e - pos; break; }
+                pos += len;
+            }
+            if (si < 0 || ei < 0) continue;
+            try {
+                var range = document.createRange();
+                range.setStart(nodes[si], so);
+                range.setEnd(nodes[ei], eo);
+                var mark = document.createElement('mark');
+                mark.className = 'rdr-hl';
+                mark.setAttribute('data-hl', hl.ch + ':' + hl.s + '-' + hl.e);
+                mark.style.backgroundColor = hl.c;
+                try { range.surroundContents(mark); }
+                catch (e2) { var f2 = range.extractContents(); mark.appendChild(f2); range.insertNode(mark); }
+            } catch (e3) { }
+        }
+        return 'ok';
+    };
+    window.rdrSetHighlightColor = function (id, color) {
+        var m = document.querySelector('mark.rdr-hl[data-hl="' + id + '"]');
+        if (!m) return 'miss';
+        m.style.backgroundColor = color;
+        return 'ok';
+    };
+    window.rdrRemoveHighlight = function (id) {
+        var m = document.querySelector('mark.rdr-hl[data-hl="' + id + '"]');
+        if (!m) return 'miss';
+        var p = m.parentNode;
+        while (m.firstChild) p.insertBefore(m.firstChild, m);
+        p.removeChild(m);
+        if (p.normalize) p.normalize();
+        return 'ok';
+    };
+    window.__rdrAfterBuild = function () {
+        try {
+            if (window.__rdrHL) window.rdrApplyHighlights(window.__rdrHL);
+            if (window.__rdrFind) {
+                window.rdrSearchAll(window.__rdrFind, window.__rdrFindChap);
+                if (window.__rdrFindCur >= 0) window.rdrSearchGo(window.__rdrFindCur, window.__rdrFindChap);
+            }
+        } catch (e) { }
+    };
+})();"""
+
+    /** Selection reporting + highlight taps, injected into EVERY reader document. */
+    private const val SELECT_JS = """// Novelfa selection + highlight-tap reporting — injected into EVERY reader document
+(function () {
+    function reportSel() {
+        try {
+            var sel = window.getSelection();
+            var active = !!(sel && !sel.isCollapsed && sel.toString().length > 0);
+            if (active !== window.__rdrSelActive) {
+                window.__rdrSelActive = active;
+                if (window.Android && Android.onSelection) Android.onSelection(active ? 1 : 0);
+            }
+        } catch (e) { }
+    }
+    document.addEventListener('selectionchange', reportSel);
+    document.addEventListener('click', function (ev) {
+        var t = ev.target;
+        if (t && t.nodeType !== 1) t = t.parentElement;
+        if (!t || !t.closest) return;
+        var m = t.closest('mark.rdr-hl');
+        if (m) {
+            try { if (window.Android && Android.onHighlightTap) Android.onHighlightTap(m.getAttribute('data-hl') || ''); } catch (e) { }
+        }
+    }, true);
+})();"""
 }

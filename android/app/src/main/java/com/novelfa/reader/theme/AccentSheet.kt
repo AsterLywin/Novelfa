@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -42,11 +43,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.novelfa.reader.R
+import kotlinx.coroutines.delay
 
 /**
  * Accent-color picker: the 7 presets from ThemeManager.cs.
@@ -134,6 +138,15 @@ private fun HsvCustomPicker(
     var hexText by remember(initialHex) { mutableStateOf(initialHex) }
     var hexError by remember { mutableStateOf(false) }
     val customHex = hsvToHex(hue, sat, valV)
+    // Copy feedback: the button label flips to "copied" briefly.
+    var copied by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1500)
+            copied = false
+        }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         HueBar(hue = hue, onHue = { hue = it })
@@ -164,8 +177,33 @@ private fun HsvCustomPicker(
                 supportingText = if (hexError) {
                     { Text(stringResource(R.string.invalid_hex)) }
                 } else null,
+                // One-tap clear for the typed hex (the reset-to-default
+                // button below the picker stays the way to drop a
+                // custom color entirely).
+                trailingIcon = {
+                    if (hexText.isNotEmpty()) {
+                        TextButton(onClick = { hexText = "" }) {
+                            Text("✕")
+                        }
+                    }
+                },
                 modifier = Modifier.weight(1f)
             )
+            // Copy the typed hex when it parses, else the live
+            // picker color (copying the stale HSV value after typing
+            // a new hex but before Apply would be a surprise).
+            val copyHex = parseHexColor(hexText)?.let {
+                String.format("#%06X", 0xFFFFFF and it)
+            } ?: customHex
+            TextButton(onClick = {
+                clipboard.setText(AnnotatedString(copyHex))
+                copied = true
+            }) {
+                Text(
+                    if (copied) stringResource(R.string.hex_copied)
+                    else stringResource(R.string.copy_hex)
+                )
+            }
             TextButton(onClick = {
                 val parsed = parseHexColor(hexText)
                 if (parsed != null) {

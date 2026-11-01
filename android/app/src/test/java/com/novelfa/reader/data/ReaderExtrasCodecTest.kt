@@ -28,6 +28,33 @@ class ReaderExtrasCodecTest {
     }
 
     @Test
+    fun highlights_roundTrip() {
+        val list = listOf(
+            TextHighlight(2, 10, 40, "#FFE45E"),
+            TextHighlight(0, 0, 5, "#F8BBD0")
+        )
+        assertEquals(
+            listOf(
+                TextHighlight(0, 0, 5, "#F8BBD0"),
+                TextHighlight(2, 10, 40, "#FFE45E")
+            ),
+            parseHighlights(serializeHighlights(list))
+        )
+        assertEquals(emptyList<TextHighlight>(), parseHighlights(null))
+        assertEquals(emptyList<TextHighlight>(), parseHighlights(""))
+    }
+
+    @Test
+    fun highlights_rejectsGarbage() {
+        // Inverted range, bad offset, non-hex color: all dropped,
+        // the valid entry survives.
+        val parsed = parseHighlights(
+            "1:10-5:#FFE45E;2:abc-9:#FFE45E;3:0-9:yellow;4:0-9:#F8BBD0"
+        )
+        assertEquals(listOf(TextHighlight(4, 0, 9, "#F8BBD0")), parsed)
+    }
+
+    @Test
     fun cropRects_rejectsGarbage() {
         // Inverted rect, out-of-range fraction, bad page, bad
         // float: all dropped, the valid entry survives.

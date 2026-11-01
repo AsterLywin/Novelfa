@@ -118,6 +118,55 @@ class PdfParserTest {
         assertTrue(book.chapters[1].file.readText().contains("Page two"))
     }
 
+    /** Three pages whose outline nests chapters under a part. */
+    private fun nestedOutlinePdf(): ByteArray {
+        fun contentObj(text: String): ByteArray {
+            val c = "BT /F1 12 Tf ($text) Tj ET".toByteArray(Charsets.ISO_8859_1)
+            return streamObj("<< /Length ${c.size} >>", c)
+        }
+        val objects = mutableMapOf<Int, ByteArray>()
+        objects[1] = "<< /Type /Catalog /Pages 2 0 R /Outlines 10 0 R >>"
+            .toByteArray(Charsets.ISO_8859_1)
+        objects[2] = "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>"
+            .toByteArray(Charsets.ISO_8859_1)
+        for ((page, contents) in listOf(3 to 7, 4 to 8, 5 to 9)) {
+            objects[page] = ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] " +
+                "/Resources << /Font << /F1 6 0 R >> >> /Contents $contents 0 R >>")
+                .toByteArray(Charsets.ISO_8859_1)
+        }
+        objects[6] = ("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica " +
+            "/Encoding /WinAnsiEncoding >>").toByteArray(Charsets.ISO_8859_1)
+        objects[7] = contentObj("Page one")
+        objects[8] = contentObj("Page two")
+        objects[9] = contentObj("Page three")
+        objects[10] = "<< /Type /Outlines /First 11 0 R /Last 11 0 R /Count 3 >>"
+            .toByteArray(Charsets.ISO_8859_1)
+        objects[11] = ("<< /Title (Part One) /Parent 10 0 R /First 12 0 R /Count 2 " +
+            "/Dest [3 0 R /XYZ 0 700 0] >>").toByteArray(Charsets.ISO_8859_1)
+        objects[12] = ("<< /Title (Chapter A) /Parent 11 0 R /Next 13 0 R " +
+            "/Dest [4 0 R /XYZ 0 700 0] >>").toByteArray(Charsets.ISO_8859_1)
+        objects[13] = ("<< /Title (Chapter B) /Parent 11 0 R /Prev 12 0 R " +
+            "/Dest [5 0 R /XYZ 0 700 0] >>").toByteArray(Charsets.ISO_8859_1)
+        return buildPdf(objects)
+    }
+
+    @Test
+    fun nestedOutline_childrenBecomeSections() {
+        // The old top-level-only walk saw just "Part One" (size 1),
+        // so it fell back to chunked sections; the depth-first walk
+        // sees the nested chapters as sections of their own.
+        val pdf = nestedOutlinePdf()
+        val out = tempFolder.newFolder("out-nested")
+        val book = PdfParser.parse(pdf, "book.pdf", out, ::fallback)
+        assertEquals(
+            listOf("Part One", "Chapter A", "Chapter B"),
+            book.chapters.map { it.title }
+        )
+        assertTrue(book.chapters[0].file.readText().contains("Page one"))
+        assertTrue(book.chapters[1].file.readText().contains("Page two"))
+        assertTrue(book.chapters[2].file.readText().contains("Page three"))
+    }
+
     @Test
     fun flateContent_decodes() {
         val raw = "BT /F1 12 Tf (Compressed text here) Tj ET"

@@ -46,6 +46,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -87,6 +88,8 @@ import com.novelfa.reader.data.CoverBackfill
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.InPlaceSource
 import com.novelfa.reader.data.PrefsStore
+import com.novelfa.reader.data.ReaderExtrasStore
+import com.novelfa.reader.data.TextHighlight
 import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CacheStamp
@@ -107,6 +110,7 @@ import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
 import com.novelfa.reader.theme.ContrastIcon
 import com.novelfa.reader.theme.Themes
+import com.novelfa.reader.theme.hexToColor
 import com.novelfa.reader.theme.ThemePreviewCard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -135,6 +139,9 @@ import com.novelfa.reader.theme.characterPages
  * spacing dialog, chapter list drawer). Errors surface via snackbar with
  * R.string messages (fa "خطا در نمایش فصل:\n" equivalents, Task 4 map).
  */
+/** Highlight colors offered for text highlights (light fills, so the mark text stays dark). */
+private val HIGHLIGHT_COLORS = listOf("#FFE45E", "#F8BBD0", "#C8E6C9", "#BBDEFB")
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderScreen(
@@ -281,6 +288,141 @@ fun ReaderScreen(
     var supportOpen by remember { mutableStateOf(false) }
     var themeOpen by remember { mutableStateOf(false) }
     var fontOpen by remember { mutableStateOf(false) }
+    // In-book text search + highlights (SEARCH_JS / SELECT_JS).
+    val extrasStore = remember(context) { ReaderExtrasStore(context.applicationContext) }
+    val highlights by extrasStore.highlights(bookId).collectAsState(initial = emptyList())
+    var searchOpen by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var searchCount by remember { mutableIntStateOf(0) }
+    var searchIndex by remember { mutableIntStateOf(-1) }
+    var searchChap by remember { mutableIntStateOf(-1) }
+    var searchBookBusy by remember { mutableStateOf(false) }
+    var searchBookResults by remember { mutableStateOf<List<Pair<Int, Int>>>(emptyList()) }
+    var searchBookShown by remember { mutableStateOf(false) }
+    var pendingSearchQuery by remember { mutableStateOf<String?>(null) }
+    var selectionActive by remember { mutableStateOf(false) }
+    var tappedHighlightId by remember { mutableStateOf<String?>(null) }
+
+    fun highlightsJson(list: List<TextHighlight>): String =
+        "[" + list.joinToString(",") {
+            "{\"ch\":${it.chapter},\"s\":${it.start},\"e\":${it.end},\"c\":\"${it.color}\"}"
+        } + "]"
+
+    fun runInChapterSearch(query: String) {
+        val v = vm ?: return
+        val chap = v.index
+        val wv = webView ?: return
+        val q = query.trim()
+        if (q.isEmpty()) {
+            wv.evaluateJavascript("window.rdrSearchClear();", null)
+            searchCount = 0
+            searchIndex = -1
+            searchChap = -1
+            return
+        }
+        searchChap = chap
+        wv.evaluateJavascript(
+            "window.rdrSearchAll('${HtmlText.escapeForJs(q)}', $chap);"
+        ) { result ->
+            val count = result?.trim()?.trim { it == '"' }?.toIntOrNull() ?: 0
+            searchCount = count
+            if (count > 0) {
+                searchIndex = 0
+                wv.evaluateJavascript("window.rdrSearchGo(0, $chap);", null)
+            } else {
+                searchIndex = -1
+            }
+        }
+    }
+
+    fun goToSearchMatch(i: Int) {
+        val chap = searchChap
+        if (chap < 0) return
+        searchIndex = i
+        webView?.evaluateJavascript("window.rdrSearchGo($i, $chap);", null)
+    }
+
+    fun clearSearch() {
+        webView?.evaluateJavascript("window.rdrSearchClear();", null)
+        searchQuery = ""
+        searchCount = 0
+        searchIndex = -1
+        searchChap = -1
+        searchBookResults = emptyList()
+        searchBookShown = false
+    }
+
+    fun searchWholeBook() {
+        val v = vm ?: return
+        val q = searchQuery.trim()
+        if (q.isEmpty()) return
+        searchBookBusy = true
+        searchBookShown = true
+        scope.launch {
+            val results = mutableListOf<Pair<Int, Int>>()
+            for (i in v.chapters.indices) {
+                val text = runCatching { v.plainText(i) }.getOrNull() ?: continue
+                val n = ReaderSearchText.countOccurrences(text, q)
+                if (n > 0) results += i to n
+            }
+            searchBookResults = results
+            searchBookBusy = false
+        }
+    }
+
+    fun createHighlight(color: String) {
+        val wv = webView ?: return
+        wv.evaluateJavascript("window.rdrHighlightSelection('$color');") { raw ->
+            val id = raw?.trim()?.trim { it == '"' } ?: ""
+            if (id.isEmpty()) return@evaluateJavascript
+            val chap = id.substringBefore(':').toIntOrNull() ?: return@evaluateJavascript
+            val range = id.substringAfter(':').split('-')
+            if (range.size != 2) return@evaluateJavascript
+            val s = range[0].toIntOrNull() ?: return@evaluateJavascript
+            val e = range[1].toIntOrNull() ?: return@evaluateJavascript
+            val next = (highlights + TextHighlight(chap, s, e, color))
+                .distinctBy { Triple(it.chapter, it.start, it.end) }
+            scope.launch { extrasStore.setHighlights(bookId, next) }
+        }
+    }
+
+    fun parseHighlightId(id: String): TextHighlight? {
+        val chap = id.substringBefore(':').toIntOrNull() ?: return null
+        val range = id.substringAfter(':').split('-')
+        if (range.size != 2) return null
+        val s = range[0].toIntOrNull() ?: return null
+        val e = range[1].toIntOrNull() ?: return null
+        return highlights.firstOrNull { it.chapter == chap && it.start == s && it.end == e }
+    }
+
+    // Re-apply highlights + active search marks whenever the live
+    // document (re)loads: chapter change, mode switch, settings
+    // reload, torn-down pager, or a new chapter scrolling into the
+    // vertical window. Paged docs wait for pagination
+    // (pagerBuilding false); the PAGER_JS hook replays marks after
+    // later rebuilds within the same document.
+    LaunchedEffect(pageHtml, pageLoaded, pagerBuilding, pagerTornDown, vm?.index, highlights) {
+        val wv = webView ?: return@LaunchedEffect
+        if (!pageLoaded) return@LaunchedEffect
+        // pagerBuilding is only ever true for paged documents (see
+        // onPageStarted), so it alone gates the pagination wait.
+        if (pagerBuilding) return@LaunchedEffect
+        val json = highlightsJson(highlights)
+        wv.evaluateJavascript("window.__rdrHL = '$json'; window.rdrApplyHighlights('$json');", null)
+        val q = searchQuery.trim()
+        val chap = searchChap
+        if (searchOpen && q.isNotEmpty() && chap >= 0) {
+            wv.evaluateJavascript("window.rdrSearchAll('${HtmlText.escapeForJs(q)}', $chap);") { result ->
+                val count = result?.trim()?.trim { it == '"' }?.toIntOrNull() ?: 0
+                searchCount = count
+                if (count > 0 && searchIndex >= 0) {
+                    wv.evaluateJavascript(
+                        "window.rdrSearchGo(${searchIndex.coerceIn(0, count - 1)}, $chap);", null
+                    )
+                }
+            }
+        }
+    }
     var fullscreenUi by rememberSaveable { mutableStateOf(false) }
     // Reading layout mode (persisted globally): horizontal paging or
     // vertical-continuous. Replaces the old continuous toggle.
@@ -905,7 +1047,13 @@ fun ReaderScreen(
                     pagedPageCount = 0
                     pagerBuilding = false
                 }
-            }
+            },
+            // Text selection state (SELECT_JS): drives the highlight
+            // bar and suspends page-turn gestures while selecting.
+            onSelection = { active -> selectionActive = active },
+            // Highlight-mark tap (SELECT_JS click / paged hit test):
+            // opens the change/remove dialog for that highlight.
+            onHighlightTap = { id -> tappedHighlightId = id }
         )
     }
 
@@ -1338,6 +1486,9 @@ fun ReaderScreen(
                         TextButton(onClick = { fontOpen = true }, enabled = vm != null) {
                             AppIcon(AppIconKind.Font, tint = LocalContentColor.current, size = 17.dp)
                         }
+                        TextButton(onClick = { searchOpen = true }, enabled = vm != null) {
+                            AppIcon(AppIconKind.Search, tint = LocalContentColor.current, size = 18.dp)
+                        }
                         TextButton(onClick = { fullscreenUi = true }, enabled = vm != null) {
                             AppIcon(AppIconKind.Fullscreen, tint = LocalContentColor.current, size = 17.dp)
                         }
@@ -1479,6 +1630,8 @@ fun ReaderScreen(
                                 handleImageTap(v, src, v.index)
                             }
                         },
+                        selectionActive = selectionActive,
+                        onHighlightTap = { id -> tappedHighlightId = id },
                         onError = { details ->
                             scope.launch { snackbar.showSnackbar(chapterErr + details) }
                         },
@@ -1538,6 +1691,14 @@ fun ReaderScreen(
                             pendingAnchor?.let { frag ->
                                 pendingAnchor = null
                                 vm?.let { jumpToAnchor(it, frag) }
+                            }
+                            // Whole-book search landing: the chapter
+                            // just loaded, so run the search in it now
+                            // (pre-pagination marks are replayed by
+                            // the PAGER_JS hook once pages are built).
+                            pendingSearchQuery?.let { q ->
+                                pendingSearchQuery = null
+                                runInChapterSearch(q)
                             }
                             // Text-point restore for a same-chapter
                             // reload: hand the saved anchor to the
@@ -1685,8 +1846,211 @@ fun ReaderScreen(
                         )
                     }
                 }
+                // In-chapter search bar (top of the reading area, so it
+                // works in fullscreen too once opened): query field,
+                // match count with prev/next, and whole-book chapter
+                // results below (tap one to jump there and search it).
+                if (searchOpen && vm != null && pageHtml.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
+                            .padding(8.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                singleLine = true,
+                                placeholder = { Text(stringResource(R.string.search_hint)) },
+                                modifier = Modifier.weight(1f),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                keyboardActions = KeyboardActions(
+                                    onSearch = { runInChapterSearch(searchQuery) }
+                                )
+                            )
+                            IconButton(onClick = { runInChapterSearch(searchQuery) }) {
+                                AppIcon(AppIconKind.Search, tint = LocalContentColor.current, size = 18.dp)
+                            }
+                            IconButton(onClick = { clearSearch(); searchOpen = false }) {
+                                AppIcon(AppIconKind.Close, tint = LocalContentColor.current, size = 16.dp)
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = if (searchCount > 0) {
+                                    stringResource(R.string.search_count, searchIndex + 1, searchCount)
+                                } else if (searchQuery.isNotBlank() && searchChap >= 0) {
+                                    stringResource(R.string.search_no_match)
+                                } else {
+                                    ""
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = { if (searchIndex > 0) goToSearchMatch(searchIndex - 1) },
+                                enabled = searchCount > 0
+                            ) {
+                                Text(stringResource(R.string.search_prev))
+                            }
+                            TextButton(
+                                onClick = { if (searchIndex < searchCount - 1) goToSearchMatch(searchIndex + 1) },
+                                enabled = searchCount > 0
+                            ) {
+                                Text(stringResource(R.string.search_next))
+                            }
+                        }
+                        TextButton(
+                            onClick = { searchWholeBook() },
+                            enabled = searchQuery.isNotBlank() && !searchBookBusy
+                        ) {
+                            Text(stringResource(R.string.search_whole_book))
+                        }
+                        if (searchBookShown) {
+                            if (searchBookBusy) {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            } else if (searchBookResults.isEmpty()) {
+                                Text(
+                                    stringResource(R.string.search_no_match),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            } else {
+                                Column(
+                                    modifier = Modifier
+                                        .heightIn(max = 200.dp)
+                                        .verticalScroll(rememberScrollState())
+                                ) {
+                                    searchBookResults.forEach { (chapIdx, n) ->
+                                        TextButton(
+                                            onClick = {
+                                                val vv = vm ?: return@TextButton
+                                                scope.launch {
+                                                    pendingSearchQuery = searchQuery
+                                                    gotoChapter(vv, chapIdx)
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text(
+                                                text = stringResource(
+                                                    R.string.search_book_row,
+                                                    vm?.chapters?.getOrNull(chapIdx)?.title ?: "",
+                                                    n
+                                                ),
+                                                modifier = Modifier.fillMaxWidth(),
+                                                textAlign = TextAlign.Start
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Highlight bar: while text is selected, one tap on a
+                // color wraps the selection in that highlight color
+                // (persisted per book). The WebView's own selection
+                // ActionMode still offers Copy alongside it.
+                if (selectionActive && vm != null) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(R.string.highlight_label),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        for (color in HIGHLIGHT_COLORS) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(hexToColor(color))
+                                    .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                                    .clickable { createHighlight(color) }
+                            )
+                        }
+                    }
+                }
             }
         }
+    }
+
+    // Tapped highlight: change its color or remove it (DOM mark and
+    // stored list move together; a stale mark with no stored entry
+    // still unwraps from the page on Remove).
+    if (tappedHighlightId != null) {
+        val hlId = tappedHighlightId!!
+        val existing = parseHighlightId(hlId)
+        AlertDialog(
+            onDismissRequest = { tappedHighlightId = null },
+            title = { Text(stringResource(R.string.highlight_title)) },
+            text = {
+                Column {
+                    Text(
+                        stringResource(R.string.highlight_change_color),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        for (color in HIGHLIGHT_COLORS) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(hexToColor(color))
+                                    .border(
+                                        if (existing?.color == color) 3.dp else 1.dp,
+                                        if (existing?.color == color) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.outline,
+                                        CircleShape
+                                    )
+                                    .clickable {
+                                        val h = existing ?: return@clickable
+                                        scope.launch {
+                                            extrasStore.setHighlights(
+                                                bookId,
+                                                highlights.map { if (it == h) it.copy(color = color) else it }
+                                            )
+                                        }
+                                        webView?.evaluateJavascript(
+                                            "window.rdrSetHighlightColor('$hlId', '$color');", null
+                                        )
+                                        tappedHighlightId = null
+                                    }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val h = existing
+                    if (h != null) {
+                        scope.launch {
+                            extrasStore.setHighlights(bookId, highlights - h)
+                        }
+                    }
+                    webView?.evaluateJavascript("window.rdrRemoveHighlight('$hlId');", null)
+                    tappedHighlightId = null
+                }) {
+                    Text(stringResource(R.string.highlight_remove))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { tappedHighlightId = null }) {
+                    Text(stringResource(R.string.close))
+                }
+            }
+        )
     }
 
     if (spacingOpen) {

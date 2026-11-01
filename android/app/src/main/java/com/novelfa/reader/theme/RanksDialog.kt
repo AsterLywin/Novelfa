@@ -97,6 +97,15 @@ private fun RankTitleRow(title: XpTitle, level: XpLevel, isEnglishUi: Boolean) {
         isCurrent -> level.starFill
         else -> 0f
     }
+    // Windows parity (RanksWindow.MakeRow): each rank lists the
+    // character themes it unlocks. Same rule as Windows: the
+    // theme's XP title must equal this rank, and rank 0 lists
+    // none (its themes, if any, need no rank to unlock).
+    val unlockedThemes = if (title.index > 0) {
+        CharacterThemes.All.filter { it.xpTitle == title.index }
+    } else {
+        emptyList()
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -113,6 +122,19 @@ private fun RankTitleRow(title: XpTitle, level: XpLevel, isEnglishUi: Boolean) {
                     MaterialTheme.colorScheme.onSurface
                 }
             )
+            if (unlockedThemes.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = stringResource(
+                        R.string.ranks_unlocks_themes,
+                        unlockedThemes.joinToString(
+                            if (isEnglishUi) ", " else "، "
+                        ) { it.displayName(isEnglishUi) }
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             Spacer(modifier = Modifier.height(2.dp))
             when {
                 achieved -> Text(

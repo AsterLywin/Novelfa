@@ -48,7 +48,11 @@ class ScrollBridge(
      * never fire onPagerReport, and the pill can never show scroll
      * screens as pages again.
      */
-    private val onPagerReport: (Int, Int) -> Unit = { _, _ -> }
+    private val onPagerReport: (Int, Int) -> Unit = { _, _ -> },
+    /** Live text selection state (SELECT_JS): true while the user has text selected. */
+    private val onSelection: (Boolean) -> Unit = {},
+    /** Tap on a highlight mark (SELECT_JS / paged hit test): the mark's data-hl id ("chap:start-end"). */
+    private val onHighlightTap: (String) -> Unit = {}
 ) {
 
     @JavascriptInterface
@@ -89,6 +93,16 @@ class ScrollBridge(
     @JavascriptInterface
     fun onPagerReport(page: Long, total: Long) {
         onPagerReport(page.toInt(), total.toInt())
+    }
+
+    @JavascriptInterface
+    fun onSelection(active: Long) {
+        onSelection(active != 0L)
+    }
+
+    @JavascriptInterface
+    fun onHighlightTap(id: String) {
+        onHighlightTap(id)
     }
 }
 
@@ -152,12 +166,22 @@ fun ReaderWebView(
     // because native taps own ACTION_UP in paged mode, so the JS
     // image listener (IMAGE_JS) never fires there — this hit test is
     // the paged-mode equivalent, and it feeds the same save dialog.
-    onImageTap: (String) -> Unit = {}
+    onImageTap: (String) -> Unit = {},
+    // Highlight-mark tap (paged native hit test; vertical mode
+    // reports it through SELECT_JS's click listener instead).
+    onHighlightTap: (String) -> Unit = {},
+    // True while the user has text selected (SELECT_JS reports it):
+    // page-turn gestures must not fire then, or a drag would turn
+    // the page instead of extending the selection, and a tap would
+    // cancel the selection instead of clearing it natively.
+    selectionActive: Boolean = false
 ) {
     val loaded = remember { mutableStateOf<String?>(null) }
     // The WebView factory runs once; the mode can change afterwards.
     val pagedNow = rememberUpdatedState(paged)
     val onImageTapNow = rememberUpdatedState(onImageTap)
+    val onHighlightTapNow = rememberUpdatedState(onHighlightTap)
+    val selectionActiveNow = rememberUpdatedState(selectionActive)
     // Tracks the mode the WebView settings below were last applied for.
     // These settings only take full effect on page load / when changed,
     // so they must be refreshed whenever the mode flips (mode switches
@@ -237,7 +261,7 @@ fun ReaderWebView(
                             // document that must scroll natively now —
                             // still fired a turn callback, double-acting
                             // with the WebView's own fling-scroll.
-                            if (e1 == null || turnedThisGesture || !pagedNow.value) return false
+                            if (e1 == null || turnedThisGesture || !pagedNow.value || selectionActiveNow.value) return false
                             val dx = e2.x - e1.x
                             val dy = e2.y - e1.y
                             val qualified = abs(dx) > abs(dy) * 1.5f &&
@@ -258,7 +282,7 @@ fun ReaderWebView(
                             e1: MotionEvent?, e2: MotionEvent,
                             distanceX: Float, distanceY: Float
                         ): Boolean {
-                            if (e1 == null || turnedThisGesture || !pagedNow.value) return false
+                            if (e1 == null || turnedThisGesture || !pagedNow.value || selectionActiveNow.value) return false
                             val dx = e2.x - e1.x
                             val dy = e2.y - e1.y
                             if (abs(dx) > abs(dy) * 1.5f && abs(dx) > 140f) {
@@ -290,6 +314,12 @@ fun ReaderWebView(
                          * does nothing (same zones as the JS tap code).
                          */
                         override fun onSingleTapUp(e: MotionEvent): Boolean {
+                            // A live text selection owns the gesture:
+                            // return false so the WebView handles the
+                            // tap natively (clearing the selection)
+                            // instead of turning the page and sending
+                            // the CANCEL that would kill the selection.
+                            if (selectionActiveNow.value) return false
                             if (!pagedNow.value) return false
                             val w = host.width
                             if (w <= 0) {
@@ -338,6 +368,8 @@ fun ReaderWebView(
                                     // hit element here is the real img.
                                     "var img=(el.tagName==='IMG')?el:(el.closest?el.closest('img'):null);" +
                                     "if(img) return 'image:'+((img.getAttribute('src')||img.src||''));" +
+                                    "var hl=(el.closest?el.closest('mark.rdr-hl'):null);" +
+                                    "if(hl) return 'hl:'+(hl.getAttribute('data-hl')||'');" +
                                     "var a=el.closest?el.closest('a[href]'):null;" +
                                     "return a?'link':'notlink';})();"
                             ) { result ->
@@ -346,6 +378,9 @@ fun ReaderWebView(
                                 if (hit.startsWith("image:")) {
                                     val src = hit.removePrefix("image:")
                                     if (src.isNotEmpty()) onImageTapNow.value(src)
+                                } else if (hit.startsWith("hl:")) {
+                                    val id = hit.removePrefix("hl:")
+                                    if (id.isNotEmpty()) onHighlightTapNow.value(id)
                                 } else if (hit == "link") {
                                     // Preserve the link: dispatch a click
                                     // on the hit element; LINK_JS (capture

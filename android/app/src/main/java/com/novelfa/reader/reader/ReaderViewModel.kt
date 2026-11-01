@@ -795,6 +795,16 @@ class ReaderViewModel(
         preparedCache[i] = value
     }
 
+    /**
+     * Plain text of chapter [i], for whole-book search: the same
+     * prepared body the document renders, stripped of tags with
+     * entities decoded (see [ReaderSearchText]). Cached through
+     * [readPrepared], so a book-wide search reads each chapter
+     * file once.
+     */
+    suspend fun plainText(i: Int): String =
+        withContext(Dispatchers.IO) { ReaderSearchText.plainText(readPrepared(i)) }
+
     private fun readPrepared(i: Int): String {
         preparedCache[i]?.let { return it }
         val file = chapters[i].file

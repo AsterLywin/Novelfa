@@ -1100,6 +1100,7 @@ private fun NativeImageBookViewer(
     val showChapterList = chapters.size > 1 ||
         (chapters.size == 1 && chapters[0].firstPageIndex > 0)
     var showChapters by remember { mutableStateOf(false) }
+    var showPageJump by remember { mutableStateOf(false) }
     val savedPage = book.lastChapterIndex
     var restoredPage by remember { mutableStateOf(false) }
     val initialPage = 0
@@ -1551,6 +1552,17 @@ private fun NativeImageBookViewer(
     // smaller than the screen is a wasted screen, not a feature.
     val zoomFactors = remember { listOf(1f, 1.5f, 2f) }
     var zoomIndex by remember { mutableIntStateOf(0) }
+    // Per-book zoom (Windows parity: PdfZoom_<BookId>): restored on
+    // open, saved on every step change. -1 = not loaded yet.
+    val savedZoom by extras.zoomIndex(book.id).collectAsState(initial = -1)
+    LaunchedEffect(savedZoom) {
+        if (savedZoom >= 0) zoomIndex = savedZoom
+    }
+    LaunchedEffect(zoomIndex) {
+        if (savedZoom >= 0 && zoomIndex != savedZoom) {
+            extras.setZoomIndex(book.id, zoomIndex)
+        }
+    }
     val renderWidthPx = (screenWidthPx * zoomFactors[zoomIndex]).toInt().coerceAtLeast(1)
     // After a zoom change the item heights change; land back on the
     // same page instead of wherever the new heights dropped us.
@@ -2225,6 +2237,9 @@ private fun NativeImageBookViewer(
                                     R.string.page_indicator,
                                     (preview ?: currentPage) + 1, pageCount
                                 ),
+                                // Tap the indicator for a direct page
+                                // jump (Windows parity: cur/tot input).
+                                modifier = Modifier.clickable { showPageJump = true },
                                 style = MaterialTheme.typography.bodySmall,
                                 textAlign = TextAlign.Center,
                                 color = if (preview != null) {
@@ -2321,6 +2336,47 @@ private fun NativeImageBookViewer(
             },
             confirmButton = {
                 TextButton(onClick = { showChapters = false }) {
+                    Text(stringResource(R.string.close))
+                }
+            }
+        )
+    }
+
+    // Direct page jump (Windows parity: cur/tot input + Enter):
+    // tap the "page N of M" indicator, type the number, jump.
+    // jumpTo clamps, so an out-of-range number lands on the
+    // nearest page instead of erroring.
+    if (showPageJump) {
+        var pageText by remember { mutableStateOf((currentPage + 1).toString()) }
+        AlertDialog(
+            onDismissRequest = { showPageJump = false },
+            title = { Text(stringResource(R.string.page_jump_title)) },
+            text = {
+                TextField(
+                    value = pageText,
+                    onValueChange = { pageText = it.filter { ch -> ch.isDigit() } },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    placeholder = {
+                        Text(
+                            stringResource(
+                                R.string.page_indicator, currentPage + 1, pageCount
+                            )
+                        )
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val n = pageText.toIntOrNull()
+                    showPageJump = false
+                    if (n != null) jumpTo(n - 1)
+                }) {
+                    Text(stringResource(R.string.page_jump_go))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPageJump = false }) {
                     Text(stringResource(R.string.close))
                 }
             }

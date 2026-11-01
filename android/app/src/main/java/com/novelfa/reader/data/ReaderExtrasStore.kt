@@ -29,6 +29,46 @@ import kotlinx.coroutines.flow.map
 private val Context.readerExtrasDataStore: DataStore<Preferences> by
     preferencesDataStore(name = "reader_extras")
 
+/**
+ * One user highlight in the text reader. Offsets are character
+ * offsets in the chapter's plain text (text nodes concatenated in
+ * document order): pagination re-slices the same text without
+ * losing or duplicating a character, so the offsets survive
+ * rebuilds, font/spacing changes, and mode switches. [color] is a
+ * #RRGGBB hex string.
+ */
+data class TextHighlight(
+    val chapter: Int,
+    val start: Int,
+    val end: Int,
+    val color: String
+)
+
+/** Pure highlight-list codec, unit-testable without DataStore. Format: "chapter:start-end:#RRGGBB;…". */
+internal fun parseHighlights(raw: String?): List<TextHighlight> {
+    if (raw.isNullOrBlank()) return emptyList()
+    val out = mutableListOf<TextHighlight>()
+    for (entry in raw.split(';')) {
+        val parts = entry.split(':')
+        if (parts.size != 3) continue
+        val chapter = parts[0].toIntOrNull() ?: continue
+        val range = parts[1].split('-')
+        if (range.size != 2) continue
+        val start = range[0].toIntOrNull() ?: continue
+        val end = range[1].toIntOrNull() ?: continue
+        val color = parts[2]
+        if (chapter < 0 || start < 0 || end <= start) continue
+        if (!Regex("^#[0-9A-Fa-f]{6}$").matches(color)) continue
+        out += TextHighlight(chapter, start, end, color)
+    }
+    return out.sortedWith(compareBy({ it.chapter }, { it.start }))
+}
+
+internal fun serializeHighlights(highlights: List<TextHighlight>): String {
+    return highlights.sortedWith(compareBy({ it.chapter }, { it.start }))
+        .joinToString(";") { "${it.chapter}:${it.start}-${it.end}:${it.color}" }
+}
+
 /** Pure bookmark-list codec, unit-testable without DataStore. */
 internal fun parseBookmarkPages(raw: String?): Set<Int> {
     if (raw.isNullOrBlank()) return emptySet()
@@ -90,6 +130,31 @@ class ReaderExtrasStore(private val context: Context) {
 
     private fun bookmarksKey(bookId: String) = stringPreferencesKey("bm_$bookId")
     private fun scrollOffsetKey(bookId: String) = intPreferencesKey("off_$bookId")
+    private fun highlightsKey(bookId: String) = stringPreferencesKey("hl_$bookId")
+    private fun zoomKey(bookId: String) = intPreferencesKey("zoom_$bookId")
+
+    fun highlights(bookId: String): Flow<List<TextHighlight>> =
+        context.readerExtrasDataStore.data.map {
+            parseHighlights(it[highlightsKey(bookId)])
+        }
+
+    suspend fun setHighlights(bookId: String, highlights: List<TextHighlight>) {
+        context.readerExtrasDataStore.edit { prefs ->
+            prefs[highlightsKey(bookId)] = serializeHighlights(highlights)
+        }
+    }
+
+    /** Native-viewer zoom step index (0 = fit-width, see zoomFactors); 0 when never set. */
+    fun zoomIndex(bookId: String): Flow<Int> =
+        context.readerExtrasDataStore.data.map {
+            (it[zoomKey(bookId)] ?: 0).coerceIn(0, 2)
+        }
+
+    suspend fun setZoomIndex(bookId: String, index: Int) {
+        context.readerExtrasDataStore.edit { prefs ->
+            prefs[zoomKey(bookId)] = index.coerceIn(0, 2)
+        }
+    }
 
     fun bookmarks(bookId: String): Flow<Set<Int>> =
         context.readerExtrasDataStore.data.map {

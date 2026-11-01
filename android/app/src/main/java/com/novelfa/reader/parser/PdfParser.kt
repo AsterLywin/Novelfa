@@ -1384,54 +1384,69 @@ object PdfParser {
             val catalog = dictOf(rootNum) ?: return emptyList()
             val outlinesNum = refIn(catalog, "Outlines") ?: return emptyList()
             val outlines = dictOf(outlinesNum) ?: return emptyList()
-            var current = refIn(outlines, "First") ?: return emptyList()
+            val first = refIn(outlines, "First") ?: return emptyList()
             val pageIndexByNum = pages.withIndex().associate { it.value to it.index }
             val destByName = namedDestinations(catalog)
             val out = mutableListOf<OutlineEntry>()
-            var guard = 0
-            while (guard++ < 10_000) {
-                val dict = dictOf(current) ?: break
-                val raw = rawObject(current) ?: break
-                val title = stringAfterKey(raw, "Title", current)
-                var pageNum: Int? = null
-                val destSeg = arraySegment(dict, "Dest")
-                if (destSeg != null) {
-                    pageNum = Regex("(\\d+)\\s+\\d+\\s+R").find(destSeg)
-                        ?.groupValues?.get(1)?.toIntOrNull()
-                }
-                if (pageNum == null) {
-                    // /A << /D [page …] >> (action destination).
-                    val action = dictSegment(dict, "A")
-                    if (action != null) {
-                        val dSeg = arraySegment(action, "D")
-                        pageNum = dSeg?.let {
-                            Regex("(\\d+)\\s+\\d+\\s+R").find(it)
-                                ?.groupValues?.get(1)?.toIntOrNull()
+            // Depth-first walk: a node's children (its own First chain)
+            // come right after it, before its Next sibling — so nested
+            // outline entries (parts → chapters → sections) are no
+            // longer dropped the way the old top-level-only walk
+            // dropped them. `seen` stops cyclic Next/First chains;
+            // depth is capped so a hostile file cannot overflow the
+            // stack (entries deeper than the cap are skipped).
+            val seen = mutableSetOf<Int>()
+            fun visit(start: Int, depth: Int) {
+                if (depth > 64) return
+                var current = start
+                var guard = 0
+                while (guard++ < 10_000) {
+                    if (!seen.add(current)) break
+                    val dict = dictOf(current) ?: break
+                    val raw = rawObject(current) ?: break
+                    val title = stringAfterKey(raw, "Title", current)
+                    var pageNum: Int? = null
+                    val destSeg = arraySegment(dict, "Dest")
+                    if (destSeg != null) {
+                        pageNum = Regex("(\\d+)\\s+\\d+\\s+R").find(destSeg)
+                            ?.groupValues?.get(1)?.toIntOrNull()
+                    }
+                    if (pageNum == null) {
+                        // /A << /D [page …] >> (action destination).
+                        val action = dictSegment(dict, "A")
+                        if (action != null) {
+                            val dSeg = arraySegment(action, "D")
+                            pageNum = dSeg?.let {
+                                Regex("(\\d+)\\s+\\d+\\s+R").find(it)
+                                    ?.groupValues?.get(1)?.toIntOrNull()
+                            }
                         }
                     }
-                }
-                if (pageNum == null) {
-                    // Named destination: /Dest (name) — decrypted with
-                    // this object's key when the file is encrypted.
-                    val nameRaw = Regex("/Dest\\s*\\(([^)]*)\\)").find(dict)
-                        ?.groupValues?.get(1)
-                    if (nameRaw != null) {
-                        val nameBytes = parseLiteralBytes("($nameRaw)", 0)?.first
-                            ?: nameRaw.toByteArray(Charsets.ISO_8859_1)
-                        val plain = if (current !in objStm) {
-                            security?.decryptString(nameBytes, current) ?: nameBytes
-                        } else {
-                            nameBytes
+                    if (pageNum == null) {
+                        // Named destination: /Dest (name) — decrypted with
+                        // this object's key when the file is encrypted.
+                        val nameRaw = Regex("/Dest\\s*\\(([^)]*)\\)").find(dict)
+                            ?.groupValues?.get(1)
+                        if (nameRaw != null) {
+                            val nameBytes = parseLiteralBytes("($nameRaw)", 0)?.first
+                                ?: nameRaw.toByteArray(Charsets.ISO_8859_1)
+                            val plain = if (current !in objStm) {
+                                security?.decryptString(nameBytes, current) ?: nameBytes
+                            } else {
+                                nameBytes
+                            }
+                            pageNum = destByName[decodePdfString(plain)]
                         }
-                        pageNum = destByName[decodePdfString(plain)]
                     }
+                    if (title != null && pageNum != null) {
+                        val idx = pageIndexByNum[pageNum]
+                        if (idx != null) out += OutlineEntry(title, idx)
+                    }
+                    refIn(dict, "First")?.let { visit(it, depth + 1) }
+                    current = refIn(dict, "Next") ?: break
                 }
-                if (title != null && pageNum != null) {
-                    val idx = pageIndexByNum[pageNum]
-                    if (idx != null) out += OutlineEntry(title, idx)
-                }
-                current = refIn(dict, "Next") ?: break
             }
+            visit(first, 0)
             // Sorted, one entry per page (first title wins on duplicates).
             return out.sortedBy { it.pageIndex }
                 .distinctBy { it.pageIndex }
