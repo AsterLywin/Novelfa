@@ -47,14 +47,15 @@ enum class SortMode {
 fun sortBooks(
     list: List<BookEntity>,
     all: List<BookEntity>,
-    mode: SortMode
+    mode: SortMode,
+    useFileName: Boolean = false
 ): List<BookEntity> = when (mode) {
     // DEFAULT preserves the filter's own order (e.g. RECENT stays
     // lastOpenedDate-desc); NAME_AZ is the explicit title sort.
     SortMode.DEFAULT -> list
     SortMode.NAME_AZ -> {
         // Precompute titles once: displayTitle() is O(n) per book.
-        val titles = displayTitleMap(all)
+        val titles = displayTitleMap(all, useFileName)
         list.sortedWith { a, b ->
             SortFa.compare(titles[a.id] ?: a.title, titles[b.id] ?: b.title)
         }
@@ -71,11 +72,51 @@ fun sortBooks(
  * (without extension) so duplicates stay distinguishable.
  */
 /**
+ * Port of upstream LibraryService.CleanFileName (2026-11-01): the file
+ * name as the library shows it — the "@NovelFa" tag (with any preceding
+ * underscores/spaces) stripped, underscores turned into spaces,
+ * repeated whitespace collapsed, and trailing '-', ' ' and '.'
+ * trimmed. A blank result falls back to the input name, never to an
+ * empty title.
+ */
+fun cleanFileName(name: String): String {
+    if (name.isBlank()) return name
+    var t = Regex("[_\\s]*@NovelFa", RegexOption.IGNORE_CASE).replace(name, "")
+    t = t.replace('_', ' ')
+    t = Regex("\\s{2,}").replace(t, " ")
+    t = t.trim().trim('-', ' ', '.')
+    return if (t.isEmpty()) name else t
+}
+
+/**
+ * The book's file name for display (extension stripped), or null when
+ * no usable name exists. The picker's original file name wins — it is
+ * the name the user sees in their folder — and the stored file path
+ * is the fallback, with UUID-like storage names rejected exactly like
+ * the duplicate-title fallback below. The result is [cleanFileName]d.
+ */
+fun fileNameTitle(book: BookEntity): String? {
+    val original = book.originalFileName?.substringBeforeLast('.')
+        ?.takeIf { it.isNotBlank() && !isUuidLikeTitle(it) }
+    if (original != null) return cleanFileName(original)
+    if (book.filePath.isNotEmpty()) {
+        val name = File(book.filePath).nameWithoutExtension
+        if (name.isNotBlank() && !isUuidLikeTitle(name)) return cleanFileName(name)
+    }
+    return null
+}
+
+/**
  * Precomputes display titles for a book list in O(n): the duplicate-title
  * check in [displayTitle] is O(n) per book, which becomes O(n² log n) inside
  * sort comparators. Compute once per list emission, then look up by id.
+ *
+ * With [useFileName] (the library file-name setting, default OFF here so
+ * existing callers keep the old rule), every book with a usable file name
+ * shows that cleaned name instead of its stored title, mirroring
+ * upstream AssignDisplayTitles; books without one keep their title.
  */
-fun displayTitleMap(all: List<BookEntity>): Map<String, String> {
+fun displayTitleMap(all: List<BookEntity>, useFileName: Boolean = false): Map<String, String> {
     // Count normalized titles once.
     val titleCounts = mutableMapOf<String, Int>()
     for (b in all) {
@@ -84,6 +125,10 @@ fun displayTitleMap(all: List<BookEntity>): Map<String, String> {
     }
     return all.associate { book ->
         val t = book.title.trim()
+        if (useFileName) {
+            val named = fileNameTitle(book)?.takeIf { it.isNotBlank() }
+            if (named != null) return@associate book.id to named
+        }
         val duplicate = (titleCounts[t.lowercase()] ?: 0) > 1
         // A UUID title is never a real title (see isUuidLikeTitle):
         // it must fall back to the original file name, exactly like a
@@ -108,10 +153,10 @@ fun displayTitleMap(all: List<BookEntity>): Map<String, String> {
     }
 }
 
-fun displayTitle(book: BookEntity, all: List<BookEntity>): String {
+fun displayTitle(book: BookEntity, all: List<BookEntity>, useFileName: Boolean = false): String {
     // Legacy per-book path (kept for call sites without a precomputed map).
     // Prefer displayTitleMap for lists.
-    return displayTitleMap(all)[book.id] ?: book.title
+    return displayTitleMap(all, useFileName)[book.id] ?: book.title
 }
 
 private fun isGenericTitle(title: String): Boolean {
@@ -142,6 +187,9 @@ class LibraryViewModel(
 ) {
     val books: Flow<List<BookEntity>> = dao.allBooks()
 
+    /** Library file-name titles (Settings switch; false when no prefs exist, e.g. unit tests). */
+    val fileNameTitle: Flow<Boolean> = prefs?.fileNameTitle ?: flowOf(false)
+
     /**
      * All collection names incl. empty manual ones (upstream
      * GetAllCollectionNames + CollectionRegistry parity).
@@ -168,7 +216,9 @@ class LibraryViewModel(
     )
 
     fun filtered(tab: Tab, query: String): Flow<List<BookEntity>> =
-        dao.allBooks().map { applyFilter(it, tab, query) }
+        combine(dao.allBooks(), fileNameTitle) { list, useFileName ->
+            applyFilter(list, tab, query, useFileName)
+        }
 
     fun byCollection(name: String): Flow<List<BookEntity>> = dao.byCollection(name)
 
@@ -453,7 +503,8 @@ class LibraryViewModel(
 internal fun applyFilter(
     all: List<BookEntity>,
     tab: Tab,
-    query: String
+    query: String,
+    useFileName: Boolean = false
 ): List<BookEntity> {
     var list = if (tab == Tab.PRIVATE) {
         all.filter { it.isPrivate }
@@ -473,7 +524,7 @@ internal fun applyFilter(
     if (q.isNotEmpty()) {
         list = list.filter {
             it.title.contains(q, ignoreCase = true) ||
-                displayTitle(it, all).contains(q, ignoreCase = true)
+                displayTitle(it, all, useFileName).contains(q, ignoreCase = true)
         }
     }
     // RECENT keeps lastOpenedDate-desc order (WPF default sort); other tabs
@@ -481,6 +532,11 @@ internal fun applyFilter(
     return if (tab == Tab.RECENT) {
         list
     } else {
-        list.sortedWith { a, b -> SortFa.compare(displayTitle(a, all), displayTitle(b, all)) }
+        list.sortedWith { a, b ->
+            SortFa.compare(
+                displayTitle(a, all, useFileName),
+                displayTitle(b, all, useFileName)
+            )
+        }
     }
 }

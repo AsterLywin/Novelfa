@@ -123,6 +123,7 @@ fun SettingsRoute(
             }
             item { LanguageSection(viewModel) }
             item { ImportSection(viewModel) }
+            item { LibrarySection(viewModel) }
             item { SupportSection(viewModel) }
             item {
                 PinSection(
@@ -716,6 +717,36 @@ private fun ImportSection(viewModel: SettingsViewModel) {
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = stringResource(R.string.import_in_place_desc),
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
+
+/**
+ * Library display toggle (see PrefsStore.LIBRARY_FILE_NAME_TITLE):
+ * ON = the library shows the cleaned file name for every book,
+ * OFF = the title stored inside the file (with the old
+ * duplicate/generic/UUID fallback to the file name). Display-only:
+ * it never renames a file or a stored title.
+ */
+@Composable
+private fun LibrarySection(viewModel: SettingsViewModel) {
+    val fileNameTitle by viewModel.fileNameTitle.collectAsState(initial = true)
+    val scope = rememberCoroutineScope()
+    SectionCard(title = stringResource(R.string.library_section), icon = AppIconKind.File) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.library_file_name_title),
+                modifier = Modifier.weight(1f)
+            )
+            Switch(
+                checked = fileNameTitle,
+                onCheckedChange = { scope.launch { viewModel.setFileNameTitle(it) } }
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.library_file_name_title_desc),
             style = MaterialTheme.typography.bodyMedium
         )
     }

@@ -54,6 +54,7 @@ class SettingsViewModel(
     val themeParticles: Flow<Boolean> = prefs.themeParticles
     val fastImport: Flow<Boolean> = prefs.fastImport
     val inPlaceImport: Flow<Boolean> = prefs.inPlaceImport
+    val fileNameTitle: Flow<Boolean> = prefs.fileNameTitle
 
     fun rankService(): RankService = RankService(rankPrefs)
 
@@ -93,6 +94,8 @@ class SettingsViewModel(
     suspend fun setThemeParticles(value: Boolean) = prefs.setThemeParticles(value)
 
     suspend fun setFastImport(value: Boolean) = prefs.setFastImport(value)
+
+    suspend fun setFileNameTitle(value: Boolean) = prefs.setFileNameTitle(value)
 
     suspend fun setInPlaceImport(value: Boolean) = prefs.setInPlaceImport(value)
 

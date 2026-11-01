@@ -329,6 +329,9 @@
     <string name="cbz_native_loading">در حال باز کردن کمیک…</string>
     <string name="cbz_native_error">باز کردن این فایل کمیک انجام نشد.</string>
     <string name="import_section_title">ایمپورت</string>
+    <string name="library_section">کتابخانه</string>
+    <string name="library_file_name_title">نمایش اسم فایل به‌جای عنوان کتاب</string>
+    <string name="library_file_name_title_desc">در کتابخانه به‌جای عنوان ذخیره‌شده در فایل، اسم تمیزشده‌ی فایل نشان داده می‌شود. با خاموش‌کردن، عنوان ذخیره‌شده برمی‌گردد.</string>
     <string name="fast_import">ایمپورت سریع</string>
     <string name="fast_import_desc">هر کتاب موقع ایمپورت فقط یک بار خوانده می‌شود و جلدهای ساخته‌شده در پس‌زمینه می‌آیند. با خاموش‌کردن، رفتار قبلی ایمپورت برمی‌گردد.</string>
     <string name="import_in_place">خواندن در جای خود (بدون کپی)</string>

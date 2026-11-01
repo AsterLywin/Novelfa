@@ -73,6 +73,7 @@ fun CollectionsScreen(
     onBack: (() -> Unit)? = null
 ) {
     val books by viewModel.books.collectAsState(initial = emptyList())
+    val fileNameTitle by viewModel.fileNameTitle.collectAsState(initial = true)
     // Includes empty manually-created collections (upstream CollectionRegistry).
     val collections by viewModel.collectionNames.collectAsState(initial = emptyList())
     var selected by remember { mutableStateOf<String?>(null) }
@@ -329,7 +330,7 @@ fun CollectionsScreen(
                     ) {
                         BookCard(
                             book = book,
-                            title = displayTitle(book, books),
+                            title = displayTitle(book, books, fileNameTitle),
                             onClick = { onOpenBook(book.id) }
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -474,7 +475,7 @@ fun CollectionsScreen(
                 Text(
                     stringResource(
                         R.string.remove_book_confirm_message,
-                        displayTitle(target, books)
+                        displayTitle(target, books, fileNameTitle)
                     )
                 )
             },

@@ -329,6 +329,9 @@
     <string name="cbz_native_loading">Opening comic…</string>
     <string name="cbz_native_error">Couldn\'t open this comic file.</string>
     <string name="import_section_title">Import</string>
+    <string name="library_section">Library</string>
+    <string name="library_file_name_title">Show file name instead of book title</string>
+    <string name="library_file_name_title_desc">In the library, show the cleaned file name instead of the title stored inside the file. Turn off to show the stored title again.</string>
     <string name="fast_import">Fast import</string>
     <string name="fast_import_desc">Read each book once during import and build missing covers in the background. Turn off to use the previous import behaviour.</string>
     <string name="import_in_place">Read in place (no copy)</string>

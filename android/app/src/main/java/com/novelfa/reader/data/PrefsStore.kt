@@ -137,6 +137,14 @@ class PrefsStore(private val context: Context) {
         // how import reads and when covers are built, never the book
         // itself, the reader, or books already in the library.
         val FAST_IMPORT = booleanPreferencesKey("fastImport")
+        // Library display titles: ON = the library shows the cleaned
+        // file name for every book (upstream LibraryService parity,
+        // 2026-11-01: AssignDisplayTitles always uses the file name),
+        // OFF = the stored title inside the file, with the old
+        // duplicate/generic/UUID fallback to the file name. Toggled
+        // from Settings; display-only, it never renames a file, a
+        // stored title, a record, or a backup entry.
+        val LIBRARY_FILE_NAME_TITLE = booleanPreferencesKey("libraryFileNameTitle")
         // In-place import: ON = new imports are read where they
         // live instead of copied into filesDir/books (see
         // InPlaceSource). Default OFF: the copy behaviour is the
@@ -230,6 +238,9 @@ class PrefsStore(private val context: Context) {
         context.dataStore.data.map { it[COMIC_READING_MODE] }
     /** Safe import toggle (default ON; see FAST_IMPORT). */
     val fastImport: Flow<Boolean> = context.dataStore.data.map { it[FAST_IMPORT] ?: true }
+    /** Library file-name titles (default ON; see LIBRARY_FILE_NAME_TITLE). */
+    val fileNameTitle: Flow<Boolean> =
+        context.dataStore.data.map { it[LIBRARY_FILE_NAME_TITLE] ?: true }
     /** In-place import toggle (default OFF; see IN_PLACE_IMPORT). */
     val inPlaceImport: Flow<Boolean> = context.dataStore.data.map { it[IN_PLACE_IMPORT] ?: false }
 
@@ -405,6 +416,10 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setFastImport(value: Boolean) {
         context.dataStore.edit { it[FAST_IMPORT] = value }
+    }
+
+    suspend fun setFileNameTitle(value: Boolean) {
+        context.dataStore.edit { it[LIBRARY_FILE_NAME_TITLE] = value }
     }
 
     suspend fun setInPlaceImport(value: Boolean) {

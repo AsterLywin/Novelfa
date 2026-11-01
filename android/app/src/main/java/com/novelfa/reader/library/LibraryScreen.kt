@@ -246,6 +246,7 @@ fun LibraryScreen(
     // delegate is process-wide, so an Activity context would leak the
     // Activity on recreation (e.g. in-app language change).
     val prefs = remember(context) { PrefsStore(context.applicationContext) }
+    val fileNameTitle by prefs.fileNameTitle.collectAsState(initial = true)
     // Single rank-prefs bridge for the screen: it preloads on IO once and
     // serves reads from memory (no runBlocking on the UI thread).
     val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
@@ -283,7 +284,9 @@ fun LibraryScreen(
     val books = booksState.orEmpty()
     val allBooks = allBooksState.orEmpty()
     val visible = remember(allBooks) { allBooks.filter { !it.isPrivate } }
-    val shown = remember(books, allBooks, sort) { sortBooks(books, allBooks, sort) }
+    val shown = remember(books, allBooks, sort, fileNameTitle) {
+        sortBooks(books, allBooks, sort, fileNameTitle)
+    }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val missingFileMsg = stringResource(R.string.book_file_missing)
@@ -677,7 +680,9 @@ fun LibraryScreen(
         (xpLevel ?: XpRank.levelFor(0)).starFill
     }
     // Precompute display titles once per book-list emission (O(n), not O(n²)).
-    val titleMap = remember(allBooks) { displayTitleMap(allBooks) }
+    val titleMap = remember(allBooks, fileNameTitle) {
+        displayTitleMap(allBooks, fileNameTitle)
+    }
     val hero = remember(allBooks) {
         allBooks.filter { isInProgress(it) && !it.isPrivate }
             .maxByOrNull { it.lastOpenedDate ?: "" }
@@ -873,6 +878,7 @@ fun LibraryScreen(
                     sort = sort,
                     onSort = { sort = it },
                     gridView = true,
+                    useFileNameTitle = fileNameTitle,
                     onView = { gridView = it },
                     tab = tab,
                     onTab = { tab = it },
@@ -963,6 +969,7 @@ fun LibraryScreen(
                     sort = sort,
                     onSort = { sort = it },
                     gridView = false,
+                    useFileNameTitle = fileNameTitle,
                     onView = { gridView = it },
                     tab = tab,
                     onTab = { tab = it },
@@ -1277,7 +1284,7 @@ fun LibraryScreen(
         AlertDialog(
             onDismissRequest = { restartAsk = null },
             title = { Text(stringResource(R.string.start_over)) },
-            text = { Text(stringResource(R.string.start_over_prompt, displayTitle(book, allBooks))) },
+            text = { Text(stringResource(R.string.start_over_prompt, displayTitle(book, allBooks, fileNameTitle))) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -1301,6 +1308,7 @@ fun LibraryScreen(
         BookMenuDialog(
             book = target,
             all = allBooks,
+            useFileNameTitle = fileNameTitle,
             onDismiss = { menuFor = null },
             onFavorite = {
                 scope.launch { viewModel.toggleFavorite(target) }
@@ -1357,7 +1365,7 @@ fun LibraryScreen(
         AlertDialog(
             onDismissRequest = { resetFor = null },
             title = { Text(stringResource(R.string.start_over)) },
-            text = { Text(displayTitle(target, allBooks)) },
+            text = { Text(displayTitle(target, allBooks, fileNameTitle)) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -1376,7 +1384,7 @@ fun LibraryScreen(
         AlertDialog(
             onDismissRequest = { removeFor = null },
             title = { Text(stringResource(R.string.remove_book)) },
-            text = { Text(displayTitle(target, allBooks)) },
+            text = { Text(displayTitle(target, allBooks, fileNameTitle)) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -1399,7 +1407,7 @@ fun LibraryScreen(
             text = {
                 Text(
                     targets.take(5)
-                        .joinToString("\n") { displayTitle(it, allBooks) }
+                        .joinToString("\n") { displayTitle(it, allBooks, fileNameTitle) }
                 )
             },
             confirmButton = {
@@ -1565,7 +1573,8 @@ private fun LazyGridScope.libraryHeaderSpan(
     tab: Tab,
     onTab: (Tab) -> Unit,
     query: String,
-    onQuery: (String) -> Unit
+    onQuery: (String) -> Unit,
+    useFileNameTitle: Boolean = false
 ) {
     item(span = { GridItemSpan(maxLineSpan) }) {
         ProfileHeader(
@@ -1589,7 +1598,7 @@ private fun LazyGridScope.libraryHeaderSpan(
         item(span = { GridItemSpan(maxLineSpan) }) {
             HeroCard(
                 book = hero,
-                title = displayTitle(hero, allBooks),
+                title = displayTitle(hero, allBooks, useFileNameTitle),
                 onContinue = { onOpenBook(hero.id) }
             )
         }
@@ -1634,7 +1643,8 @@ private fun LazyListScope.libraryHeaderList(
     tab: Tab,
     onTab: (Tab) -> Unit,
     query: String,
-    onQuery: (String) -> Unit
+    onQuery: (String) -> Unit,
+    useFileNameTitle: Boolean = false
 ) {
     item {
         ProfileHeader(
@@ -1656,7 +1666,7 @@ private fun LazyListScope.libraryHeaderList(
         item {
             HeroCard(
                 book = hero,
-                title = displayTitle(hero, allBooks),
+                title = displayTitle(hero, allBooks, useFileNameTitle),
                 onContinue = { onOpenBook(hero.id) }
             )
         }
@@ -2616,6 +2626,7 @@ private fun BookRow(
 private fun BookMenuDialog(
     book: BookEntity,
     all: List<BookEntity>,
+    useFileNameTitle: Boolean = false,
     onDismiss: () -> Unit,
     onFavorite: () -> Unit,
     onCollection: () -> Unit,
@@ -2628,7 +2639,7 @@ private fun BookMenuDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                displayTitle(book, all),
+                displayTitle(book, all, useFileNameTitle),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )

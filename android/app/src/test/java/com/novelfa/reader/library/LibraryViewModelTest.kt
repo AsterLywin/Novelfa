@@ -142,6 +142,33 @@ class LibraryViewModelTest {
     }
 
     @Test
+    fun cleanFileName_stripsNovelFaTagAndUnderscores() {
+        assertEquals("My Book", cleanFileName("My_Book@NovelFa"))
+        // Case-insensitive tag match (upstream IgnoreCase); note the
+        // capital-I "NoveIFa" in some file names is NOT this tag
+        // (I != l) and is left alone, exactly like upstream.
+        assertEquals("My Book", cleanFileName("My__Book@NOVELFA"))
+        assertEquals("My Book@NoveIFa", cleanFileName("My_Book@NoveIFa"))
+        assertEquals("My Book-Name", cleanFileName("My_Book-Name_-"))
+        assertEquals("book", cleanFileName("book"))
+    }
+
+    @Test
+    fun displayTitle_fileNameModeShowsCleanedFileName() {
+        val b = book("f1", "Stored Inside Title")
+            .copy(originalFileName = "My_Story@NovelFa.epub")
+        assertEquals("My Story", displayTitle(b, listOf(b), true))
+        // OFF keeps the old rule: a unique stored title stays.
+        assertEquals("Stored Inside Title", displayTitle(b, listOf(b), false))
+    }
+
+    @Test
+    fun displayTitle_fileNameModeFallsBackToTitleWithoutName() {
+        val b = book("f2", "Stored Title", filePath = "")
+        assertEquals("Stored Title", displayTitle(b, listOf(b), true))
+    }
+
+    @Test
     fun favoritesTab_returnsOnlyFavorites() = runBlocking {
         val v = vm(
             listOf(
