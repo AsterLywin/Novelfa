@@ -88,10 +88,10 @@ fun ZoomablePageContainer(
     // Box reports taps with a passive listener (see
     // NativePageItem), which can neither starve nor be
     // starved by this loop. This loop still tracks tap-ups
-    // itself, but only for its double-tap zoom below — the
-    // chrome toggle must come from exactly one source, or a
-    // second report inside the viewer's 300ms window would
-    // cancel the pending toggle.
+    // itself, but only for its double-tap zoom below — and
+    // it reports a confirmed double-tap (onDoubleTap) so the
+    // viewer drops the pending chrome toggle for exactly
+    // that case, never for a second tap on its own.
     // Reports the SETTLED scale (1..4) — once per gesture, when
     // the fingers lift, plus once per double-tap. The caller
     // uses it to re-render the page sharper once the settled
@@ -102,6 +102,9 @@ fun ZoomablePageContainer(
     // fire per pinch move: a mid-gesture re-render stalls the
     // gesture itself (see the performance note above).
     onScaleChange: (Float) -> Unit = {},
+    // Confirmed double-tap (same spot, within 300ms): the
+    // viewer uses it to suppress the pending chrome toggle.
+    onDoubleTap: () -> Unit = {},
     content: @Composable () -> Unit
 ) {
     // Plain state, not Animatable: the gesture loop runs in a
@@ -292,6 +295,11 @@ fun ZoomablePageContainer(
                                 lastReportedScale = newScale
                                 onScaleChange(newScale)
                             }
+                            // Confirmed double-tap: the viewer
+                            // drops the pending chrome toggle
+                            // for this one (a lone second tap
+                            // never suppresses anything).
+                            onDoubleTap()
                         } else {
                             lastTapUpMs = now
                             lastTapPos = downPos

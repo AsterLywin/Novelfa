@@ -1629,39 +1629,49 @@ private fun NativeImageBookViewer(
     // Double-tap support: the chrome toggle waits 300ms to
     // tell a single tap from the first tap of a double-tap
     // (the same window the page containers use for their
-    // double-tap zoom). A second tap inside the window clears
-    // the pending toggle — the container zooms instead — so a
-    // double-tap never flickers the chrome. Cost: every chrome
-    // toggle takes 300ms (the standard PhotoView trade-off).
+    // double-tap zoom). The OLD rule — a second tap inside
+    // the window CANCELS the pending toggle — is what made
+    // tap-to-hide look dead on the phone: the 300ms wait
+    // feels unresponsive, so the tester taps again, and that
+    // re-tap cancelled the very toggle he was waiting for.
+    // New rule: a second tap never cancels anything. Only a
+    // CONFIRMED double-tap — reported by the container
+    // itself, same spot within 300ms, the one that actually
+    // zooms — suppresses the pending toggle (tapSuppress).
+    // Cost: every chrome toggle takes 300ms (the standard
+    // PhotoView trade-off).
     var pendingTapMs by remember { mutableStateOf<Long?>(null) }
+    var tapSuppress by remember { mutableStateOf(false) }
     LaunchedEffect(pendingTapMs) {
         val t = pendingTapMs ?: return@LaunchedEffect
         delay(300)
         if (pendingTapMs == t) {
-            chromeVisible = !chromeVisible
+            if (!tapSuppress) chromeVisible = !chromeVisible
+            tapSuppress = false
             pendingTapMs = null
         }
     }
     // Tap on a page itself toggles the chrome, ComicScreen-style:
     // tap once -> bars hide, tap again -> bars show. The 300ms
     // pending window above is what keeps a double-tap (zoom)
-    // from toggling: a second tap inside the window cancels
-    // the pending toggle instead of starting a new one.
-    // This handler is called by the page's OWN gesture owner,
-    // never by an ancestor detector: first the outer surface
-    // outside LazyColumn / HorizontalPager did not receive
-    // taps at all, then an ancestor detector on the page item
-    // (6c4ee982) killed pinch zoom and scroll/pager turns on
-    // the phone. Now ZoomablePageContainer reports the tap
-    // from inside its pinch/pan loop, and the paged fit modes
-    // report it from the leaf image — so no detector sits
-    // above a scroll, pager, or zoom detector.
+    // from toggling: a confirmed double-tap suppresses the
+    // pending toggle — a second tap on its own never cancels
+    // anything, it is simply ignored while a toggle is
+    // pending (see the note above). The stale-suppress clear
+    // below is defensive only: a suppress always arrives
+    // with a pending toggle (same tap pair), so a fresh
+    // pending toggle never carries a live suppress with it.
+    // This handler is called by the passive listener on the
+    // page item's outer Box — the ONLY tap source — never by
+    // an ancestor detector: an ancestor detector on the page
+    // item (6c4ee982) killed pinch zoom and scroll/pager
+    // turns on the phone, and the tap inside the zoom loop
+    // (c78a032) never fired because its awaitFirstDown
+    // skips downs another detector already consumed.
     fun handlePageTap() {
-        val now = System.currentTimeMillis()
-        if (pendingTapMs != null && now - pendingTapMs!! < 300) {
-            pendingTapMs = null
-        } else {
-            pendingTapMs = now
+        if (pendingTapMs == null) {
+            pendingTapMs = System.currentTimeMillis()
+            tapSuppress = false
         }
     }
     // Volume-key focus: the tap surface holds focus while the
@@ -1886,6 +1896,7 @@ private fun NativeImageBookViewer(
                             manualCropRect = manualCropRects[page],
                             halfSide = halfSide,
                             onTap = { handlePageTap() },
+                            onDoubleTap = { tapSuppress = true },
                             bitmapCache = pageBitmapCache
                         )
                     }
@@ -2000,6 +2011,7 @@ private fun NativeImageBookViewer(
                                 manualCropRect = manualCropRects[page],
                                 horizontalStrip = true,
                                 onTap = { handlePageTap() },
+                                onDoubleTap = { tapSuppress = true },
                                 bitmapCache = pageBitmapCache
                             )
                         }
@@ -2042,6 +2054,7 @@ private fun NativeImageBookViewer(
                             viewRotation = viewRotation,
                             manualCropRect = manualCropRects[page],
                             onTap = { handlePageTap() },
+                            onDoubleTap = { tapSuppress = true },
                             bitmapCache = pageBitmapCache
                         )
                     }
@@ -2287,71 +2300,83 @@ private fun NativeImageBookViewer(
                                     LocalContentColor.current
                                 }
                             )
-                            Slider(
-                                value = sliderPreview?.toFloat()
-                                    ?: if (isPaged) currentPage.toFloat() else stripPosition,
-                                onValueChange = { v ->
-                                    sliderPreview =
-                                        v.toInt().coerceIn(0, pageCount - 1)
-                                },
-                                onValueChangeFinished = {
-                                    val target = sliderPreview
-                                    sliderPreview = null
-                                    if (target != null) jumpTo(target)
-                                },
-                                valueRange = 0f..(pageCount - 1).coerceAtLeast(0).toFloat(),
-                                // Snapping stays (steps), but the
-                                // stops are not drawn: the old
-                                // dotted track read as clutter.
-                                // Clean round thumb + a rounded
-                                // 6dp track, mirrored in RTL.
-                                steps = (pageCount - 2).coerceIn(0, 1000),
-                                thumb = {
-                                    Box(
-                                        Modifier.size(20.dp)
-                                            .background(
-                                                MaterialTheme.colorScheme.primary,
-                                                CircleShape
-                                            )
-                                    )
-                                },
-                                track = { state ->
-                                    val range = state.valueRange
-                                    val fraction =
-                                        if (range.endInclusive > range.start) {
-                                            ((state.value - range.start) /
-                                                (range.endInclusive - range.start))
-                                                .coerceIn(0f, 1f)
-                                        } else {
-                                            0f
-                                        }
-                                    val isRtl =
-                                        LocalLayoutDirection.current ==
-                                            LayoutDirection.Rtl
-                                    Box(
-                                        Modifier.fillMaxWidth().height(6.dp)
-                                            .clip(RoundedCornerShape(50))
-                                            .background(
-                                                MaterialTheme.colorScheme.surfaceVariant
-                                            )
-                                    ) {
+                            CompositionLocalProvider(
+                                LocalLayoutDirection provides
+                                    if (directionRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
+                            ) {
+                                Slider(
+                                    value = sliderPreview?.toFloat()
+                                        ?: if (isPaged) currentPage.toFloat() else stripPosition,
+                                    onValueChange = { v ->
+                                        sliderPreview =
+                                            v.toInt().coerceIn(0, pageCount - 1)
+                                    },
+                                    onValueChangeFinished = {
+                                        val target = sliderPreview
+                                        sliderPreview = null
+                                        if (target != null) jumpTo(target)
+                                    },
+                                    valueRange = 0f..(pageCount - 1).coerceAtLeast(0).toFloat(),
+                                    // Snapping stays (steps), but the
+                                    // stops are not drawn: the old
+                                    // dotted track read as clutter.
+                                    // Clean round thumb + a rounded
+                                    // 6dp track. The bar's direction
+                                    // follows the TURNING mode
+                                    // (directionRtl), not the UI locale:
+                                    // the provider below mirrors the
+                                    // whole Slider, so thumb and fill
+                                    // always agree, in both directions.
+                                    steps = (pageCount - 2).coerceIn(0, 1000),
+                                    thumb = {
                                         Box(
-                                            Modifier.fillMaxHeight()
-                                                .fillMaxWidth(fraction)
-                                                .align(
-                                                    if (isRtl) {
-                                                        Alignment.CenterEnd
-                                                    } else {
-                                                        Alignment.CenterStart
-                                                    }
-                                                )
+                                            Modifier.size(20.dp)
                                                 .background(
-                                                    MaterialTheme.colorScheme.primary
+                                                    MaterialTheme.colorScheme.primary,
+                                                    CircleShape
                                                 )
                                         )
+                                    },
+                                    track = { state ->
+                                        val range = state.valueRange
+                                        val fraction =
+                                            if (range.endInclusive > range.start) {
+                                                ((state.value - range.start) /
+                                                    (range.endInclusive - range.start))
+                                                    .coerceIn(0f, 1f)
+                                            } else {
+                                                0f
+                                            }
+                                        Box(
+                                            Modifier.fillMaxWidth().height(6.dp)
+                                                .clip(RoundedCornerShape(50))
+                                                .background(
+                                                    MaterialTheme.colorScheme.surfaceVariant
+                                                )
+                                        ) {
+                                            Box(
+                                                Modifier.fillMaxHeight()
+                                                    .fillMaxWidth(fraction)
+                                                    // The fill grows from the
+                                                    // reading-start side: in the
+                                                    // slider's own turning-direction
+                                                    // layout, CenterStart IS that
+                                                    // side in both directions. The
+                                                    // old CenterEnd-for-RTL put the
+                                                    // fill on the wrong side —
+                                                    // CenterEnd is LEFT in RTL — so
+                                                    // the fill and the thumb
+                                                    // disagreed (the reported
+                                                    // mismatch).
+                                                    .align(Alignment.CenterStart)
+                                                    .background(
+                                                        MaterialTheme.colorScheme.primary
+                                                    )
+                                            )
+                                        }
                                     }
-                                }
-                            )
+                                )
+                            }
                         }
                         IconButton(
                             enabled = currentPage < pageCount - 1,
@@ -3931,9 +3956,12 @@ private fun NativePageItem(
     // toggles the chrome after the 300ms double-tap window.
     // Reported by the passive listener on this item's outer
     // Box (see there) — the ONLY tap source now, so a tap
-    // can never fire twice (a second report inside the
-    // window would cancel the pending toggle).
+    // can never fire twice. A double-tap zoom is reported
+    // separately (onDoubleTap): the viewer drops the pending
+    // toggle ONLY for a confirmed double-tap, never for a
+    // second tap on its own (see the viewer note).
     onTap: () -> Unit = {},
+    onDoubleTap: () -> Unit = {},
     // The viewer's page-return park (see
     // NativePageBitmapCache). Null = today's behaviour exactly:
     // render on compose, recycle on dispose, no parking.
@@ -4461,6 +4489,7 @@ private fun NativePageItem(
                     } else {
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
                     },
+                    onDoubleTap = onDoubleTap,
                 ) {
                     AnimatedPageImage(
                         rotation = viewRotation.toFloat(),
@@ -4589,6 +4618,7 @@ private fun NativePageItem(
                                     .fillMaxWidth(shrink)
                                     .aspectRatio(ratio),
                                 onScaleChange = onPinchScale,
+                                onDoubleTap = onDoubleTap,
                             ) {
                                 Image(
                                     bitmap = bmp.asImageBitmap(),
@@ -4620,6 +4650,7 @@ private fun NativePageItem(
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
                     },
                     onScaleChange = onPinchScale,
+                    onDoubleTap = onDoubleTap,
                 ) {
                     Image(
                         bitmap = bmp.asImageBitmap(),
