@@ -59,6 +59,11 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.6.0")
     implementation("net.lingala.zip4j:zip4j:2.11.5")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // PDFium engine (rendering via PdfiumCore, text via the
+    // libnovelfa_pdftext bridge in src/main/cpp): the professional
+    // PDF engine replacing the hand-written text extractor. Maven
+    // Central, so it resolves through the VM mirror too.
+    implementation("com.github.mhiew:pdfium-android:1.9.2")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
