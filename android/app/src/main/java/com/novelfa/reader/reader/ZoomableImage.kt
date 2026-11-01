@@ -55,19 +55,40 @@ import androidx.compose.ui.unit.IntSize
  * neighbouring items/list, not to this page. The box is the
  * full strip width and the page's full height, so in practice
  * the zoomed page stays touchable over most of the screen.
+ *
+ * Performance, and why the old version felt slow on a phone:
+ * two separate costs stacked. (1) Scale/offset used to be
+ * passed as graphicsLayer() PARAMETERS, so every pointer move
+ * recomposed this container and its Image — a full bitmap
+ * re-draw per move, on top of the layer transform. Now they
+ * are read only inside the graphicsLayer {} block, which
+ * updates the layer's transform without recomposing the
+ * content at all: pinch and pan are a GPU transform of a
+ * static texture, as they should be. (2) onScaleChange used
+ * to fire on every pinch move, so a pinch crossing 1.75x
+ * kicked off a full page re-decode + resize + GPU texture
+ * upload MID-GESTURE, and every in/out crossing did it
+ * again — the hitch the user felt as "zooming is slow".
+ * Now the caller is told the scale only once the gesture
+ * settles (fingers up, or a double-tap): during the pinch
+ * the 1x bitmap is simply upscaled by the GPU (soft for a
+ * moment, fast throughout), and the sharper re-render lands
+ * once, after the gesture, if the settled scale needs it.
  */
 private const val MAX_ZOOM = 4f
 
 @Composable
 fun ZoomablePageContainer(
     modifier: Modifier,
-    // Reports the live pinch scale (1..4). The caller uses it to
-    // re-render the page sharper once the pinch passes a
-    // threshold (ComicScreen's tile refinement, coarse-grained:
-    // a full-page re-render at 2x display width instead of
-    // per-tile re-decodes — same visible result, far less
-    // machinery). Fires on every pinch move; the caller must
-    // guard its own threshold so it does not re-render per move.
+    // Reports the SETTLED scale (1..4) — once per gesture, when
+    // the fingers lift, plus once per double-tap. The caller
+    // uses it to re-render the page sharper once the settled
+    // scale passes a threshold (ComicScreen's tile refinement,
+    // coarse-grained: a full-page re-render at 2x display
+    // width instead of per-tile re-decodes — same visible
+    // result, far less machinery). It deliberately does NOT
+    // fire per pinch move: a mid-gesture re-render stalls the
+    // gesture itself (see the performance note above).
     onScaleChange: (Float) -> Unit = {},
     content: @Composable () -> Unit
 ) {
@@ -85,6 +106,9 @@ fun ZoomablePageContainer(
     // quick tap starts fresh (a triple-tap is not a gesture).
     var lastTapUpMs by remember { mutableStateOf(0L) }
     var lastTapPos by remember { mutableStateOf(Offset.Zero) }
+    // Scale last reported to onScaleChange, so a gesture that
+    // ends at the same scale it started at reports nothing.
+    var lastReportedScale by remember { mutableFloatStateOf(1f) }
 
     fun clampOffset(o: Offset, s: Float): Offset {
         val maxX = ((boxSize.width * s - boxSize.width) / 2f).coerceAtLeast(0f)
@@ -95,12 +119,15 @@ fun ZoomablePageContainer(
     Box(
         modifier = modifier
             .onSizeChanged { boxSize = it }
-            .graphicsLayer(
-                scaleX = scale,
-                scaleY = scale,
-                translationX = offset.x,
+            // Block form, not parameters: state read here
+            // updates the layer transform without recomposing
+            // the Image below (see the performance note above).
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                translationX = offset.x
                 translationY = offset.y
-            )
+            }
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                 while (true) {
@@ -150,7 +177,11 @@ fun ZoomablePageContainer(
                                 newOffset = clampOffset(newOffset, newScale)
                                 scale = newScale
                                 offset = newOffset
-                                onScaleChange(newScale)
+                                // No onScaleChange here: the
+                                // settled scale is reported once
+                                // at gesture end below, so a
+                                // mid-pinch re-render never
+                                // stalls the gesture.
                                 prevCentroid = centroid
                                 prevDistance = distance
                                 pressed.forEach { it.consume() }
@@ -202,6 +233,15 @@ fun ZoomablePageContainer(
                         }
                     }
                     // The gesture ended (no pointers pressed).
+                    // Settle first: a pinch/drag that moved the
+                    // scale reports it exactly once here, so the
+                    // caller's re-render runs after the gesture,
+                    // never during it. A tap has not moved the
+                    // scale, so this reports nothing for taps.
+                    if (scale != lastReportedScale) {
+                        lastReportedScale = scale
+                        onScaleChange(scale)
+                    }
                     // A tap is a gesture that never passed slop
                     // and never pinched: it was never consumed
                     // above, so the chrome toggle saw it too —
@@ -221,6 +261,7 @@ fun ZoomablePageContainer(
                             if (scale > 1.05f) {
                                 scale = 1f
                                 offset = Offset.Zero
+                                lastReportedScale = 1f
                                 onScaleChange(1f)
                             } else {
                                 val newScale = 2f
@@ -235,6 +276,7 @@ fun ZoomablePageContainer(
                                     newScale
                                 )
                                 scale = newScale
+                                lastReportedScale = newScale
                                 onScaleChange(newScale)
                             }
                         } else {

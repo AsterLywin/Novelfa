@@ -78,8 +78,11 @@ enum class AppIconKind(val data: String, val duo: Boolean = false) {
     Padding("M7,8 H2 M4.5,5.5 L2,8 L4.5,10.5 M9,8 H14 M11.5,5.5 L14,8 L11.5,10.5"),
     Minus("M2.5,8 H13.5"),
     Bookmark("M4,2 H12 V14 L8,11 L4,14 Z", duo = true),
+    // Plus centred on the bookmark (x = 7.5, the bookmark's own
+    // centre): the old plus sat at x = 9.5, hard against the
+    // right edge, so it read as a corner mark, not a centred +.
     BookmarkAdd(
-        "M3.5,2 H11.5 V14 L7.5,11 L3.5,14 Z M9.5,4.5 V7.5 M8,6 H11"
+        "M3.5,2 H11.5 V14 L7.5,11 L3.5,14 Z M7.5,4.5 V7.5 M6,6 H9"
     , duo = true),
     Capture(
         "M2,6 H4 L5.5,4 H10.5 L12,6 H14 V13 H2 Z " +
@@ -91,7 +94,14 @@ enum class AppIconKind(val data: String, val duo: Boolean = false) {
             "M10,6 L13.5,2.5 M13.5,2.5 H10.5 M13.5,2.5 V5.5 " +
             "M6,10 L2.5,13.5 M2.5,13.5 H5.5 M2.5,13.5 V10.5"
     ),
-    Rotate("M13.2,8 A5.2,5.2 0 1 1 8,2.8 M8,2.8 L10.2,4.6 M8,2.8 L10.2,1.2"),
+    // Refresh arrow, fixed: the arc runs 270 degrees clockwise
+    // from east to north, so at its end (8, 2.8) it travels
+    // EAST — the arrowhead must point east, with its wings
+    // WEST of the tip. The old wings sat east of the tip
+    // (10.2, 1.2 / 10.2, 4.6), a west-pointing chevron floating
+    // outside the arc, which is why the icon rendered as a
+    // bare C with a detached tick at its top right.
+    Rotate("M13.2,8 A5.2,5.2 0 1 1 8,2.8 M8,2.8 L5.9,1.4 M8,2.8 L5.9,4.2"),
     Gear(
         "M6.34,3.98 L6.98,2.19 L9.02,2.19 L9.66,3.98 L11.38,3.17 L12.83,4.62 " +
             "L12.02,6.34 L13.81,6.98 L13.81,9.02 L12.02,9.66 L12.83,11.38 L11.38,12.83 " +

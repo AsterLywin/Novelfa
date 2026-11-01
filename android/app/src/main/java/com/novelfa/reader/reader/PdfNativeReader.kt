@@ -19,6 +19,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -1659,277 +1660,27 @@ private fun NativeImageBookViewer(
     val currentChapterIndex = chapters.indexOfLast { it.firstPageIndex <= currentPage }
     val currentChapter = chapters.getOrNull(currentChapterIndex)
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            AnimatedVisibility(
-                visible = chromeVisible,
-                enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
-            ) {
-                TopAppBar(
-                    title = {
-                        Column {
-                            Text(
-                                text = book.title,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            if (currentChapter != null) {
-                                Text(
-                                    text = currentChapter.title,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = LocalContentColor.current.copy(alpha = 0.7f)
-                                )
-                            }
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = { closeViewer() }) {
-                            AppIcon(
-                                AppIconKind.ArrowBack,
-                                tint = LocalContentColor.current,
-                                size = 18.dp
-                            )
-                        }
-                    },
-                    actions = {
-                        if (showChapterList) {
-                            IconButton(onClick = { showChapters = true }) {
-                                AppIcon(
-                                    AppIconKind.List,
-                                    tint = LocalContentColor.current,
-                                    size = 19.dp
-                                )
-                            }
-                        }
-                        // Icon shows the CURRENT mode, not the
-                        // destination — the old convention showed
-                        // the mode the tap would switch TO, and
-                        // its scroll glyph looks vertical, so it
-                        // actively misled: the user circled it
-                        // believing vertical mode was ON while
-                        // the app was still paged (which is why
-                        // pages still slid sideways). Now the
-                        // glyph reads as the state: two pages
-                        // side by side = paging horizontally, a
-                        // vertical strip = scrolling vertically.
-                        // The settings sheet already highlights
-                        // the current mode the same way, so the
-                        // two indicators can no longer disagree.
-                        // (Read above the button: semantics is
-                        // not composable, so the label is resolved
-                        // here, never hardcoded.)
-                        val modeDescription = stringResource(
-                            when {
-                                isPaged -> R.string.mode_horizontal
-                                isHorizontalStrip -> R.string.mode_horizontal_continuous
-                                else -> R.string.mode_vertical_continuous
-                            }
-                        )
-                        IconButton(
-                            onClick = { toggleMode() },
-                            modifier = Modifier.semantics {
-                                contentDescription = modeDescription
-                            }
-                        ) {
-                            AppIcon(
-                                when {
-                                    isPaged -> AppIconKind.Pages
-                                    isHorizontalStrip -> AppIconKind.HorizontalScroll
-                                    else -> AppIconKind.Scroll
-                                },
-                                tint = LocalContentColor.current,
-                                size = 19.dp
-                            )
-                        }
-                        // Quick toggles, ComicScreen's top-bar
-                        // btn4/btn8 pattern: the icon itself is
-                        // the switch, and the selected state is
-                        // the primary tint (its setSelected).
-                        // Fine-tuning (kept margins, ratio)
-                        // stays in the settings sheet.
-                        IconButton(onClick = {
-                            scope.launch {
-                                prefs.setComicCutMargin(!cutMargin)
-                            }
-                        }) {
-                            AppIcon(
-                                AppIconKind.Crop,
-                                tint = if (cutMargin) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    LocalContentColor.current
-                                },
-                                size = 19.dp
-                            )
-                        }
-                        IconButton(onClick = {
-                            scope.launch {
-                                prefs.setComicPaddingEnabled(!paddingEnabled)
-                            }
-                        }) {
-                            AppIcon(
-                                AppIconKind.Padding,
-                                tint = if (paddingEnabled) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    LocalContentColor.current
-                                },
-                                size = 19.dp
-                            )
-                        }
-                        // Bookmark toggle for the current page
-                        // (a per-page bookmark, not a chapter):
-                        // filled when this page is bookmarked,
-                        // outline otherwise. One tap toggles;
-                        // the list lives in the sheet. Hidden
-                        // until the book is open (pageCount 0
-                        // has no page to bookmark).
-                        if (pageCount > 0) {
-                            val bookmarked = currentPage in bookmarks
-                            val bookmarkDescription =
-                                stringResource(R.string.comic_bookmark)
-                            IconButton(
-                                onClick = {
-                                    scope.launch {
-                                        extras.toggleBookmark(book.id, currentPage)
-                                    }
-                                },
-                                modifier = Modifier.semantics {
-                                    contentDescription = bookmarkDescription
-                                }
-                            ) {
-                                AppIcon(
-                                    if (bookmarked) {
-                                        AppIconKind.Bookmark
-                                    } else {
-                                        AppIconKind.BookmarkAdd
-                                    },
-                                    tint = if (bookmarked) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        LocalContentColor.current
-                                    },
-                                    size = 19.dp
-                                )
-                            }
-                        }
-                        IconButton(onClick = { showViewSettings = true }) {
-                            AppIcon(
-                                AppIconKind.Gear,
-                                tint = LocalContentColor.current,
-                                size = 19.dp
-                            )
-                        }
-                    }
-                )
-            }
-        },
-        bottomBar = {
-            AnimatedVisibility(
-                visible = chromeVisible && pageCount > 0,
-                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
-            ) {
-                BottomAppBar {
-                    // Arrows follow the reading flow, not the Latin
-                    // alphabet: right-to-left (the default) puts the
-                    // previous page on the right and the next page on
-                    // the left, so prev points right and next left;
-                    // left-to-right flips both sides. The actions
-                    // never change, only the sides they sit on.
-                    IconButton(
-                        enabled = currentPage > 0,
-                        onClick = { stepTo(currentPage - 1) }
-                    ) {
-                        AppIcon(
-                            if (directionRtl) AppIconKind.ArrowForward else AppIconKind.ArrowBack,
-                            tint = if (currentPage > 0) {
-                                LocalContentColor.current
-                            } else {
-                                LocalContentColor.current.copy(alpha = 0.38f)
-                            },
-                            size = 19.dp
-                        )
-                    }
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        val preview = sliderPreview
-                        // Scrub thumbnail: while the thumb is
-                        // dragged, a small preview of the page
-                        // it WOULD land on — beyond ComicScreen's
-                        // number-only preview. The thumbnail is
-                        // a cheap sampled decode (never the full
-                        // pipeline), so scrubbing stays smooth.
-                        if (preview != null) {
-                            PageThumbnail(
-                                source = source,
-                                page = preview,
-                                modifier = Modifier.width(120.dp)
-                                    .heightIn(max = 160.dp)
-                                    .clip(RoundedCornerShape(8.dp)),
-                                contentScale = ContentScale.Fit
-                            )
-                        }
-                        Text(
-                            text = stringResource(
-                                R.string.page_indicator,
-                                (preview ?: currentPage) + 1, pageCount
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            color = if (preview != null) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                LocalContentColor.current
-                            }
-                        )
-                        Slider(
-                            value = sliderPreview?.toFloat()
-                                ?: if (isPaged) currentPage.toFloat() else stripPosition,
-                            onValueChange = { v ->
-                                sliderPreview =
-                                    v.toInt().coerceIn(0, pageCount - 1)
-                            },
-                            onValueChangeFinished = {
-                                val target = sliderPreview
-                                sliderPreview = null
-                                if (target != null) jumpTo(target)
-                            },
-                            valueRange = 0f..(pageCount - 1).coerceAtLeast(0).toFloat(),
-                            steps = (pageCount - 2).coerceIn(0, 1000)
-                        )
-                    }
-                    IconButton(
-                        enabled = currentPage < pageCount - 1,
-                        onClick = { stepTo(currentPage + 1) }
-                    ) {
-                        AppIcon(
-                            if (directionRtl) AppIconKind.ArrowBack else AppIconKind.ArrowForward,
-                            tint = if (currentPage < pageCount - 1) {
-                                LocalContentColor.current
-                            } else {
-                                LocalContentColor.current.copy(alpha = 0.38f)
-                            },
-                            size = 19.dp
-                        )
-                    }
-                }
-            }
-        }
-    ) { padding ->
+    // Chrome is an overlay, not an inset (see the comment
+    // on the page Box below): a tap source shared by the
+    // two bar containers, so a tap on a bar's empty area
+    // is swallowed there instead of falling through to
+    // the page underneath and toggling the chrome.
+    val chromeTapSource = remember { MutableInteractionSource() }
+    Box(modifier = Modifier.fillMaxSize()) {
         // The tap surface for the chrome toggle: the whole page
-        // area, padded by the Scaffold's bars while they are
-        // visible, full-screen once they hide. Buttons inside
-        // (retry, close) consume their own taps, so a tap on one
-        // never toggles the chrome by accident.
+        // area, ALWAYS full-screen. The bars below are an
+        // overlay on top of this Box (not Scaffold insets), so
+        // hiding them never resizes or moves this Box: the
+        // page stays exactly where it was, and hiding only
+        // uncovers the strip of page that was under the bars.
+        // That was the bug: Scaffold padding made the page
+        // area grow by the bars' height on every hide, so the
+        // image visibly jumped / the window "got bigger".
+        // Buttons inside (retry, close) consume their own
+        // taps, so a tap on one never toggles the chrome by
+        // accident.
         Box(
-            modifier = Modifier.fillMaxSize().padding(padding)
+            modifier = Modifier.fillMaxSize()
                 .focusRequester(volumeFocus)
                 .focusable()
                 .onPreviewKeyEvent { event ->
@@ -2124,7 +1875,10 @@ private fun NativeImageBookViewer(
                         modifier = Modifier.fillMaxSize()
                             .background(pageBg),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        // No gap: ComicScreen's strip pages touch.
+                        // The old 8.dp showed as a dark strip
+                        // between every two pages.
+                        horizontalArrangement = Arrangement.spacedBy(0.dp)
                     ) {
                         items(pageCount) { page ->
                             NativePageItem(
@@ -2162,7 +1916,10 @@ private fun NativeImageBookViewer(
                     modifier = Modifier.fillMaxSize()
                         .background(pageBg),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    // No gap: ComicScreen's strip pages touch.
+                    // The old 8.dp showed as a dark strip
+                    // between every two pages.
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
                     items(pageCount) { page ->
                         NativePageItem(
@@ -2192,6 +1949,285 @@ private fun NativeImageBookViewer(
                 }
             }
             }
+        }
+        Scaffold(
+            containerColor = Color.Transparent,
+            snackbarHost = { SnackbarHost(snackbar) },
+            topBar = {
+                AnimatedVisibility(
+                    visible = chromeVisible,
+                    modifier = Modifier.fillMaxWidth()
+                        .clickable(interactionSource = chromeTapSource, indication = null) {},
+                    enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+                ) {
+                    TopAppBar(
+                        title = {
+                            Column {
+                                Text(
+                                    text = book.title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (currentChapter != null) {
+                                    Text(
+                                        text = currentChapter.title,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = LocalContentColor.current.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = { closeViewer() }) {
+                                AppIcon(
+                                    AppIconKind.ArrowBack,
+                                    tint = LocalContentColor.current,
+                                    size = 18.dp
+                                )
+                            }
+                        },
+                        actions = {
+                            if (showChapterList) {
+                                IconButton(onClick = { showChapters = true }) {
+                                    AppIcon(
+                                        AppIconKind.List,
+                                        tint = LocalContentColor.current,
+                                        size = 19.dp
+                                    )
+                                }
+                            }
+                            // Icon shows the CURRENT mode, not the
+                            // destination — the old convention showed
+                            // the mode the tap would switch TO, and
+                            // its scroll glyph looks vertical, so it
+                            // actively misled: the user circled it
+                            // believing vertical mode was ON while
+                            // the app was still paged (which is why
+                            // pages still slid sideways). Now the
+                            // glyph reads as the state: two pages
+                            // side by side = paging horizontally, a
+                            // vertical strip = scrolling vertically.
+                            // The settings sheet already highlights
+                            // the current mode the same way, so the
+                            // two indicators can no longer disagree.
+                            // (Read above the button: semantics is
+                            // not composable, so the label is resolved
+                            // here, never hardcoded.)
+                            val modeDescription = stringResource(
+                                when {
+                                    isPaged -> R.string.mode_horizontal
+                                    isHorizontalStrip -> R.string.mode_horizontal_continuous
+                                    else -> R.string.mode_vertical_continuous
+                                }
+                            )
+                            IconButton(
+                                onClick = { toggleMode() },
+                                modifier = Modifier.semantics {
+                                    contentDescription = modeDescription
+                                }
+                            ) {
+                                AppIcon(
+                                    when {
+                                        isPaged -> AppIconKind.Pages
+                                        isHorizontalStrip -> AppIconKind.HorizontalScroll
+                                        else -> AppIconKind.Scroll
+                                    },
+                                    tint = LocalContentColor.current,
+                                    size = 19.dp
+                                )
+                            }
+                            // Quick toggles, ComicScreen's top-bar
+                            // btn4/btn8 pattern: the icon itself is
+                            // the switch, and the selected state is
+                            // the primary tint (its setSelected).
+                            // Fine-tuning (kept margins, ratio)
+                            // stays in the settings sheet.
+                            IconButton(onClick = {
+                                scope.launch {
+                                    prefs.setComicCutMargin(!cutMargin)
+                                }
+                            }) {
+                                AppIcon(
+                                    AppIconKind.Crop,
+                                    tint = if (cutMargin) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        LocalContentColor.current
+                                    },
+                                    size = 19.dp
+                                )
+                            }
+                            IconButton(onClick = {
+                                scope.launch {
+                                    prefs.setComicPaddingEnabled(!paddingEnabled)
+                                }
+                            }) {
+                                AppIcon(
+                                    AppIconKind.Padding,
+                                    tint = if (paddingEnabled) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        LocalContentColor.current
+                                    },
+                                    size = 19.dp
+                                )
+                            }
+                            // Bookmark toggle for the current page
+                            // (a per-page bookmark, not a chapter):
+                            // filled when this page is bookmarked,
+                            // outline otherwise. One tap toggles;
+                            // the list lives in the sheet. Hidden
+                            // until the book is open (pageCount 0
+                            // has no page to bookmark).
+                            if (pageCount > 0) {
+                                val bookmarked = currentPage in bookmarks
+                                val bookmarkDescription =
+                                    stringResource(R.string.comic_bookmark)
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            extras.toggleBookmark(book.id, currentPage)
+                                        }
+                                    },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = bookmarkDescription
+                                    }
+                                ) {
+                                    AppIcon(
+                                        if (bookmarked) {
+                                            AppIconKind.Bookmark
+                                        } else {
+                                            AppIconKind.BookmarkAdd
+                                        },
+                                        tint = if (bookmarked) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            LocalContentColor.current
+                                        },
+                                        size = 19.dp
+                                    )
+                                }
+                            }
+                            IconButton(onClick = { showViewSettings = true }) {
+                                AppIcon(
+                                    AppIconKind.Gear,
+                                    tint = LocalContentColor.current,
+                                    size = 19.dp
+                                )
+                            }
+                        }
+                    )
+                }
+            },
+            bottomBar = {
+                AnimatedVisibility(
+                    visible = chromeVisible && pageCount > 0,
+                    modifier = Modifier.fillMaxWidth()
+                        .clickable(interactionSource = chromeTapSource, indication = null) {},
+                    enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+                ) {
+                    BottomAppBar {
+                        // Arrows follow the reading flow, not the Latin
+                        // alphabet: right-to-left (the default) puts the
+                        // previous page on the right and the next page on
+                        // the left, so prev points right and next left;
+                        // left-to-right flips both sides. The actions
+                        // never change, only the sides they sit on.
+                        IconButton(
+                            enabled = currentPage > 0,
+                            onClick = { stepTo(currentPage - 1) }
+                        ) {
+                            AppIcon(
+                                if (directionRtl) AppIconKind.ArrowForward else AppIconKind.ArrowBack,
+                                tint = if (currentPage > 0) {
+                                    LocalContentColor.current
+                                } else {
+                                    LocalContentColor.current.copy(alpha = 0.38f)
+                                },
+                                size = 19.dp
+                            )
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            val preview = sliderPreview
+                            // Scrub thumbnail: while the thumb is
+                            // dragged, a small preview of the page
+                            // it WOULD land on — beyond ComicScreen's
+                            // number-only preview. The thumbnail is
+                            // a cheap sampled decode (never the full
+                            // pipeline), so scrubbing stays smooth.
+                            if (preview != null) {
+                                PageThumbnail(
+                                    source = source,
+                                    page = preview,
+                                    modifier = Modifier.width(120.dp)
+                                        .heightIn(max = 160.dp)
+                                        .clip(RoundedCornerShape(8.dp)),
+                                    contentScale = ContentScale.Fit
+                                )
+                            }
+                            Text(
+                                text = stringResource(
+                                    R.string.page_indicator,
+                                    (preview ?: currentPage) + 1, pageCount
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                textAlign = TextAlign.Center,
+                                color = if (preview != null) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    LocalContentColor.current
+                                }
+                            )
+                            Slider(
+                                value = sliderPreview?.toFloat()
+                                    ?: if (isPaged) currentPage.toFloat() else stripPosition,
+                                onValueChange = { v ->
+                                    sliderPreview =
+                                        v.toInt().coerceIn(0, pageCount - 1)
+                                },
+                                onValueChangeFinished = {
+                                    val target = sliderPreview
+                                    sliderPreview = null
+                                    if (target != null) jumpTo(target)
+                                },
+                                valueRange = 0f..(pageCount - 1).coerceAtLeast(0).toFloat(),
+                                steps = (pageCount - 2).coerceIn(0, 1000)
+                            )
+                        }
+                        IconButton(
+                            enabled = currentPage < pageCount - 1,
+                            onClick = { stepTo(currentPage + 1) }
+                        ) {
+                            AppIcon(
+                                if (directionRtl) AppIconKind.ArrowBack else AppIconKind.ArrowForward,
+                                tint = if (currentPage < pageCount - 1) {
+                                    LocalContentColor.current
+                                } else {
+                                    LocalContentColor.current.copy(alpha = 0.38f)
+                                },
+                                size = 19.dp
+                            )
+                        }
+                    }
+                }
+            }
+        ) {
+            // Empty on purpose: the page is the first child
+            // of the outer Box above, drawn full-screen
+            // underneath this Scaffold. The Scaffold only
+            // contributes its bars (and snackbar) as an
+            // overlay, so its show/hide can never resize
+            // the page. Its own background is transparent
+            // (containerColor above), so the page shows
+            // through everywhere except under the bars.
+            Box(modifier = Modifier.fillMaxSize())
         }
     }
 
@@ -3560,8 +3596,10 @@ private fun NativePageItem(
     // zoom container (which keeps its scale), not dispose the
     // container and snap the page back to 1x mid-pinch.
     var renderScale by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableIntStateOf(1) }
-    // Threshold-guarded: the container reports every pinch move,
-    // but only a threshold crossing re-renders.
+    // Threshold-guarded: the container reports only the
+    // settled scale (once per gesture), and only a threshold
+    // crossing re-renders — so a re-render never runs
+    // mid-pinch and stalls the gesture.
     val onPinchScale: (Float) -> Unit = { s ->
         if (s > 1.75f && renderScale != 2) {
             renderScale = 2
