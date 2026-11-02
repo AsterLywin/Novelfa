@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -15,12 +16,14 @@ import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.library.CollectionsScreen
 import com.novelfa.reader.library.LibraryScreen
 import com.novelfa.reader.library.LibraryViewModel
+import com.novelfa.reader.library.LibraryViewModelFactory
 import com.novelfa.reader.reader.PdfReaderRoute
 import com.novelfa.reader.settings.PinManager
 import com.novelfa.reader.settings.PrefsStorePinPrefs
 import com.novelfa.reader.settings.PrefsStoreSupportPrefs
 import com.novelfa.reader.settings.SettingsRoute
 import com.novelfa.reader.settings.SettingsViewModel
+import com.novelfa.reader.settings.SettingsViewModelFactory
 import com.novelfa.reader.settings.SupportTracker
 import com.novelfa.reader.theme.PrefsStoreRankPrefs
 
@@ -36,8 +39,10 @@ fun NavGraph(
             val db = remember { (context.applicationContext as NovelfaApplication).db }
             val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
             // Task 8: real PIN gate (was NoPinGate) + rank/support prefs.
-            val viewModel = remember {
-                LibraryViewModel(
+            // Entry-scoped ViewModel: survives rotation and back-stack
+            // navigation, unlike the previous remember construction.
+            val viewModel: LibraryViewModel = viewModel(
+                factory = LibraryViewModelFactory(
                     db.bookDao(),
                     Importer(context, db, prefs),
                     PinManager(PrefsStorePinPrefs(prefs)),
@@ -45,7 +50,7 @@ fun NavGraph(
                     filesDir = context.filesDir,
                     prefs = prefs
                 )
-            }
+            )
             LibraryScreen(
                 onOpenBook = { id -> navController.navigate("reader/$id") },
                 viewModel = viewModel,
@@ -59,8 +64,8 @@ fun NavGraph(
             val context = LocalContext.current
             val db = remember { (context.applicationContext as NovelfaApplication).db }
             val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
-            val viewModel = remember {
-                LibraryViewModel(
+            val viewModel: LibraryViewModel = viewModel(
+                factory = LibraryViewModelFactory(
                     db.bookDao(),
                     Importer(context, db, prefs),
                     PinManager(PrefsStorePinPrefs(prefs)),
@@ -68,7 +73,7 @@ fun NavGraph(
                     filesDir = context.filesDir,
                     prefs = prefs
                 )
-            }
+            )
             CollectionsScreen(
                 viewModel = viewModel,
                 onOpenBook = { id -> navController.navigate("reader/$id") },
@@ -98,15 +103,15 @@ fun NavGraph(
             val context = LocalContext.current
             val db = remember { (context.applicationContext as NovelfaApplication).db }
             val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
-            val settingsVm = remember {
-                SettingsViewModel(
+            val settingsVm: SettingsViewModel = viewModel(
+                factory = SettingsViewModelFactory(
                     prefs = prefs,
                     pinManager = PinManager(PrefsStorePinPrefs(prefs)),
                     dao = db.bookDao(),
                     rankPrefs = PrefsStoreRankPrefs(prefs),
                     support = SupportTracker(PrefsStoreSupportPrefs(prefs))
                 )
-            }
+            )
             val fonts = remember { FontStore(context) }
             SettingsRoute(
                 viewModel = settingsVm,

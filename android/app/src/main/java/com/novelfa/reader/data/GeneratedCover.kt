@@ -116,9 +116,18 @@ object GeneratedCover {
                     color = Color.rgb(247, 241, 222)
                     isAntiAlias = true
                 }
+                // FIRSTSTRONG_RTL, not FIRSTSTRONG_LTR: the first strong
+                // character still decides the paragraph direction (a
+                // Persian title is RTL and a Latin title LTR either
+                // way), RTL only changes the fallback for titles with
+                // no strong character at all — digit- or
+                // punctuation-only titles, whose brackets mirror under
+                // an LTR fallback in this Persian reader. It changes
+                // nothing for titles that contain any Persian or Latin
+                // letter.
                 return StaticLayout.Builder.obtain(text, 0, text.length, paint, textWidth)
                     .setAlignment(Layout.Alignment.ALIGN_CENTER)
-                    .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR)
+                    .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_RTL)
                     .setLineSpacing(0f, 1.25f)
                     .build()
             }

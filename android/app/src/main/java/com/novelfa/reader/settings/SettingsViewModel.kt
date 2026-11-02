@@ -1,6 +1,8 @@
 package com.novelfa.reader.settings
 
 import android.content.Context
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.isCompleted
@@ -29,8 +31,10 @@ data class XpProgressSummary(
 )
 
 /**
- * Settings backing model (plain class, like LibraryViewModel — no
- * lifecycle ViewModel dependency). Owns theme/accent/character/font/locale/
+ * Settings backing model (a real lifecycle ViewModel, so the instance
+ * survives configuration changes and stays alive while Settings is on
+ * the back stack, instead of being rebuilt by remember on every
+ * recomposition cycle). Owns theme/accent/character/font/locale/
  * support/PIN/rank state over [PrefsStore], [PinManager], [BookDao] and
  * [SupportTracker].
  */
@@ -40,7 +44,7 @@ class SettingsViewModel(
     val dao: BookDao,
     val rankPrefs: RankPrefs,
     val support: SupportTracker
-) {
+) : ViewModel() {
     val theme: Flow<String> = prefs.theme
     val accent: Flow<String> = prefs.accent
     val charTheme: Flow<String> = prefs.charTheme
@@ -171,5 +175,26 @@ class SettingsViewModel(
             @Suppress("DEPRECATION")
             res.updateConfiguration(config, res.displayMetrics)
         }
+    }
+}
+
+/**
+ * Factory for entry-scoped [SettingsViewModel] instances (see NavGraph):
+ * the ViewModel survives configuration changes and stays alive while
+ * Settings is on the back stack, instead of being rebuilt by remember.
+ */
+class SettingsViewModelFactory(
+    private val prefs: PrefsStore,
+    private val pinManager: PinManager,
+    private val dao: BookDao,
+    private val rankPrefs: RankPrefs,
+    private val support: SupportTracker
+) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        require(modelClass.isAssignableFrom(SettingsViewModel::class.java)) {
+            "Unknown ViewModel class: ${modelClass.name}"
+        }
+        return SettingsViewModel(prefs, pinManager, dao, rankPrefs, support) as T
     }
 }

@@ -848,8 +848,26 @@ class BackupService(
             if (preview.records.isNotEmpty()) {
                 for (book in dao.allBooks().first()) {
                     if (book.isPrivate) continue
-                    val f = File(book.filePath)
-                    if (!f.isFile) continue
+                    // In-place content:// books store the transient
+                    // working-copy path as filePath, and the cache
+                    // copy may be gone (evicted, or never opened on
+                    // this device) — a bare File check then drops
+                    // their record even though the record itself was
+                    // merged into the store above. Resolve those
+                    // through InPlaceSource (materializes the working
+                    // copy from the still-held source permission);
+                    // copy books and file:// in-place books keep the
+                    // cheap direct path. A failed resolve (e.g. the
+                    // permission did not survive to a new device)
+                    // leaves the record orphaned for the import path,
+                    // which applies it when the book is re-imported.
+                    val direct = File(book.filePath)
+                    val f = if (direct.isFile) direct
+                        else if (book.isInPlace()) runCatching {
+                            InPlaceSource.resolve(context, book)
+                        }.getOrNull()?.takeIf { it.isFile }
+                        else null
+                    if (f == null) continue
                     val rec = recordStore.find(sha256Of(f), readEpubIdentifier(f))
                         ?: continue
                     if (rec.sha256.isNotBlank()) matchedKeys += rec.sha256

@@ -1,6 +1,8 @@
 package com.novelfa.reader.library
 
 import android.net.Uri
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.BookEntity
 import com.novelfa.reader.data.Importer
@@ -184,7 +186,7 @@ class LibraryViewModel(
     // only in initializers): removeBook needs it to clear the deleted
     // book's per-book reader theme.
     private val prefs: PrefsStore? = null
-) {
+) : ViewModel() {
     val books: Flow<List<BookEntity>> = dao.allBooks()
 
     /** Library file-name titles (Settings switch; false when no prefs exist, e.g. unit tests). */
@@ -538,5 +540,30 @@ internal fun applyFilter(
                 displayTitle(b, all, useFileName)
             )
         }
+    }
+}
+
+/**
+ * Factory for entry-scoped [LibraryViewModel] instances (see NavGraph):
+ * the ViewModel survives configuration changes and stays alive while
+ * its destination is on the back stack, instead of being rebuilt by
+ * remember. The instance is cleared with its back-stack entry, which
+ * also bounds the Importer's hold on the creating Context (kept
+ * deliberately: import error strings resolve in the app's locale).
+ */
+class LibraryViewModelFactory(
+    private val dao: BookDao,
+    private val importer: Importer,
+    private val pinGate: PinGate,
+    private val cacheDir: File?,
+    private val filesDir: File?,
+    private val prefs: PrefsStore?
+) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        require(modelClass.isAssignableFrom(LibraryViewModel::class.java)) {
+            "Unknown ViewModel class: ${modelClass.name}"
+        }
+        return LibraryViewModel(dao, importer, pinGate, cacheDir, filesDir, prefs) as T
     }
 }

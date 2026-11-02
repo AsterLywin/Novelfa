@@ -2,6 +2,7 @@
 
 #include "novelfa_avif_core.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -218,9 +219,17 @@ int novelfa_avif_decode_rgba(const uint8_t * data, size_t size,
                 rgb.rowBytes = sw * 4;
                 rgb.alphaPremultiplied = AVIF_TRUE;
                 if (avifImageYUVToRGB(img, &rgb) == AVIF_RESULT_OK) {
+                    /* One 32-bit word per pixel, not a 4-byte memcpy
+                     * per pixel: the output is ARGB_8888, so a pixel
+                     * IS a word. Both buffers are word-aligned (the
+                     * bitmap row stride is a multiple of 4 and tmp
+                     * comes from malloc), so the word access is safe
+                     * and the loop's cost is the strided read, not
+                     * per-pixel call overhead. */
+                    const uint32_t * src = (const uint32_t *)tmp;
                     for (int dy = 0; dy < outHeight; dy++) {
-                        uint8_t * dstRow =
-                            outPixels + (size_t)dy * outRowBytes;
+                        uint32_t * dstRow =
+                            (uint32_t *)(outPixels + (size_t)dy * outRowBytes);
                         for (int dx = 0; dx < outWidth; dx++) {
                             int rx = dx, ry = dy;
                             if (mirror) {
@@ -249,8 +258,7 @@ int novelfa_avif_decode_rgba(const uint8_t * data, size_t size,
                                     sy = ry;
                                     break;
                             }
-                            memcpy(dstRow + (size_t)dx * 4,
-                                   tmp + ((size_t)sy * sw + sx) * 4, 4);
+                            dstRow[dx] = src[(size_t)sy * sw + sx];
                         }
                     }
                     ok = 1;
