@@ -5,7 +5,7 @@
 <h1 align="center">ناول‌فا | Novelfa</h1>
 
 <p align="center">
-  <b>کتاب‌خوان فارسی برای اندروید — EPUB، PDF، کمیک (CBZ/ZIP)، TXT، Markdown و DOCX — با پشتیبانی کامل از راست‌به‌چپ</b><br/>
+  <b>کتاب‌خوان برای اندروید — EPUB، PDF، کمیک (CBZ/ZIP)، TXT، Markdown و DOCX — با پشتیبانی  کامل از راست‌به‌چپ و چپ‌به‌راست</b><br/>
   <i>A Persian EPUB reader with first-class RTL support — for Android.</i><br/>
   🇬🇧 <a href="README.en.md">English</a>
 </p>
