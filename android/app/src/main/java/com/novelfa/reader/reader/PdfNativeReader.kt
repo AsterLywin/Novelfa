@@ -2512,15 +2512,26 @@ private fun NativeImageBookViewer(
                 }
             }
         ) {
-            // Empty on purpose: the page is the first child
-            // of the outer Box above, drawn full-screen
-            // underneath this Scaffold. The Scaffold only
-            // contributes its bars (and snackbar) as an
-            // overlay, so its show/hide can never resize
-            // the page. Its own background is transparent
-            // (containerColor above), so the page shows
-            // through everywhere except under the bars.
-            Box(modifier = Modifier.fillMaxSize())
+            // NOTHING here on purpose (2026-11-02): the page
+            // is the first child of the outer Box above,
+            // drawn full-screen underneath this Scaffold.
+            // The previous version put an empty fillMaxSize
+            // Box here, and the user clarified 13:42 that
+            // swipe and scroll ALSO do not work on the page
+            // — only bar controls (slider, arrows, mode
+            // buttons) work. That is a total touch blockade
+            // on the page area, not a tap/zoom-only failure,
+            // and the page turns in the videos were via
+            // slider/arrows, not swipe. The prime suspect is
+            // this Scaffold content Box: it covers exactly
+            // the middle area on top of the page Box, so even
+            // with no pointer input of its own it can swallow
+            // the hit test for everything below it. Removing
+            // it leaves NO Scaffold layout node in the middle
+            // area at all, so touches must reach the page Box
+            // below. The Scaffold still contributes its bars
+            // (and snackbar) as an overlay, so show/hide can
+            // never resize the page, exactly as before.
         }
         // TEMPORARY DIAGNOSTIC overlay (see diagMessage
         // above): topmost child of the outer Box, so it is
