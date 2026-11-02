@@ -61,7 +61,7 @@ import java.io.File
  * of ever producing another silent blank page.
  */
 internal class PdfiumNativeSource(
-    private val pdfFile: File,
+    private val pfd: ParcelFileDescriptor,
     context: Context,
     // Viewer password, session-only, never persisted — the
     // same contract as the ZIP password in the viewer. Kept
@@ -72,12 +72,28 @@ internal class PdfiumNativeSource(
     // Null = no password yet (plain PDFs, and the first
     // attempt on an encrypted PDF, which is how the viewer
     // learns it needs one).
-    private val password: CharArray? = null
+    private val password: CharArray? = null,
+    // File for the trailer encryption check and the text
+    // bridge, when the document came from one. Null for
+    // descriptor-backed documents (step 5: in-place
+    // `content://` PDFs opened with no working copy): there
+    // an unopenable document is treated as "needs a
+    // password" — the same conservative direction the file
+    // check already errs in (a password prompt is recoverable
+    // via Cancel; a bare error screen for an encrypted file
+    // is a dead end) — and pageWords returns 0, so XP credit
+    // falls back to the 1 XP/page floor for those books.
+    private val pdfFile: File? = null
 ) : NativePageSource {
+    constructor(pdfFile: File, context: Context, password: CharArray? = null) : this(
+        ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY),
+        context,
+        password,
+        pdfFile
+    )
+
     private val appContext = context.applicationContext
     private val core = PdfiumCore(appContext)
-    private val pfd: ParcelFileDescriptor =
-        ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY)
     private var doc: PdfDocument? = null
     private var bridgeDoc: Long = 0L
     private var closed = false
@@ -134,7 +150,8 @@ internal class PdfiumNativeSource(
         pageCount = openedCount
         chapters = openedChapters
         needsPassword = if (openedCount <= 0) {
-            runCatching { isEncrypted(pdfFile) }.getOrDefault(false)
+            val f = pdfFile
+            if (f != null) runCatching { isEncrypted(f) }.getOrDefault(false) else true
         } else {
             false
         }
@@ -241,9 +258,12 @@ internal class PdfiumNativeSource(
         // and credit only the 1 XP floor. Transient String
         // again, never stored — the bridge handle is what
         // persists, not the password.
+        // Descriptor-backed documents have no path for the
+        // text bridge: words read 0 and XP uses its floor.
+        val path = pdfFile?.absolutePath ?: return 0
         val bridge = bridgeDoc.takeIf { it != 0L } ?: runCatching {
             PdfiumText.openDocument(
-                pdfFile.absolutePath,
+                path,
                 password?.let { String(it) }
             ).also { bridgeDoc = it }
         }.getOrNull() ?: return 0

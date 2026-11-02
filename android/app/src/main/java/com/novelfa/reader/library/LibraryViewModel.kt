@@ -1,6 +1,8 @@
 package com.novelfa.reader.library
 
 import android.net.Uri
+import android.os.SystemClock
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.novelfa.reader.data.BookDao
@@ -17,11 +19,30 @@ import com.novelfa.reader.settings.CollectionManager
 import com.novelfa.reader.settings.ManualCollectionRegistry
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+
+/** Batch-import parallelism cap (step 4): 2 in flight. SAF copies
+ * and parses are IO-bound, so 2 roughly halves a multi-book batch;
+ * more made flash + provider contention dominate on a phone, so
+ * the cap is deliberate, not a placeholder. */
+private const val BATCH_PARALLELISM = 2
+
+/** Per-file outcome of one parallel batch import (step 4): async
+ * bodies share nothing, so aggregation after the join needs no lock. */
+private data class BatchImportOutcome(
+    val index: Int,
+    val uri: Uri,
+    val key: String?,
+    val restored: Boolean,
+    val error: Exception?
+)
 
 /** Library tabs. Predicates mirror WPF Book.cs: IsCompleted / IsInProgress. */
 enum class Tab {
@@ -293,6 +314,13 @@ class LibraryViewModel(
         }
         suspend fun isSameContent(uri: Uri, book: BookEntity): Boolean? {
             val newHash = hashOf(uri) ?: return null
+            // Step 2: a persisted content hash answers without
+            // re-reading the stored book at all — the old path
+            // re-hashed every same-size candidate on every
+            // import. This also covers in-place `content://`
+            // books with no working copy yet, which the file
+            // path below could never compare (null = undecided).
+            book.contentHash?.let { return newHash == it }
             val stored = File(book.filePath)
             if (!stored.isFile) return null
             // Cancellable streaming hash (not the blocking sha256OfFile):
@@ -302,87 +330,140 @@ class LibraryViewModel(
             val oldHash = imp.sha256OfStoredFile(stored) ?: return null
             return newHash == oldHash
         }
-        for ((index, uri) in uris.withIndex()) {
-            val displayName = imp.displayNameOf(uri)
-            onFile?.invoke(index + 1, displayName)
-            val key = displayName?.lowercase()
-            if (!overwriteDuplicates) {
-                if (key != null && key in batchAddedNames) {
-                    // Repeated inside this batch: the first pick already
-                    // imported it; the name rule is enough here.
-                    duplicates++
-                    duplicateUris.add(uri)
-                    duplicateNames.add(displayName)
-                    continue
-                }
-                var duplicate: BookEntity? = null
-                var undecided = false
-                if (key != null && key in known) {
-                    when (isSameContent(uri, knownByName.getValue(key))) {
-                        true -> duplicate = knownByName.getValue(key)
-                        false -> duplicate = null
-                        null -> {
-                            duplicate = knownByName.getValue(key)
-                            undecided = true
-                        }
-                    }
-                } else {
-                    // No name match: nominate by declared size, then hash.
-                    val size = imp.displaySizeOf(uri)
-                    if (size != null) {
-                        for (candidate in existingBooks) {
-                            val stored = File(candidate.filePath)
-                            if (stored.isFile && stored.length() == size) {
-                                when (isSameContent(uri, candidate)) {
-                                    true -> {
-                                        duplicate = candidate
-                                        break
+        // Step 4, bounded parallel batch: imports run at most
+        // BATCH_PARALLELISM at a time (chunked + async). SAF
+        // copies and parses are IO-bound, so 2 in flight roughly
+        // halves a multi-book batch. Duplicate screening stays
+        // SEQUENTIAL per file (it reads shared snapshots and must
+        // see every earlier file's decision), and all counters
+        // are aggregated AFTER each chunk joins, so no shared
+        // mutable state is ever touched from two coroutines at
+        // once. A single file still takes the exact old path
+        // (one chunk of one). Cancel propagates through
+        // coroutineScope: a cancelled chunk cancels both
+        // in-flight imports.
+        coroutineScope {
+            for (chunk in uris.withIndex().chunked(BATCH_PARALLELISM)) {
+                // Sequential screen for the whole chunk first: a
+                // same-name repeat inside one chunk must be caught
+                // here, because the two imports would otherwise
+                // both pass the screen before either updates
+                // batchAddedNames.
+                val chunkReserved = mutableSetOf<String>()
+                val chunkNames = mutableMapOf<Int, String?>()
+                val toImport = mutableListOf<Triple<Int, Uri, String?>>()
+                for ((index, uri) in chunk) {
+                    val displayName = imp.displayNameOf(uri)
+                    onFile?.invoke(index + 1, displayName)
+                    chunkNames[index] = displayName
+                    val key = displayName?.lowercase()
+                    var skip = false
+                    if (!overwriteDuplicates) {
+                        if (key != null && (key in batchAddedNames || key in chunkReserved)) {
+                            // Repeated inside this batch: the first pick already
+                            // imported it; the name rule is enough here.
+                            duplicates++
+                            duplicateUris.add(uri)
+                            duplicateNames.add(displayName)
+                            skip = true
+                        } else {
+                            var duplicate: BookEntity? = null
+                            var undecided = false
+                            if (key != null && key in known) {
+                                when (isSameContent(uri, knownByName.getValue(key))) {
+                                    true -> duplicate = knownByName.getValue(key)
+                                    false -> duplicate = null
+                                    null -> {
+                                        duplicate = knownByName.getValue(key)
+                                        undecided = true
                                     }
-                                    false, null -> Unit
                                 }
+                            } else {
+                                // No name match: nominate by declared size, then hash.
+                                val size = imp.displaySizeOf(uri)
+                                if (size != null) {
+                                    for (candidate in existingBooks) {
+                                        val stored = File(candidate.filePath)
+                                        if (stored.isFile && stored.length() == size) {
+                                            when (isSameContent(uri, candidate)) {
+                                                true -> {
+                                                    duplicate = candidate
+                                                    break
+                                                }
+                                                false, null -> Unit
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (duplicate != null) {
+                                duplicates++
+                                // An undecided (unhashable) name collision keeps the
+                                // old overwrite-confirmation path (uri + name both
+                                // recorded); a proven same-content duplicate is
+                                // skipped silently and needs neither.
+                                if (undecided) {
+                                    duplicateUris.add(uri)
+                                    if (displayName != null) duplicateNames.add(displayName)
+                                }
+                                skip = true
                             }
                         }
                     }
-                }
-                if (duplicate != null) {
-                    duplicates++
-                    // An undecided (unhashable) name collision keeps the
-                    // old overwrite-confirmation path (uri + name both
-                    // recorded); a proven same-content duplicate is
-                    // skipped silently and needs neither.
-                    if (undecided) {
-                        duplicateUris.add(uri)
-                        if (displayName != null) duplicateNames.add(displayName)
+                    if (!skip) {
+                        if (key != null) chunkReserved.add(key)
+                        toImport.add(Triple(index, uri, key))
                     }
-                    continue
                 }
-            }
-            try {
-                val newId = imp.importBook(
-                    uri,
-                    overwrite = overwriteDuplicates,
-                    passwordProvider = passwordProvider,
-                    onStage = onStage
-                )
-                added++
-                if (imp.applyReadingRecord(newId)) restored++
-                if (key != null) {
-                    known.add(key)
-                    batchAddedNames.add(key)
-                    addedNames.add(key)
+                // Parallel import of the screened chunk. The
+                // per-file result carries everything aggregation
+                // needs, so the async bodies share nothing.
+                val results = toImport.map { (index, uri, key) ->
+                    async {
+                        val startedMs = SystemClock.elapsedRealtime()
+                        try {
+                            val newId = imp.importBook(
+                                uri,
+                                overwrite = overwriteDuplicates,
+                                passwordProvider = passwordProvider,
+                                onStage = onStage
+                            )
+                            val rec = imp.applyReadingRecord(newId)
+                            Log.d(
+                                "NovelfaImport",
+                                "batch file ${index + 1} ms=${SystemClock.elapsedRealtime() - startedMs}"
+                            )
+                            BatchImportOutcome(index, uri, key, rec, null)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // Single-file import keeps the old behavior: the caller shows
+                            // the diagnostic detail from the real exception.
+                            if (uris.size == 1) throw e
+                            BatchImportOutcome(index, uri, key, false, e)
+                        }
+                    }
+                }.awaitAll()
+                // Sequential aggregation: the only place shared
+                // counters change, so no Mutex is needed.
+                for (r in results) {
+                    if (r.error == null) {
+                        added++
+                        if (r.restored) restored++
+                        if (r.key != null) {
+                            known.add(r.key)
+                            batchAddedNames.add(r.key)
+                            addedNames.add(r.key)
+                        }
+                    } else {
+                        failed++
+                        failedDetails += FailedImport(
+                            chunkNames[r.index] ?: r.uri.lastPathSegment ?: r.uri.toString(),
+                            (r.error as? com.novelfa.reader.data.ImportException)?.messageFa
+                                ?: r.error.message ?: r.error.javaClass.simpleName
+                        )
+                    }
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // Single-file import keeps the old behavior: the caller shows
-                // the diagnostic detail from the real exception.
-                if (uris.size == 1) throw e
-                failed++
-                failedDetails += FailedImport(
-                    displayName ?: uri.lastPathSegment ?: uri.toString(),
-                    (e as? com.novelfa.reader.data.ImportException)?.messageFa
-                        ?: e.message ?: e.javaClass.simpleName
-                )
             }
         }
         return ImportSummary(
@@ -394,6 +475,10 @@ class LibraryViewModel(
     /**
      * Overwrites existing books with the given URIs: removes the old book
      * (by original file name match) then imports the new file.
+     * Deliberately SEQUENTIAL, unlike importMultiple's step-4
+     * parallelism: remove-then-import for the same name from two
+     * coroutines would race (both remove, both import, or one
+     * removes the other's fresh row).
      */
     suspend fun overwriteDuplicates(
         uris: List<Uri>,

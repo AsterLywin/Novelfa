@@ -91,6 +91,66 @@ object PdfParser {
         return true
     }
 
+    /**
+     * File-based twin of [maybeEncrypted]: the same trailer walk,
+     * but every window is read with RandomAccessFile seeks instead
+     * of loading the whole file into a ByteArray first. The
+     * importer's file:// in-place probe and the copy-flow PDF
+     * branch used to pay a full readBytes just to ask "is this
+     * encrypted" — for a big plain PDF that was the single
+     * largest wasted read at import. Same conservative contract:
+     * uncertain answers true; only a cleanly-read chain with no
+     * /Encrypt answers false.
+     */
+    fun maybeEncryptedFile(file: File): Boolean {
+        val raf = try {
+            java.io.RandomAccessFile(file, "r")
+        } catch (e: Exception) {
+            return true
+        }
+        try {
+            val length = raf.length()
+            if (length <= 0L) return true
+            val tailLen = minOf(2048L, length).toInt()
+            val tailBytes = ByteArray(tailLen)
+            raf.seek(length - tailLen)
+            raf.readFully(tailBytes)
+            val tail = String(tailBytes, Charsets.ISO_8859_1)
+            val sx = tail.lastIndexOf("startxref")
+            if (sx < 0) return true
+            var offset = tail.substring(sx + "startxref".length)
+                .trimStart().takeWhile { it.isDigit() }.toIntOrNull() ?: return true
+            val seen = mutableSetOf<Int>()
+            var guard = 0
+            while (guard++ < 25) {
+                if (offset < 0 || offset >= length || !seen.add(offset)) return true
+                val winEnd = minOf(length, offset + 65536L)
+                val winBytes = ByteArray((winEnd - offset).toInt())
+                raf.seek(offset.toLong())
+                raf.readFully(winBytes)
+                val body = String(winBytes, Charsets.ISO_8859_1).trimStart()
+                val dictStart = if (body.startsWith("xref")) {
+                    val tr = body.indexOf("trailer")
+                    if (tr < 0) return true
+                    body.indexOf("<<", tr)
+                } else {
+                    body.indexOf("<<")
+                }
+                if (dictStart < 0) return true
+                val dict = balancedTrailerDict(body, dictStart) ?: return true
+                if (dict.contains("/Encrypt")) return true
+                val prev = Regex("/Prev\\s+(\\d+)").find(dict)
+                    ?.groupValues?.get(1)?.toIntOrNull() ?: return false
+                offset = prev
+            }
+            return true
+        } catch (e: Exception) {
+            return true
+        } finally {
+            runCatching { raf.close() }
+        }
+    }
+
     /** Balanced `<<...>>` dict starting at [start], or null if it does not close. */
     private fun balancedTrailerDict(text: String, start: Int): String? {
         var depth = 0

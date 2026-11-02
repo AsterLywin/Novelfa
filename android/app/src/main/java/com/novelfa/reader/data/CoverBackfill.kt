@@ -2,6 +2,7 @@ package com.novelfa.reader.data
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.ParcelFileDescriptor
 import com.novelfa.reader.parser.BookFormat
 import com.shockwave.pdfium.PdfiumCore
@@ -75,7 +76,14 @@ object CoverBackfill {
                         CbzEngine.metadata(resolvedFile, current.title, scratchDir) {}.coverFile
                     }.getOrNull()
                     BookFormat.PDF -> runCatching {
-                        pdfFirstPageCover(context, resolvedFile, scratchDir)
+                        val pfd = ParcelFileDescriptor.open(
+                            resolvedFile, ParcelFileDescriptor.MODE_READ_ONLY
+                        )
+                        try {
+                            pdfFirstPageCover(context, pfd, scratchDir)
+                        } finally {
+                            runCatching { pfd.close() }
+                        }
                     }.getOrNull()
                     BookFormat.ZIP -> {
                         val meta = runCatching {
@@ -88,42 +96,131 @@ object CoverBackfill {
                     }
                     else -> null
                 }?.takeIf { it.exists() }
-                val latest = dao.getById(book.id) ?: return@runCatching
-                if (realCover != null) {
-                    // Replace a generated cover from import: the
-                    // generated file shares the CoverStore key of
-                    // this book path, and saveCover refuses to
-                    // overwrite an existing file — so remove any
-                    // cover file keyed to this path first, then
-                    // save the real one under the same key.
-                    val coversDir = File(context.filesDir, "covers")
-                    // coverFileName(path, "") is exactly the
-                    // "cover_<md5>" prefix every cover for this
-                    // book path shares, whatever its extension.
-                    val keyPrefix = CoverStore.coverFileName(resolvedFile.absolutePath, "")
-                    coversDir.listFiles()
-                        ?.filter { it.name.startsWith(keyPrefix) }
-                        ?.forEach { runCatching { it.delete() } }
-                    val saved = CoverStore(context)
-                        .saveCover(realCover, resolvedFile.absolutePath).absolutePath
-                    val fresh = dao.getById(book.id) ?: return@runCatching
-                    if (fresh.coverPath != saved) {
-                        dao.update(fresh.copy(coverPath = saved))
-                    }
-                } else if (latest.coverPath == null) {
-                    val tmp = GeneratedCover.generate(context, latest.title, resolvedFile.absolutePath)
-                        ?: return@runCatching
-                    try {
-                        val saved = CoverStore(context)
-                            .saveCover(tmp, resolvedFile.absolutePath).absolutePath
-                        val fresh = dao.getById(book.id) ?: return@runCatching
-                        if (fresh.coverPath == null) {
-                            dao.update(fresh.copy(coverPath = saved))
-                        }
-                    } finally {
-                        tmp.delete()
-                    }
+                saveRealCover(context, dao, book, realCover, resolvedFile.absolutePath)
+                runCatching { scratchDir.deleteRecursively() }
+            }
+        }
+    }
+
+    /**
+     * Shared save step for both backfill paths: a real cover
+     * replaces whatever the row has (including a generated
+     * cover from import — the generated file shares the
+     * CoverStore key of this book path, and saveCover refuses
+     * to overwrite an existing file, so any cover file keyed
+     * to this path is removed first, then the real one is
+     * saved under the same key); otherwise a missing cover is
+     * filled with a generated one. The row is re-read
+     * immediately before the update, so a progress save that
+     * landed during extraction is not clobbered — only
+     * coverPath changes.
+     */
+    private suspend fun saveRealCover(
+        context: Context,
+        dao: BookDao,
+        book: BookEntity,
+        realCover: File?,
+        pathKey: String
+    ) {
+        val latest = dao.getById(book.id) ?: return
+        if (realCover != null) {
+            val coversDir = File(context.filesDir, "covers")
+            // coverFileName(path, "") is exactly the
+            // "cover_<md5>" prefix every cover for this
+            // book path shares, whatever its extension.
+            val keyPrefix = CoverStore.coverFileName(pathKey, "")
+            coversDir.listFiles()
+                ?.filter { it.name.startsWith(keyPrefix) }
+                ?.forEach { runCatching { it.delete() } }
+            val saved = CoverStore(context)
+                .saveCover(realCover, pathKey).absolutePath
+            val fresh = dao.getById(book.id) ?: return
+            if (fresh.coverPath != saved) {
+                dao.update(fresh.copy(coverPath = saved))
+            }
+        } else if (latest.coverPath == null) {
+            val tmp = GeneratedCover.generate(context, latest.title, pathKey)
+                ?: return
+            try {
+                val saved = CoverStore(context)
+                    .saveCover(tmp, pathKey).absolutePath
+                val fresh = dao.getById(book.id) ?: return
+                if (fresh.coverPath == null) {
+                    dao.update(fresh.copy(coverPath = saved))
                 }
+            } finally {
+                tmp.delete()
+            }
+        }
+    }
+
+    /**
+     * Direct-route counterpart of [backfill] for PDFs: the first
+     * page renders from the provider's descriptor, with no
+     * working copy. Best-effort like [backfill]. The path key
+     * is the row's working-copy path — the same key the
+     * import-time generated cover used, so replacement works
+     * exactly as in the file-backed path.
+     */
+    suspend fun backfillDirectPdf(context: Context, dao: BookDao, book: BookEntity) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                if (!book.isInPlace()) return@runCatching
+                val uriStr = book.sourceUri ?: return@runCatching
+                if (InPlaceSource.sourceScheme(uriStr) != "content") return@runCatching
+                if (dao.getById(book.id) == null) return@runCatching
+                val scratchDir = File(
+                    context.cacheDir,
+                    "cover_backfill" + File.separatorChar + book.id
+                ).apply { mkdirs() }
+                val realCover = runCatching {
+                    val pfd = context.contentResolver.openFileDescriptor(
+                        Uri.parse(uriStr), "r"
+                    ) ?: return@runCatching null
+                    try {
+                        pdfFirstPageCover(context, pfd, scratchDir)
+                    } finally {
+                        runCatching { pfd.close() }
+                    }
+                }.getOrNull()?.takeIf { it.exists() }
+                saveRealCover(context, dao, book, realCover, book.filePath)
+                runCatching { scratchDir.deleteRecursively() }
+            }
+        }
+    }
+
+    /**
+     * Direct-route counterpart of [backfill] for comics: the
+     * first image entry is the cover, read from the archive
+     * directly. Best-effort like [backfill].
+     */
+    suspend fun backfillDirectCbz(
+        context: Context,
+        dao: BookDao,
+        book: BookEntity,
+        seekable: SeekableZip
+    ) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                if (!book.isInPlace()) return@runCatching
+                if (dao.getById(book.id) == null) return@runCatching
+                val scratchDir = File(
+                    context.cacheDir,
+                    "cover_backfill" + File.separatorChar + book.id
+                ).apply { mkdirs() }
+                val first = seekable.imageEntryNames().firstOrNull()
+                val realCover = first?.let { name ->
+                    runCatching {
+                        val bytes = seekable.openEntry(name)?.use { it.readBytes() }
+                            ?: return@runCatching null
+                        val ext = name.substringAfterLast('.', "jpg")
+                            .takeIf { it.isNotBlank() } ?: "jpg"
+                        val dest = File(scratchDir, "cover.$ext")
+                        dest.writeBytes(bytes)
+                        dest.takeIf { it.exists() && it.length() > 0 }
+                    }.getOrNull()
+                }
+                saveRealCover(context, dao, book, realCover, book.filePath)
                 runCatching { scratchDir.deleteRecursively() }
             }
         }
@@ -134,56 +231,50 @@ object CoverBackfill {
      * wide) — the PDFium equivalent of the CBZ first-page
      * cover. Best-effort: any failure returns null (or throws
      * into the caller's runCatching) and the caller falls back
-     * to the generated cover.
+     * to the generated cover. The caller owns the descriptor;
+     * this function only reads from it.
      */
     private fun pdfFirstPageCover(
         context: Context,
-        pdfFile: File,
+        pfd: ParcelFileDescriptor,
         scratchDir: File
     ): File? {
         val core = PdfiumCore(context)
-        val pfd = ParcelFileDescriptor.open(
-            pdfFile, ParcelFileDescriptor.MODE_READ_ONLY
-        )
+        val doc = core.newDocument(pfd)
         try {
-            val doc = core.newDocument(pfd)
+            if (core.getPageCount(doc) <= 0) return null
+            // PdfiumCore page rule (see PdfiumNativeSource):
+            // a page must be opened before any per-page
+            // call, or its size reads 0 and the render
+            // silently produces a blank bitmap — which
+            // would then be saved as a white cover. A
+            // page that cannot be opened, or has no size,
+            // returns null so the caller keeps the
+            // generated cover instead of a white one.
+            if (!doc.hasPage(0)) core.openPage(doc, 0)
+            if (!doc.hasPage(0)) return null
+            val widthPt = core.getPageWidthPoint(doc, 0)
+            val heightPt = core.getPageHeightPoint(doc, 0)
+            if (widthPt <= 0 || heightPt <= 0) return null
+            val width = 600
+            val height = (heightPt.toFloat() * width / widthPt.toFloat())
+                .toInt().coerceAtLeast(1)
+            val bitmap = Bitmap.createBitmap(
+                width, height, Bitmap.Config.ARGB_8888
+            )
             try {
-                if (core.getPageCount(doc) <= 0) return null
-                // PdfiumCore page rule (see PdfiumNativeSource):
-                // a page must be opened before any per-page
-                // call, or its size reads 0 and the render
-                // silently produces a blank bitmap — which
-                // would then be saved as a white cover. A
-                // page that cannot be opened, or has no size,
-                // returns null so the caller keeps the
-                // generated cover instead of a white one.
-                if (!doc.hasPage(0)) core.openPage(doc, 0)
-                if (!doc.hasPage(0)) return null
-                val widthPt = core.getPageWidthPoint(doc, 0)
-                val heightPt = core.getPageHeightPoint(doc, 0)
-                if (widthPt <= 0 || heightPt <= 0) return null
-                val width = 600
-                val height = (heightPt.toFloat() * width / widthPt.toFloat())
-                    .toInt().coerceAtLeast(1)
-                val bitmap = Bitmap.createBitmap(
-                    width, height, Bitmap.Config.ARGB_8888
-                )
-                try {
-                    core.renderPageBitmap(doc, bitmap, 0, 0, 0, width, height)
-                    scratchDir.mkdirs()
-                    val dest = File(scratchDir, "cover.jpg")
-                    dest.outputStream().use { out ->
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
-                    }
-                    return dest.takeIf { it.exists() && it.length() > 0 }
-                } finally {
-                    bitmap.recycle()
+                core.renderPageBitmap(doc, bitmap, 0, 0, 0, width, height)
+                scratchDir.mkdirs()
+                val dest = File(scratchDir, "cover.jpg")
+                dest.outputStream().use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
                 }
+                return dest.takeIf { it.exists() && it.length() > 0 }
             } finally {
-                runCatching { core.closeDocument(doc) }
+                bitmap.recycle()
             }
         } finally {
-            runCatching { pfd.close() }
+            runCatching { core.closeDocument(doc) }
         }
     }
 }

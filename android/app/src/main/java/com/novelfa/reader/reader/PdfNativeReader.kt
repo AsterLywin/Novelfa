@@ -9,7 +9,9 @@ import android.graphics.pdf.PdfRenderer
 import android.widget.ImageView
 import java.nio.ByteBuffer
 import android.os.ParcelFileDescriptor
+import com.novelfa.reader.data.SeekableZip
 import java.io.ByteArrayInputStream
+import java.io.InputStream
 import java.io.ByteArrayOutputStream
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -127,8 +129,11 @@ import androidx.compose.ui.unit.dp
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.BookEntity
+import android.net.Uri
 import com.novelfa.reader.data.CoverBackfill
 import com.novelfa.reader.data.InPlaceSource
+import com.novelfa.reader.data.isInPlace
+import java.io.IOException
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.ReaderExtrasStore
 import com.novelfa.reader.data.sha256OfFile
@@ -147,7 +152,6 @@ import java.io.Closeable
 import java.io.File
 import java.time.Instant
 import net.lingala.zip4j.ZipFile
-import net.lingala.zip4j.model.FileHeader
 import com.novelfa.reader.data.CropRect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -382,22 +386,87 @@ internal class PdfNativeRenderer(pdfFile: File) : NativePageSource {
  * and AES) when a password is supplied. Entry NAMES still come
  * from [CbzBook.imageEntryNames]: ZIP encrypts file data, not
  * the central directory, so names list fine without a password.
+ * Second backend (step 5): [SeekableZip] for in-place
+ * `content://` archives — pages stream from the provider's
+ * descriptor with no working copy. It serves only unencrypted
+ * STORED/DEFLATED entries; anything else falls back to the
+ * zip4j backend over a resolved working copy.
  */
-internal class CbzNativeSource(
+/**
+ * Entry backend for the comic viewer. zip4j is the default (it
+ * decrypts password-protected archives); [SeekableZip] is the
+ * in-place `content://` backend (step 5: pages stream from the
+ * provider's descriptor with no working copy). Both serve the
+ * same calls, so the decode pipeline below never learns which
+ * one it is reading from.
+ */
+internal interface CbzEntryStore : Closeable {
+    fun openEntry(name: String): InputStream?
+    fun firstEncryptedName(): String?
+}
+
+internal class ZipFileStore(
     zipFile: File,
-    password: CharArray? = null
-) : NativePageSource {
-    private val lock = Any()
+    password: CharArray?
+) : CbzEntryStore {
     private val zip = ZipFile(zipFile).apply {
         if (password != null) setPassword(password)
     }
-    private val entries: List<String> = CbzBook.imageEntryNames(zipFile)
 
-    private fun headerFor(name: String): FileHeader? {
-        return runCatching {
+    override fun openEntry(name: String): InputStream? {
+        val header = runCatching {
             zip.fileHeaders.firstOrNull { it.fileName == name }
-        }.getOrNull()
+        }.getOrNull() ?: return null
+        return runCatching { zip.getInputStream(header) }.getOrNull()
     }
+
+    override fun firstEncryptedName(): String? =
+        runCatching {
+            zip.fileHeaders.firstOrNull { it.isEncrypted }?.fileName
+        }.getOrNull()
+
+    override fun close() {
+        // No-op on purpose: zip4j parses the central directory
+        // at construction (its handle is closed after parsing)
+        // and opens a fresh handle per stream, so there is no
+        // persistent handle to close — unlike java.util.zip.
+    }
+}
+
+internal class SeekableEntryStore(
+    private val seekable: SeekableZip
+) : CbzEntryStore {
+    override fun openEntry(name: String): InputStream? =
+        runCatching { seekable.openEntry(name) }.getOrNull()
+
+    // The caller only builds this store when the archive has no
+    // encrypted entries (they need zip4j), so this is constant.
+    override fun firstEncryptedName(): String? = null
+
+    override fun close() {
+        // No-op on purpose: the route owns the provider
+        // descriptor (it may build several sources over one
+        // descriptor), so a source must never close it out
+        // from under its siblings. PdfReaderRoute closes the
+        // descriptor when the viewer leaves.
+    }
+}
+
+internal class CbzNativeSource(
+    private val store: CbzEntryStore,
+    private val entries: List<String>
+) : NativePageSource {
+    constructor(zipFile: File, password: CharArray?) : this(
+        ZipFileStore(zipFile, password),
+        CbzBook.imageEntryNames(zipFile)
+    )
+
+    constructor(seekable: SeekableZip) : this(
+        SeekableEntryStore(seekable),
+        seekable.imageEntryNames()
+    )
+
+    private val lock = Any()
 
     // AVIF pages (native libavif engine, see AvifDecoder): the
     // BitmapFactory path cannot decode them on any API level —
@@ -409,9 +478,9 @@ internal class CbzNativeSource(
     private fun isAvifEntry(name: String): Boolean =
         name.endsWith(".avif", ignoreCase = true)
 
-    private fun avifBytes(header: FileHeader): ByteArray? =
+    private fun avifBytes(name: String): ByteArray? =
         runCatching {
-            zip.getInputStream(header).use { it.readBytes() }
+            store.openEntry(name)?.use { it.readBytes() }
         }.getOrNull()
 
     /**
@@ -425,11 +494,9 @@ internal class CbzNativeSource(
      */
     fun probePassword(): Boolean {
         synchronized(lock) {
-            val encrypted = runCatching {
-                zip.fileHeaders.firstOrNull { it.isEncrypted }
-            }.getOrNull() ?: return true
+            val encrypted = store.firstEncryptedName() ?: return true
             return runCatching {
-                zip.getInputStream(encrypted).use { it.readBytes() }
+                store.openEntry(encrypted)?.use { it.readBytes() }
             }.isSuccess
         }
     }
@@ -443,14 +510,13 @@ internal class CbzNativeSource(
     override fun nativePageSize(index: Int): Pair<Int, Int>? {
         synchronized(lock) {
             if (index < 0 || index >= entries.size) return null
-            val header = headerFor(entries[index]) ?: return null
             if (isAvifEntry(entries[index])) {
-                val bytes = avifBytes(header) ?: return null
+                val bytes = avifBytes(entries[index]) ?: return null
                 return AvifDecoder.decodeBounds(bytes)
             }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             runCatching {
-                zip.getInputStream(header).use { stream ->
+                store.openEntry(entries[index])?.use { stream ->
                     BitmapFactory.decodeStream(stream, null, bounds)
                 }
             }
@@ -486,9 +552,9 @@ internal class CbzNativeSource(
             // WebP falls through to the bitmap path with its
             // crop/resize/sharpen intact).
             if (!isAnimatedPage(index)) return null
-            val header = headerFor(entries[index]) ?: return null
             return runCatching {
-                val bytes = zip.getInputStream(header).use { it.readBytes() }
+                val bytes = store.openEntry(entries[index])?.use { it.readBytes() }
+                    ?: return@runCatching null
                 ImageDecoder.decodeDrawable(
                     ImageDecoder.createSource(ByteBuffer.wrap(bytes))
                 )
@@ -507,19 +573,17 @@ internal class CbzNativeSource(
      */
     private fun exifDegrees(name: String): Int {
         return runCatching {
-            val header = headerFor(name) ?: return@runCatching 0
-            zip.getInputStream(header).use { stream ->
+            store.openEntry(name)?.use { stream ->
                 ExifRotation.degreesFromStream(stream)
-            }
+            } ?: 0
         }.getOrDefault(0)
     }
 
     override fun thumbnail(index: Int, targetWidthPx: Int): Bitmap? {
         synchronized(lock) {
             if (index < 0 || index >= entries.size) return null
-            val header = headerFor(entries[index]) ?: return null
             if (isAvifEntry(entries[index])) {
-                val bytes = avifBytes(header) ?: return null
+                val bytes = avifBytes(entries[index]) ?: return null
                 val decoded = AvifDecoder.decode(bytes) ?: return null
                 // Same caps as the sampled path below: width near
                 // the target (within 2x, so the scrub preview
@@ -543,7 +607,7 @@ internal class CbzNativeSource(
             }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             runCatching {
-                zip.getInputStream(header).use { stream ->
+                store.openEntry(entries[index])?.use { stream ->
                     BitmapFactory.decodeStream(stream, null, bounds)
                 }
             }
@@ -564,7 +628,7 @@ internal class CbzNativeSource(
                 inPreferQualityOverSpeed = true
             }
             val decoded = runCatching {
-                zip.getInputStream(header).use { stream ->
+                store.openEntry(entries[index])?.use { stream ->
                     BitmapFactory.decodeStream(stream, null, opts)
                 }
             }.getOrNull() ?: return null
@@ -597,10 +661,8 @@ internal class CbzNativeSource(
         }
         val entryName = entries[index]
         val bytes = synchronized(lock) {
-            val header = headerFor(entryName)
-                ?: throw IllegalArgumentException("Missing comic entry: $entryName")
             runCatching {
-                zip.getInputStream(header).use { it.readBytes() }
+                store.openEntry(entryName)?.use { it.readBytes() }
             }.getOrNull()
         } ?: throw IllegalArgumentException("Unreadable comic image: $entryName")
         if (isAvifEntry(entryName)) {
@@ -747,10 +809,13 @@ internal class CbzNativeSource(
     }
 
     override fun close() {
-        // No-op on purpose: zip4j parses the central directory
-        // at construction (its handle is closed after parsing)
-        // and opens a fresh handle per stream, so there is no
-        // persistent handle to close — unlike java.util.zip.
+        // The store decides: ZipFileStore is a no-op (zip4j opens
+        // a fresh handle per stream), and SeekableEntryStore is
+        // also a no-op on purpose — the route owns the provider
+        // descriptor (it may build several sources over one
+        // descriptor), so a source must never close it out from
+        // under its siblings.
+        runCatching { store.close() }
     }
 
     companion object {
@@ -781,23 +846,127 @@ fun PdfReaderRoute(
     var missing by remember { mutableStateOf(false) }
     var resolvedFile by remember { mutableStateOf<File?>(null) }
     var resolveFailed by remember { mutableStateOf(false) }
+    // Direct (no-working-copy) route, step 5: for in-place
+    // `content://` PDFs and comics, the viewer opens the
+    // provider's descriptor / archive directly instead of
+    // waiting for a full working-copy build. routeReady is
+    // false while the probe runs; directCbz holds the open
+    // archive when the comic probe hits (null = not a direct
+    // comic). The archive lifetime is the route's: the effect
+    // below closes it when the route leaves or the book
+    // changes — sources built over it must never close it
+    // themselves (see SeekableEntryStore).
+    var directPdf by remember { mutableStateOf(false) }
+    var directCbz by remember { mutableStateOf<SeekableZip?>(null) }
+    var routeReady by remember { mutableStateOf(false) }
+    DisposableEffect(directCbz) {
+        onDispose { directCbz?.close() }
+    }
     LaunchedEffect(bookId) {
         val found = withContext(Dispatchers.IO) {
             runCatching { dao.getById(bookId) }.getOrNull()
         }
         if (found == null) missing = true else entity = found
     }
-    // Resolve before routing: for in-place books the entity path
-    // is a not-yet-materialized working copy (content://) or the
-    // user's real file (file://), so routing on the raw path
-    // would mis-detect format or fail outright. Copy books
-    // resolve to their stored file, unchanged.
+    // Direct-route probe, then resolve as before: for in-place
+    // books the entity path is a not-yet-materialized working
+    // copy (content://) or the user's real file (file://), so
+    // routing on the raw path would mis-detect format or fail
+    // outright. Copy books resolve to their stored file,
+    // unchanged. The probe runs FIRST and reads only a
+    // descriptor open (PDF) or the archive tail + central
+    // directory (CBZ/ZIP), so a hit skips the whole
+    // working-copy build; any miss falls through to the
+    // resolve below, unchanged.
     LaunchedEffect(entity) {
         val found = entity ?: return@LaunchedEffect
+        routeReady = false
+        directPdf = false
+        directCbz = null
+        resolvedFile = null
+        resolveFailed = false
+        if (found.isInPlace() &&
+            InPlaceSource.sourceScheme(found.sourceUri) == "content"
+        ) {
+            val uriStr = found.sourceUri
+            val ext = (found.originalFileName ?: found.filePath)
+                .substringAfterLast('.', "").lowercase()
+            if (uriStr != null) {
+                if (ext == "pdf") {
+                    val pfd = withContext(Dispatchers.IO) {
+                        runCatching {
+                            context.contentResolver.openFileDescriptor(
+                                Uri.parse(uriStr), "r"
+                            )
+                        }.getOrNull()
+                    }
+                    if (pfd != null) {
+                        // Probe only: construct + close. The
+                        // viewer factory opens a fresh
+                        // descriptor per attempt (password
+                        // retries need one each), so this
+                        // descriptor is not kept.
+                        withContext(Dispatchers.IO) {
+                            runCatching {
+                                PdfiumNativeSource(pfd, context, null).close()
+                            }
+                        }
+                        directPdf = true
+                        routeReady = true
+                        return@LaunchedEffect
+                    }
+                } else if (ext == "cbz" || ext == "zip") {
+                    val seekable = withContext(Dispatchers.IO) {
+                        runCatching {
+                            SeekableZip.openFromUri(context, Uri.parse(uriStr))
+                        }.getOrNull()
+                    }
+                    if (seekable != null && !seekable.hasEncryptedEntries()) {
+                        val direct = if (ext == "cbz") {
+                            seekable.imageEntryNames().isNotEmpty()
+                        } else {
+                            // ZIP: only image-only archives go
+                            // direct — a ZIP carrying a book must
+                            // still resolve, so the archive engine
+                            // can open the book inside it.
+                            val names = seekable.entries
+                                .filter { !it.isDirectory }
+                                .map { it.name }
+                                .filter { !it.startsWith("__MACOSX/") }
+                                .filter { !it.substringAfterLast('/').startsWith(".") }
+                            val hasBook = names.any {
+                                it.substringAfterLast('.', "").lowercase() in
+                                    setOf(
+                                        "epub", "docx", "pdf", "txt", "text",
+                                        "md", "markdown", "mdown"
+                                    )
+                            }
+                            seekable.imageEntryNames().isNotEmpty() && !hasBook
+                        }
+                        if (direct) {
+                            directCbz = seekable
+                            routeReady = true
+                            return@LaunchedEffect
+                        }
+                    }
+                    seekable?.close()
+                }
+            }
+        }
         resolvedFile = withContext(Dispatchers.IO) {
-            runCatching { InPlaceSource.resolve(context, found) }.getOrNull()
+            runCatching {
+                InPlaceSource.resolve(context, found) { hash ->
+                    // Persist the deferred content hash (step 2):
+                    // this build digested it for free.
+                    val cur = dao.getById(found.id)
+                    if (cur != null && cur.contentHash == null) {
+                        dao.update(cur.copy(contentHash = hash))
+                    }
+                }
+            }.getOrNull()
         }
         if (resolvedFile == null) resolveFailed = true
+        routeReady = true
     }
     // First-open cover backfill for native books (PDF, CBZ and
     // image-only ZIPs), the counterpart of ReaderScreen's call
@@ -816,6 +985,20 @@ fun PdfReaderRoute(
             format != BookFormat.ZIP
         ) return@LaunchedEffect
         CoverBackfill.backfill(context, dao, found, file)
+    }
+    // First-open cover backfill for direct routes, where no
+    // resolved file exists: the real first page still replaces
+    // the generated cover, from the descriptor / archive
+    // directly instead of a working copy.
+    LaunchedEffect(entity, directPdf, directCbz) {
+        val found = entity ?: return@LaunchedEffect
+        if (found.importMode != "IN_PLACE") return@LaunchedEffect
+        if (directPdf) {
+            CoverBackfill.backfillDirectPdf(context, dao, found)
+        } else {
+            val seekable = directCbz ?: return@LaunchedEffect
+            CoverBackfill.backfillDirectCbz(context, dao, found, seekable)
+        }
     }
     when {
         missing || resolveFailed -> {
@@ -842,13 +1025,44 @@ fun PdfReaderRoute(
                 }
             }
         }
-        entity == null || resolvedFile == null -> {
+        entity == null || !routeReady ||
+            (resolvedFile == null && !directPdf && directCbz == null) -> {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator()
             }
+        }
+        // Direct routes, step 5: no resolved file exists, by
+        // design — the viewer opens the descriptor / archive
+        // itself. The factories re-open per attempt, so a
+        // password retry gets a fresh descriptor each time.
+        directPdf -> {
+            NativeImageBookViewer(
+                book = entity!!,
+                dao = dao,
+                onClose = onClose,
+                sourceFactory = { pw ->
+                    val pfd = context.contentResolver.openFileDescriptor(
+                        Uri.parse(entity!!.sourceUri!!), "r"
+                    ) ?: throw IOException("Cannot open in-place source")
+                    PdfiumNativeSource(pfd, context, pw)
+                },
+                loadingRes = R.string.pdf_native_loading,
+                errorRes = R.string.pdf_native_error,
+                isPdf = true
+            )
+        }
+        directCbz != null -> {
+            NativeImageBookViewer(
+                book = entity!!,
+                dao = dao,
+                onClose = onClose,
+                sourceFactory = { _ -> CbzNativeSource(directCbz!!) },
+                loadingRes = R.string.cbz_native_loading,
+                errorRes = R.string.cbz_native_error
+            )
         }
         // PDF routing, 2026-11-01 (PDFium engine): PDF books open
         // in the native viewer via PdfiumNativeSource — a fixed

@@ -47,7 +47,18 @@ data class BookEntity(
      * "IN_PLACE" (the user's own file, read where it lives).
      * Stored as a plain string so Room needs no type converter.
      */
-    val importMode: String = "COPY"
+    val importMode: String = "COPY",
+    /**
+     * SHA-256 of the book's content, when known (step 2 of the
+     * import-speed work). Copy imports fill it from the copy
+     * pass for free; in-place `content://` imports fill it
+     * later (background hash job / first open's working-copy
+     * build). Null means "not yet known", never "no hash":
+     * callers must fall back to hashing the file, exactly as
+     * before. Its readers: duplicate detection (answers
+     * without re-reading stored books) and record restore.
+     */
+    val contentHash: String? = null
 )
 
 /**

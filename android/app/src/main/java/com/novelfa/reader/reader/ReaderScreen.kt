@@ -498,7 +498,14 @@ fun ReaderScreen(
             // still opens instead of failing on a missing file.
             preparingFile = true
             val resolvedFile = withContext(Dispatchers.IO) {
-                InPlaceSource.resolve(context, entity)
+                InPlaceSource.resolve(context, entity) { hash ->
+                    // Persist the deferred content hash (step 2):
+                    // this build digested it for free.
+                    val cur = dao.getById(entity.id)
+                    if (cur != null && cur.contentHash == null) {
+                        dao.update(cur.copy(contentHash = hash))
+                    }
+                }
             }
             preparingFile = false
             // Archive choice, before any parse: a ZIP holding several

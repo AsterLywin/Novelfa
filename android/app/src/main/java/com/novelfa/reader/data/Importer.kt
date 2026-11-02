@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.util.Log
 import com.novelfa.reader.R
@@ -76,6 +77,41 @@ class ImportException(
  * files — empty user password — can open.
  */
 typealias PdfPasswordProvider = suspend (fileName: String, retry: Boolean) -> String?
+
+/**
+ * Per-import stage timer (step 1 of the import-speed work):
+ * logcat-only, no UI strings. Each stage transition logs how long
+ * the previous stage took, and the import end logs the total, so
+ * a slow import on a real phone names its stage instead of
+ * leaving the next optimization to guesswork. Tag: NovelfaImport.
+ */
+private class ImportStageTimer(private val label: String) {
+    private val startMs = SystemClock.elapsedRealtime()
+    private var lastMs = startMs
+    private var lastStage: String? = null
+
+    fun mark(stage: String?) {
+        val now = SystemClock.elapsedRealtime()
+        lastStage?.let {
+            Log.d("NovelfaImport", "$label stage=$it ms=${now - lastMs}")
+        }
+        lastStage = stage
+        lastMs = now
+    }
+
+    fun finish() {
+        val now = SystemClock.elapsedRealtime()
+        lastStage?.let {
+            Log.d("NovelfaImport", "$label stage=$it ms=${now - lastMs}")
+        }
+        Log.d("NovelfaImport", "$label total ms=${now - startMs}")
+    }
+}
+
+/** Copy/hash buffer for SAF streams (step 2): 8KB caused a syscall
+ * per chunk on providers that drip-feed; 64KB is the same size the
+ * stored-file hash already used, and costs one small allocation. */
+private const val COPY_BUFFER_SIZE = 64 * 1024
 
 class Importer(
     private val context: Context,
@@ -151,7 +187,11 @@ class Importer(
         }
         val oldSource = book.sourceUri
         db.bookDao().update(
-            book.copy(sourceUri = uri.toString(), filePath = newPath)
+            // A new location means a new file: the old content
+            // hash must not survive the relink, or duplicate
+            // detection and record restore would match the
+            // previous file's content.
+            book.copy(sourceUri = uri.toString(), filePath = newPath, contentHash = null)
         )
         runCatching {
             InPlaceSource.workingDir(context.cacheDir, bookId).deleteRecursively()
@@ -182,13 +222,16 @@ class Importer(
         // `content://` in-place book has no working copy yet (it is
         // materialized on first open), so requiring the file here
         // would silently drop its saved reading record on
-        // re-import. The file hash is only the fallback when no
-        // import hash exists; readEpubIdentifier is null-safe on
-        // a missing file (it catches the ZipFile failure).
-        // Remove on use: the hash is only needed for the restore right
-        // after import, so the map never grows past imports whose
-        // restore has not run yet (normally zero or one).
+        // re-import. Next is the persisted content hash (step 2):
+        // it answers without re-reading the stored file at all.
+        // The file hash is only the last fallback; readEpubIdentifier
+        // is null-safe on a missing file (it catches the ZipFile
+        // failure). Remove on use: the hash is only needed for
+        // the restore right after import, so the map never grows
+        // past imports whose restore has not run yet (normally
+        // zero or one).
         val hash = importHashes.remove(bookId)
+            ?: book.contentHash
             ?: if (!file.isFile) return@withContext false else sha256OfFile(file)
         val record = recordStore.find(
             hash, readEpubIdentifier(file)
@@ -241,10 +284,18 @@ class Importer(
         // explicit check the dialog's Cancel could not interrupt them
         // at all — the job was cancelled but the work ran on.
         val ioCtx = currentCoroutineContext()
+        // Stage timing (step 1): every onStage call below also marks
+        // the timer, so the dialog's stage names double as the
+        // measurement — no separate instrumentation path to drift.
+        val timer = ImportStageTimer("import")
+        val reportStage: (String?) -> Unit = { s ->
+            timer.mark(s)
+            onStage?.invoke(s)
+        }
         // Read once per import: the toggle only affects imports started
         // after it changes; a book already importing keeps its mode.
         val fastImport = fastImportEnabled()
-        onStage?.invoke(null)
+        reportStage(null)
         // When overwriting, find and delete the existing book with the same
         // original file name first.
         if (overwrite) {
@@ -304,7 +355,7 @@ class Importer(
                 )
             }.isSuccess
             if (persisted) {
-                return@withContext importInPlaceContent(sourceUri, id, fastImport, ioCtx, onStage)
+                return@withContext importInPlaceContent(sourceUri, id, fastImport, ioCtx, reportStage)
             }
         }
         // In-place `file://` import: the real file is the book.
@@ -314,22 +365,18 @@ class Importer(
         // are the exception: the reader has no password dialog at
         // open time, so today they are stored decrypted — an
         // in-place import of one falls back to the copy flow.
-        // The probe costs one full read for file:// PDFs; the PDF
-        // branch pays the same read again for its decrypt check,
-        // so this is one extra read, only for PDFs, in exchange
-        // for never writing decrypted bytes over the user's file.
+        // The probe used to cost a full readBytes for file://
+        // PDFs (and the PDF branch paid the same read again for
+        // its decrypt check); since step 3 it is a trailer-only
+        // seek probe (PdfParser.maybeEncryptedFile), so a plain
+        // PDF pays no full read anywhere at import.
         var inPlaceFile: File? = null
-        var inPlacePdfBytes: ByteArray? = null
         if (wantInPlace && sourceUri.scheme == "file") {
             val realFile = sourceUri.path?.let { File(it) }?.takeIf { it.isFile }
             if (realFile != null) {
                 val looksPdf = BookFormat.detectStrongContent(realFile) == BookFormat.PDF
-                val encrypted = if (looksPdf) {
-                    inPlacePdfBytes = runCatching { realFile.readBytes() }.getOrNull()
-                    inPlacePdfBytes?.let { PdfParser.maybeEncrypted(it) } ?: true
-                } else false
+                val encrypted = if (looksPdf) PdfParser.maybeEncryptedFile(realFile) else false
                 if (!encrypted) inPlaceFile = realFile
-                if (encrypted) inPlacePdfBytes = null
             }
         }
         // SHA-256 of the copied bytes (fast import only): computed
@@ -338,7 +385,7 @@ class Importer(
         // re-read behaviour exactly.
         var copyHash: String? = null
         try {
-            onStage?.invoke("copy")
+            reportStage("copy")
             if (inPlaceFile != null) {
                 // In-place file://: no copy at all. The hash (fast
                 // import only) is computed from the real file, for
@@ -356,7 +403,7 @@ class Importer(
                         // copyTo with a byte budget instead of unbounded.
                         var remaining = MAX_BOOK_BYTES
                         var zeroReads = 0
-                        val buf = ByteArray(8192)
+                        val buf = ByteArray(COPY_BUFFER_SIZE)
                         while (true) {
                             ioCtx.ensureActive()
                             val n = input.read(buf)
@@ -433,7 +480,7 @@ class Importer(
                 // EPUBs, and the dialog sat on "copy" all through
                 // it. The full parse now happens at first open,
                 // where the reader already unzipped on a cache miss.
-                onStage?.invoke("parse")
+                reportStage("parse")
                 val meta = try {
                     EpubEngine.metadata(destFile, displayName, openCacheDir) {
                         ioCtx.ensureActive()
@@ -473,10 +520,23 @@ class Importer(
                 // like any plain PDF, and the password itself is
                 // never stored.
                 ioCtx.ensureActive()
-                onStage?.invoke("decrypt")
-                val decrypted = resolvePdfDecryption(
-                    inPlacePdfBytes ?: destFile.readBytes(), displayName, passwordProvider
-                ) { ioCtx.ensureActive() }
+                reportStage("decrypt")
+                // Step 3: an unencrypted PDF never pays a full read
+                // here — the trailer probe answers from seeks
+                // alone, and only a genuinely encrypted file goes
+                // through the full read + decrypt path. In-place
+                // files already passed the same probe above, so
+                // they skip decryption entirely (and the guard
+                // below still fails loudly if that ever changes).
+                val decrypted = if (inPlaceFile != null) {
+                    null
+                } else if (!PdfParser.maybeEncryptedFile(destFile)) {
+                    null
+                } else {
+                    resolvePdfDecryption(
+                        destFile.readBytes(), displayName, passwordProvider
+                    ) { ioCtx.ensureActive() }
+                }
                 if (decrypted != null) {
                     // The pre-check above guarantees this never fires
                     // for in-place files (encrypted PDFs fall back
@@ -493,7 +553,7 @@ class Importer(
                     destFile.writeBytes(decrypted)
                 }
                 ioCtx.ensureActive()
-                onStage?.invoke("validate")
+                reportStage("validate")
                 pdfPageCountOrThrow(destFile, displayName)
                 // A re-imported file keeps its saved position: the
                 // record is keyed by content hash, and the same
@@ -528,7 +588,7 @@ class Importer(
                 // with the no-readable-sections message, exactly
                 // like a text-less book used to.
                 ioCtx.ensureActive()
-                onStage?.invoke("validate")
+                reportStage("validate")
                 val meta = try {
                     CbzEngine.metadata(destFile, displayName, openCacheDir) {
                         ioCtx.ensureActive()
@@ -552,7 +612,7 @@ class Importer(
                 // several books keep the archive title; the reader
                 // asks which book to open instead of guessing.
                 ioCtx.ensureActive()
-                onStage?.invoke("validate")
+                reportStage("validate")
                 val meta = try {
                     ZipEngine.metadata(destFile, displayName, openCacheDir) {
                         ioCtx.ensureActive()
@@ -576,7 +636,7 @@ class Importer(
                 // path unzipped every media file and DOM-parsed the
                 // whole body here; the full parse now happens at
                 // first open and corrects the row then.
-                onStage?.invoke("parse")
+                reportStage("parse")
                 val meta = try {
                     DocxEngine.metadata(destFile, displayName, openCacheDir) {
                         ioCtx.ensureActive()
@@ -598,7 +658,7 @@ class Importer(
                 // error here: it used to be, so pressing Cancel
                 // mid-parse showed a failure snackbar instead of
                 // just stopping the import.
-                onStage?.invoke("parse")
+                reportStage("parse")
                 try {
                     TxtEngine.open(destFile, openCacheDir, chapterFallback, displayName)
                 } catch (e: CancellationException) {
@@ -627,7 +687,7 @@ class Importer(
                 )
             }
             ioCtx.ensureActive()
-            onStage?.invoke("save")
+            reportStage("save")
             // Belt and braces on top of the titleFallback above: a
             // parser must never store the storage UUID as the book
             // title when the original file name is known. The generated
@@ -673,6 +733,14 @@ class Importer(
                     title = bookTitle,
                     filePath = destFile.absolutePath,
                     coverPath = coverPath,
+                    // Step 2: the copy pass already computed this
+                    // hash for free — persisting it means duplicate
+                    // detection and record restore never re-read
+                    // this book again (see LibraryViewModel and
+                    // applyReadingRecord). In-place content books
+                    // fill it later (deferred hash job / first
+                    // open), so null here means "not yet known".
+                    contentHash = copyHash,
                     totalChapters = imageBookPages ?: recordChapters
                         ?: metadataChapterCount ?: parsed.chapters.size,
                     dateAdded = Instant.now().toString(),
@@ -719,8 +787,10 @@ class Importer(
             if (format == BookFormat.TXT || format == BookFormat.MARKDOWN) {
                 CacheStamp.writeStamp(openCacheDir, destFile)
             }
+            timer.finish()
             id
         } catch (e: CancellationException) {
+            timer.finish()
             // Never swallow coroutine cancellation: clean up and rethrow so the
             // caller's scope cancels properly instead of faking an import error.
             // The dest guard is the in-place safety rule: `dest` IS the
@@ -732,12 +802,14 @@ class Importer(
             tmpDest.delete()
             throw e
         } catch (e: ImportException) {
+            timer.finish()
             Log.e("NovelfaImporter", "import failed: ${e.message}", e)
             openCacheDir.deleteRecursively()
             if (inPlaceFile == null) dest?.delete()
             tmpDest.delete()
             throw e
         } catch (e: Exception) {
+            timer.finish()
             Log.e("NovelfaImporter", "import failed: ${e.message}", e)
             openCacheDir.deleteRecursively()
             if (inPlaceFile == null) dest?.delete()
@@ -753,9 +825,13 @@ class Importer(
     /**
      * Register-only import for `content://` in-place books: the
      * persistable permission is already held (checked by the caller).
-     * One streaming pass hashes the file (duplicate/record checks)
-     * while keeping the head sample for [InPlaceSource.sniffFormat];
-     * nothing is copied, parsed, or covered here. The row's
+     * With fast import ON (the default) only the head sample is
+     * read here, for [InPlaceSource.sniffFormat] — the full-file
+     * hash pass that used to dominate this path is deferred to
+     * the background job below (and to the first open's copy,
+     * which digests for free). With fast import OFF the old
+     * single streaming hash pass is preserved. Nothing is copied,
+     * parsed, or covered here. The row's
      * [BookEntity.filePath] is the transient working-copy path
      * (see [InPlaceSource.resolve]), which does not exist yet —
      * the first open materializes it, then parses through the
@@ -777,50 +853,85 @@ class Importer(
         ioCtx: CoroutineContext,
         onStage: ((String?) -> Unit)?
     ): String = withContext(Dispatchers.IO) {
-        onStage?.invoke("validate")
+        val timer = ImportStageTimer("import-inplace:$id")
+        val reportStage: (String?) -> Unit = { s ->
+            timer.mark(s)
+            onStage?.invoke(s)
+        }
+        reportStage("validate")
         val displayName = queryDisplayName(sourceUri) ?: id
         val head = ByteArray(8192)
         var headLen = 0
-        var total = 0L
-        var zeroReads = 0
-        val digest = MessageDigest.getInstance("SHA-256")
-        context.contentResolver.openInputStream(sourceUri)?.use { input ->
-            val buf = ByteArray(8192)
-            while (true) {
-                ioCtx.ensureActive()
-                val n = input.read(buf)
-                if (n < 0) break
-                if (n == 0) {
-                    if (++zeroReads > 10000) {
-                        throw IOException("stalled input stream: $sourceUri")
+        // Step 2, deferred hash: when fast import is ON, this
+        // register-only path reads ONLY the head sample — the
+        // old full-file hash pass was the whole import time for
+        // a big in-place book. The hash is computed later, off
+        // the dialog's critical path, by the background job
+        // below (one streaming pass, then the saved-record
+        // restore the import-time path used to do), or for free
+        // during the first open's working-copy build, which
+        // digests while copying (InPlaceSource.resolve). When
+        // fast import is OFF, the old synchronous full hash is
+        // preserved exactly, including the size cap.
+        var syncHash: String? = null
+        if (fastImport) {
+            context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                var off = 0
+                while (off < head.size) {
+                    ioCtx.ensureActive()
+                    val n = input.read(head, off, head.size - off)
+                    if (n < 0) break
+                    off += n
+                }
+                headLen = off
+            } ?: throw IOException("Cannot open input stream: $sourceUri")
+        } else {
+            var total = 0L
+            var zeroReads = 0
+            val digest = MessageDigest.getInstance("SHA-256")
+            context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                val buf = ByteArray(COPY_BUFFER_SIZE)
+                while (true) {
+                    ioCtx.ensureActive()
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    if (n == 0) {
+                        if (++zeroReads > 10000) {
+                            throw IOException("stalled input stream: $sourceUri")
+                        }
+                        continue
                     }
-                    continue
+                    zeroReads = 0
+                    total += n
+                    if (total > MAX_BOOK_BYTES) {
+                        throw ImportException(
+                            "Book too large: exceeds $MAX_BOOK_BYTES bytes",
+                            messageFa = context.getString(R.string.import_error_too_large)
+                        )
+                    }
+                    digest.update(buf, 0, n)
+                    if (headLen < head.size) {
+                        val take = minOf(n, head.size - headLen)
+                        buf.copyInto(head, headLen, 0, take)
+                        headLen += take
+                    }
                 }
-                zeroReads = 0
-                total += n
-                if (total > MAX_BOOK_BYTES) {
-                    throw ImportException(
-                        "Book too large: exceeds $MAX_BOOK_BYTES bytes",
-                        messageFa = context.getString(R.string.import_error_too_large)
-                    )
-                }
-                digest.update(buf, 0, n)
-                if (headLen < head.size) {
-                    val take = minOf(n, head.size - headLen)
-                    buf.copyInto(head, headLen, 0, take)
-                    headLen += take
-                }
-            }
-        } ?: throw IOException("Cannot open input stream: $sourceUri")
-        val hash = digest.digest().joinToString("") { "%02x".format(it) }
-        importHashes[id] = hash
+            } ?: throw IOException("Cannot open input stream: $sourceUri")
+            syncHash = digest.digest().joinToString("") { "%02x".format(it) }
+            importHashes[id] = syncHash
+        }
         val format = InPlaceSource.sniffFormat(head, headLen, displayName)
             ?: throw ImportException(
                 "Unsupported book format: $displayName",
                 messageFa = context.getString(R.string.import_error_unsupported_format)
             )
-        val recordChapters = if (format == BookFormat.PDF) {
-            recordStore.find(hash, null)?.totalChapters?.takeIf { it > 0 }
+        // Only the synchronous (fast-import OFF) path knows the
+        // hash at insert time, so only it can carry a saved
+        // record's chapter count into the row — the deferred
+        // path restores the record in the background job below,
+        // once its hash exists.
+        val recordChapters = if (format == BookFormat.PDF && syncHash != null) {
+            recordStore.find(syncHash, null)?.totalChapters?.takeIf { it > 0 }
         } else null
         val workingPath = InPlaceSource.workingFile(context.cacheDir, id, format.extension).absolutePath
         val bookTitle = File(displayName).nameWithoutExtension
@@ -849,7 +960,7 @@ class Importer(
             }.getOrNull()
         }
         ioCtx.ensureActive()
-        onStage?.invoke("save")
+        reportStage("save")
         db.bookDao().insert(
             BookEntity(
                 id = id,
@@ -860,10 +971,43 @@ class Importer(
                 dateAdded = Instant.now().toString(),
                 originalFileName = displayName,
                 sourceUri = sourceUri.toString(),
-                importMode = IMPORT_MODE_IN_PLACE
+                importMode = IMPORT_MODE_IN_PLACE,
+                // Deferred (fast import ON): null until the
+                // background hash job below — or the first
+                // open's working-copy build — fills it in.
+                contentHash = syncHash
             )
         )
         if (fastImport) {
+            // Deferred content hash (step 2): one streaming pass,
+            // off the dialog's critical path. The row update is
+            // guarded (only when still unknown) so a first open
+            // that already digested during its working-copy
+            // build cannot be clobbered, and the restore below
+            // mirrors applyReadingRecord, minus the import-hash
+            // map — which this path never fills any more.
+            backgroundScope.launch {
+                runCatching {
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    var total = 0L
+                    context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                        val buf = ByteArray(COPY_BUFFER_SIZE)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            total += n
+                            if (total > MAX_BOOK_BYTES) return@runCatching
+                            digest.update(buf, 0, n)
+                        }
+                    } ?: return@runCatching
+                    val h = digest.digest().joinToString("") { "%02x".format(it) }
+                    val current = db.bookDao().getById(id) ?: return@runCatching
+                    if (current.contentHash == null) {
+                        db.bookDao().update(current.copy(contentHash = h))
+                    }
+                    restoreRecordForHash(id, h)
+                }
+            }
             val deferredTitle = bookTitle
             val deferredPath = workingPath
             backgroundScope.launch {
@@ -883,7 +1027,27 @@ class Importer(
                 }
             }
         }
+        timer.finish()
         id
+    }
+
+    /**
+     * Delayed record restore for deferred-hash in-place imports:
+     * the same lookup applyReadingRecord does, run once the
+     * background hash job knows the content hash. applyRecordTo
+     * never regresses progress (see ReadingRecords), so a user
+     * who already started reading is only ever moved forward
+     * to their previously recorded position, exactly as the
+     * import-time restore would have.
+     */
+    private suspend fun restoreRecordForHash(bookId: String, hash: String) {
+        if (recordStore.isEmpty()) return
+        val dao = db.bookDao()
+        val book = dao.getById(bookId) ?: return
+        if (book.isPrivate) return
+        val record = recordStore.find(hash, null) ?: return
+        val updated = applyRecordTo(book, record) ?: return
+        dao.update(updated)
     }
 
     /**
@@ -1052,7 +1216,7 @@ class Importer(
         runCatching {
             val digest = MessageDigest.getInstance("SHA-256")
             context.contentResolver.openInputStream(uri)?.use { input ->
-                val buf = ByteArray(8192)
+                val buf = ByteArray(COPY_BUFFER_SIZE)
                 while (true) {
                     ioCtx.ensureActive()
                     val n = input.read(buf)

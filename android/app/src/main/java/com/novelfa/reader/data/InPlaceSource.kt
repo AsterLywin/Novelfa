@@ -145,8 +145,21 @@ object InPlaceSource {
      * missing or the source has changed. Throws IOException when
      * the source is gone — callers show the "file missing" UI
      * instead of opening the reader into an error.
+     *
+     * [onHash] (step 2, deferred hash): when the working copy is
+     * built here, its bytes are digested WHILE copying — the hash
+     * the register-only import skipped, for free — and reported
+     * to the caller, which persists it on the row. On a cache
+     * hit the hash is read back from the `.source-sha256`
+     * sidecar written during that build, so no re-read is ever
+     * needed to learn it. Callers without a row to update pass
+     * nothing; the hash is best-effort, never load-bearing.
      */
-    suspend fun resolve(context: Context, book: BookEntity): File = withContext(Dispatchers.IO) {
+    suspend fun resolve(
+        context: Context,
+        book: BookEntity,
+        onHash: (suspend (String) -> Unit)? = null
+    ): File = withContext(Dispatchers.IO) {
         if (!book.isInPlace()) return@withContext File(book.filePath)
         val uriStr = book.sourceUri ?: return@withContext File(book.filePath)
         val uri = Uri.parse(uriStr)
@@ -167,6 +180,14 @@ object InPlaceSource {
                 val existing = dir.listFiles()
                     ?.firstOrNull { it.isFile && it.name.startsWith("source.") }
                 if (existing != null && meta.takeIf { it.isFile }?.readText() == wantedMeta) {
+                    // Cache hit: the hash (if a previous build
+                    // recorded one) comes from the sidecar, never
+                    // from re-reading the working copy.
+                    runCatching {
+                        File(dir, ".source-sha256").takeIf { it.isFile }
+                            ?.readText()?.takeIf { it.isNotBlank() }
+                            ?.let { onHash?.invoke(it) }
+                    }
                     return@withContext existing
                 }
                 val ext = book.filePath.substringAfterLast('.', "")
@@ -175,10 +196,29 @@ object InPlaceSource {
                         .orEmpty()
                 val working = workingFile(context.cacheDir, book.id, ext)
                 existing?.takeIf { it != working }?.delete()
+                // Digest while copying (step 2): this build is
+                // already a full read of the source, so the hash
+                // costs nothing here — unlike the import-time
+                // pass it replaces. The sidecar lets later
+                // cache hits report the hash without re-reading.
+                val digest = java.security.MessageDigest.getInstance("SHA-256")
                 context.contentResolver.openInputStream(uri)?.use { input ->
-                    working.outputStream().use { output -> input.copyTo(output) }
+                    working.outputStream().use { output ->
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            output.write(buf, 0, n)
+                            digest.update(buf, 0, n)
+                        }
+                    }
                 } ?: throw IOException("Cannot open in-place source: $uriStr")
                 meta.writeText(wantedMeta)
+                runCatching {
+                    val hash = digest.digest().joinToString("") { "%02x".format(it) }
+                    File(dir, ".source-sha256").writeText(hash)
+                    onHash?.invoke(hash)
+                }
                 // A mislabelled zip container is corrected here, not
                 // at import: the working copy is renamed to the
                 // strongly-sniffed extension so the open path (which
