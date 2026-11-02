@@ -149,15 +149,22 @@ object CoverBackfill {
             val doc = core.newDocument(pfd)
             try {
                 if (core.getPageCount(doc) <= 0) return null
+                // PdfiumCore page rule (see PdfiumNativeSource):
+                // a page must be opened before any per-page
+                // call, or its size reads 0 and the render
+                // silently produces a blank bitmap — which
+                // would then be saved as a white cover. A
+                // page that cannot be opened, or has no size,
+                // returns null so the caller keeps the
+                // generated cover instead of a white one.
+                if (!doc.hasPage(0)) core.openPage(doc, 0)
+                if (!doc.hasPage(0)) return null
                 val widthPt = core.getPageWidthPoint(doc, 0)
                 val heightPt = core.getPageHeightPoint(doc, 0)
+                if (widthPt <= 0 || heightPt <= 0) return null
                 val width = 600
-                val height = if (widthPt > 0) {
-                    (heightPt.toFloat() * width / widthPt.toFloat())
-                        .toInt().coerceAtLeast(1)
-                } else {
-                    width
-                }
+                val height = (heightPt.toFloat() * width / widthPt.toFloat())
+                    .toInt().coerceAtLeast(1)
                 val bitmap = Bitmap.createBitmap(
                     width, height, Bitmap.Config.ARGB_8888
                 )

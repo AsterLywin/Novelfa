@@ -44,6 +44,21 @@ import java.io.File
  * a page render takes tens of milliseconds and must never run
  * on the main thread. The viewer closes this source on
  * dispose; [close] is idempotent.
+ *
+ * PdfiumCore page rule, found the hard way (2026-11-02, a
+ * blank white PDF page on the phone): a page MUST be opened
+ * with [PdfiumCore.openPage] before ANY per-page call on it.
+ * Without it, [PdfiumCore.getPageWidthPoint] /
+ * [PdfiumCore.getPageHeightPoint] return 0 (so the bitmap
+ * falls back to a square) and [PdfiumCore.renderPageBitmap]
+ * silently renders nothing — its own code catches the
+ * resulting NullPointerException and only logs it, so the
+ * caller gets a blank bitmap and no error, and the viewer
+ * shows a white page instead of the failure placeholder.
+ * [ensurePageOpen] is therefore called before every size
+ * query and render, and a page whose size still reads 0
+ * after opening fails loudly (failure placeholder) instead
+ * of ever producing another silent blank page.
  */
 internal class PdfiumNativeSource(
     private val pdfFile: File,
@@ -69,21 +84,45 @@ internal class PdfiumNativeSource(
         }.getOrDefault(emptyList())
     }
 
+    /**
+     * Opens [index] in the PdfiumCore document if it is not
+     * open yet (see the class note: per-page calls on an
+     * unopened page silently do nothing). Opening is lazy,
+     * one page at a time — opening every page at init would
+     * load a whole long book just to show page one.
+     * [PdfiumCore.closeDocument] closes every opened page,
+     * so there is nothing extra to close here.
+     */
+    private fun ensurePageOpen(document: PdfDocument, index: Int) {
+        if (!document.hasPage(index)) {
+            core.openPage(document, index)
+        }
+        if (!document.hasPage(index)) {
+            throw IllegalStateException("PDFium could not open page $index")
+        }
+    }
+
     override fun renderPage(index: Int, targetWidthPx: Int): Bitmap {
         val document = doc
             ?: throw IllegalStateException("PDFium document is closed")
         if (index < 0 || index >= pageCount) {
             throw IndexOutOfBoundsException("PDF page $index out of range")
         }
+        ensurePageOpen(document, index)
         val widthPt = core.getPageWidthPoint(document, index)
         val heightPt = core.getPageHeightPoint(document, index)
-        var width = targetWidthPx.coerceAtLeast(1)
-        var height = if (widthPt > 0) {
-            (heightPt.toFloat() * width / widthPt.toFloat())
-                .toInt().coerceAtLeast(1)
-        } else {
-            width
+        if (widthPt <= 0 || heightPt <= 0) {
+            // Never fall back to a square blank page again:
+            // a size of 0 after opening means the page is
+            // genuinely unreadable, and the viewer must show
+            // its failure placeholder, not a white page.
+            throw IllegalStateException(
+                "PDFium page $index has no size ($widthPt x $heightPt)"
+            )
         }
+        var width = targetWidthPx.coerceAtLeast(1)
+        var height = (heightPt.toFloat() * width / widthPt.toFloat())
+            .toInt().coerceAtLeast(1)
         if (height > MAX_RENDER_HEIGHT) {
             val shrink = MAX_RENDER_HEIGHT.toFloat() / height.toFloat()
             height = MAX_RENDER_HEIGHT
