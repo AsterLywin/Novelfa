@@ -156,15 +156,17 @@ fun ZoomablePageContainer(
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                 while (true) {
-                    // requireUnconsumed = false (2026-11-02):
-                    // the pager/list may consume the down
-                    // first, and this loop must still track
-                    // the gesture — it never consumes a tap
-                    // itself, and for moves it already checks
-                    // positionChangeConsumed, so tracking a
-                    // consumed down cannot starve a scroll or
-                    // a page turn.
-                    val down = awaitFirstDown(requireUnconsumed = false)
+                    // Plain awaitFirstDown, exactly as before
+                    // 343371d7: that build's requireUnconsumed
+                    // = false + upConsumed gate broke zoom on
+                    // the phone (10s on page 8, no zoom, no
+                    // diag message) — the pager/list consumes
+                    // the tap up, so any gate on consumption
+                    // kills both the single tap and the
+                    // double-tap timer. This loop therefore
+                    // reports taps unconditionally, and does
+                    // NOT check consumption at all.
+                    val down = awaitFirstDown()
                     val downPos = down.position
                     var pinch = false
                     var pastSlop = false
@@ -173,15 +175,10 @@ fun ZoomablePageContainer(
                     var totalDrag = Offset.Zero
                     val slop = viewConfiguration.touchSlop
                     var gestureActive = true
-                    var upConsumed = false
                     while (gestureActive) {
                         val event = awaitPointerEvent()
                         val pressed = event.changes.filter { it.pressed }
-                        if (pressed.isEmpty()) {
-                            upConsumed =
-                                event.changes.any { it.isConsumed }
-                            break
-                        }
+                        if (pressed.isEmpty()) break
                         if (pressed.size >= 2) {
                             // Pinch: zoom around the focal point,
                             // pan with the centroid, consume all.
@@ -286,11 +283,11 @@ fun ZoomablePageContainer(
                     // tap landed on THIS page, so it owns
                     // both the double-tap zoom decision below
                     // and, since 2026-11-02, the single-tap
-                    // report itself: a tap whose up was
-                    // already consumed (a bar button, a retry
-                    // button) is not a page tap and is skipped
-                    // here, which is what keeps bar taps from
-                    // toggling the chrome.
+                    // report itself. Consumption is NOT
+                    // checked here: the pager/list consumes
+                    // the tap up (proven by 343371d7), so a
+                    // consumed-up check would kill the tap
+                    // and the double-tap timer with it.
                     if (!pastSlop) {
                         val now = System.currentTimeMillis()
                         if (now - lastTapUpMs < 300 &&
@@ -327,15 +324,16 @@ fun ZoomablePageContainer(
                             // for this one (a lone second tap
                             // never suppresses anything).
                             onDoubleTap()
-                        } else if (!upConsumed) {
+                        } else {
                             // Single page tap: report it for
                             // the chrome toggle (the viewer
                             // waits 300ms, so a second tap
                             // that turns out to be a double
-                            // still suppresses it). A consumed
-                            // tap sets neither this nor the
-                            // double-tap timer: a bar tap must
-                            // not count as a page tap at all.
+                            // still suppresses it), and arm
+                            // the double-tap timer exactly as
+                            // before 343371d7 — that build's
+                            // consumed-up gate is what broke
+                            // double-tap zoom, so it is gone.
                             onTap()
                             lastTapUpMs = now
                             lastTapPos = downPos
