@@ -1,7 +1,10 @@
 package com.novelfa.reader.reader
 
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -46,12 +49,18 @@ import androidx.compose.ui.unit.IntSize
  *   this loop never fired on the phone).
  * - Double-tap zoom (ComicScreen's double-tap modes, simplified
  *   to one): a double-tap toggles 1x <-> 2x, zooming around the
- *   tap point — the tapped detail lands under the finger. The
- *   trade-off, stated plainly: the viewer delays its chrome
- *   toggle by 300ms to tell a single tap from the first tap of
- *   a double-tap (the same window PhotoView apps use), so every
- *   chrome toggle now takes 300ms. Without that delay a
- *   double-tap would toggle the chrome twice (a flicker).
+ *   tap point — the tapped detail lands under the finger — and
+ *   it animates there over ~120ms (ComicScreen's transition
+ *   duration) instead of snapping. The trade-off, stated
+ *   plainly: the viewer delays its chrome toggle by 300ms to
+ *   tell a single tap from the first tap of a double-tap (the
+ *   same window PhotoView apps use), so every chrome toggle
+ *   now takes 300ms. Without that delay a double-tap would
+ *   toggle the chrome twice (a flicker).
+ * - Global zoom: the scale is shared by every page in the
+ *   book (see zoomScale), not kept per page — a zoom on one
+ *   page applies to all pages, and turning the page no longer
+ *   snaps back to 1x.
  *
  * Limits, stated plainly: the touch area is the page's layout
  * box — a zoomed image draws beyond it (graphicsLayer does not
@@ -81,9 +90,34 @@ import androidx.compose.ui.unit.IntSize
  */
 private const val MAX_ZOOM = 4f
 
+/**
+ * One double-tap zoom animation: from the scale/offset the
+ * page had when the double-tap landed, to the target scale,
+ * around the tap point. Held in state (not in the gesture
+ * loop) so the animation itself can run in a composable
+ * LaunchedEffect, where Animatable is allowed — the loop
+ * runs in a restricted scope where it is not.
+ */
+private data class ZoomAnimTarget(
+    val fromScale: Float,
+    val fromOffset: Offset,
+    val toScale: Float,
+    val tapPos: Offset
+)
+
 @Composable
 fun ZoomablePageContainer(
     modifier: Modifier,
+    // The viewer's global zoom (1..4), shared by every page
+    // in this book: when one page is pinched or double-tapped
+    // to a settled scale, the viewer writes it here, and
+    // every page — the current one, its neighbours, and any
+    // page composed later — shows that same scale. Before
+    // this, each page kept its own scale, so turning the
+    // page snapped back to 1x and zoom felt per-page only.
+    // The sync below is guarded by equality, so a page
+    // reporting its own settled scale does not reset itself.
+    zoomScale: Float = 1f,
     // No tap reporting here anymore: the page item's outer
     // Box reports taps with a passive listener (see
     // NativePageItem), which can neither starve nor be
@@ -114,14 +148,20 @@ fun ZoomablePageContainer(
     onTap: () -> Unit = {},
     content: @Composable () -> Unit
 ) {
-    // Plain state, not Animatable: the gesture loop runs in a
-    // restricted suspension scope, where Animatable's suspend
-    // snapTo/stop are not callable — and nothing here animates
-    // (double-tap zoom snaps, it does not animate), so direct
-    // assignment is all the loop needs.
-    var scale by remember { mutableFloatStateOf(1f) }
+    // Plain state, not Animatable, for the gesture loop: the
+    // loop runs in a restricted suspension scope, where
+    // Animatable's suspend snapTo/stop are not callable, so
+    // direct assignment is all the loop needs. The double-tap
+    // animation below is the exception, and it lives in a
+    // composable LaunchedEffect (where Animatable IS allowed),
+    // driven by zoomAnimTarget state the loop only sets.
+    // Initial scale is the viewer's global zoom, so a page
+    // composed after a zoom (a turned-to page, a strip page
+    // below) starts at that zoom instead of snapping to 1x.
+    var scale by remember { mutableFloatStateOf(zoomScale) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
+    var zoomAnimTarget by remember { mutableStateOf<ZoomAnimTarget?>(null) }
     // Last tap-up, for double-tap detection: a second tap-up
     // within 300ms and near the first is a double-tap, not two
     // single taps. Reset to 0 after a double-tap, so a third
@@ -130,12 +170,71 @@ fun ZoomablePageContainer(
     var lastTapPos by remember { mutableStateOf(Offset.Zero) }
     // Scale last reported to onScaleChange, so a gesture that
     // ends at the same scale it started at reports nothing.
-    var lastReportedScale by remember { mutableFloatStateOf(1f) }
+    var lastReportedScale by remember { mutableFloatStateOf(zoomScale) }
 
     fun clampOffset(o: Offset, s: Float): Offset {
         val maxX = ((boxSize.width * s - boxSize.width) / 2f).coerceAtLeast(0f)
         val maxY = ((boxSize.height * s - boxSize.height) / 2f).coerceAtLeast(0f)
         return Offset(o.x.coerceIn(-maxX, maxX), o.y.coerceIn(-maxY, maxY))
+    }
+
+    // Global-zoom sync: when the viewer writes a new global
+    // zoom (another page settled there), this page follows.
+    // Guarded by equality, so a page reporting its own
+    // settled scale does not reset its own offset mid-gesture.
+    // A zoom back to 1x resets the pan offset: at 1x the
+    // clamp is zero anyway, so a stale offset would only
+    // shift the page for one frame.
+    LaunchedEffect(zoomScale) {
+        if (scale != zoomScale) {
+            scale = zoomScale
+            offset = if (zoomScale <= 1f) {
+                Offset.Zero
+            } else {
+                clampOffset(offset, zoomScale)
+            }
+            lastReportedScale = zoomScale
+        }
+    }
+
+    // Double-tap zoom animation, ComicScreen's transition
+    // duration (~120ms): the scale animates from the scale
+    // the page had to the double-tap target, around the tap
+    // point, instead of snapping — the snap was the visible
+    // "zoom is not smooth" hitch. The settled scale is
+    // reported only when the animation completes, never per
+    // frame, so the sharper re-render still runs once, after
+    // the gesture, never during it. Cancelling (a new down
+    // sets the target to null) leaves the scale at its
+    // intermediate value, and the next gesture starts from
+    // there — the animation never snaps back.
+    LaunchedEffect(zoomAnimTarget) {
+        val target = zoomAnimTarget ?: return@LaunchedEffect
+        val center = Offset(
+            boxSize.width / 2f,
+            boxSize.height / 2f
+        )
+        // Plain animate(), not Animatable: Animatable's
+        // constructor needs an explicit type converter in
+        // this Compose version, while animate() handles
+        // Float directly — same 120ms tween, same per-frame
+        // focal math, no converter boilerplate.
+        animate(
+            initialValue = target.fromScale,
+            targetValue = target.toScale,
+            animationSpec = tween(durationMillis = 120)
+        ) { value, _ ->
+            scale = value
+            offset = clampOffset(
+                (target.tapPos - center) *
+                    (1f - value / target.fromScale) +
+                    target.fromOffset * (value / target.fromScale),
+                value
+            )
+        }
+        lastReportedScale = target.toScale
+        onScaleChange(target.toScale)
+        zoomAnimTarget = null
     }
 
     Box(
@@ -165,6 +264,11 @@ fun ZoomablePageContainer(
                     // NOT check consumption at all.
                     val down = awaitFirstDown()
                     val downPos = down.position
+                    // A new gesture cancels any double-tap
+                    // animation still running: the scale stays
+                    // at its intermediate value, and this
+                    // gesture starts from there.
+                    zoomAnimTarget = null
                     var pinch = false
                     var pastSlop = false
                     var prevCentroid = Offset.Zero
@@ -292,30 +396,19 @@ fun ZoomablePageContainer(
                         ) {
                             // Double-tap: 1x <-> 2x around the
                             // tap point (same focal math as the
-                            // pinch). onScaleChange fires so the
-                            // sharper re-render kicks in at 2x.
+                            // pinch). The zoom itself is NOT set
+                            // here: the animation effect above
+                            // animates it over 120ms and reports
+                            // the settled scale only when it
+                            // completes, so the sharper re-render
+                            // kicks in once, after the zoom.
                             lastTapUpMs = 0L
-                            if (scale > 1.05f) {
-                                scale = 1f
-                                offset = Offset.Zero
-                                lastReportedScale = 1f
-                                onScaleChange(1f)
-                            } else {
-                                val newScale = 2f
-                                val center = Offset(
-                                    boxSize.width / 2f,
-                                    boxSize.height / 2f
-                                )
-                                offset = clampOffset(
-                                    (downPos - center) *
-                                        (1f - newScale / scale) +
-                                        offset * (newScale / scale),
-                                    newScale
-                                )
-                                scale = newScale
-                                lastReportedScale = newScale
-                                onScaleChange(newScale)
-                            }
+                            zoomAnimTarget = ZoomAnimTarget(
+                                fromScale = scale,
+                                fromOffset = offset,
+                                toScale = if (scale > 1.05f) 1f else 2f,
+                                tapPos = downPos
+                            )
                             // Confirmed double-tap: the viewer
                             // drops the pending chrome toggle
                             // for this one (a lone second tap

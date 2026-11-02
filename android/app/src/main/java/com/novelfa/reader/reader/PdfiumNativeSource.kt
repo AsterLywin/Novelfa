@@ -146,6 +146,30 @@ internal class PdfiumNativeSource(
     }
 
     /**
+     * Bounds-only page size (PDFium points, already
+     * accounting for the page's /Rotate), without rendering
+     * a bitmap — the PDF half of ComicScreen's dimension
+     * prefetch. The base interface documents this as null
+     * for PDF sources ("no native size to unify"), but a
+     * ratio IS what the strip placeholder needs to avoid
+     * jumping when the bitmap lands, and points give that
+     * ratio exactly, without pixels. Opening a page is
+     * parsing, not rendering, so it stays cheap — the same
+     * lazy rule as renderPage, just without the bitmap.
+     */
+    override fun nativePageSize(index: Int): Pair<Int, Int>? {
+        val document = doc ?: return null
+        if (closed || index < 0 || index >= pageCount) return null
+        return runCatching {
+            ensurePageOpen(document, index)
+            val widthPt = core.getPageWidthPoint(document, index)
+            val heightPt = core.getPageHeightPoint(document, index)
+            if (widthPt <= 0 || heightPt <= 0) null
+            else widthPt to heightPt
+        }.getOrNull()
+    }
+
+    /**
      * Word count of one page for XP credit (see [PdfiumText]):
      * 0 when the bridge is absent, which still earns the 1 XP
      * floor. The bridge document is opened lazily on first use

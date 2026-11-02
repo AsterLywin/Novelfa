@@ -1612,6 +1612,18 @@ private fun NativeImageBookViewer(
             jumpTo(currentPage)
         }
     }
+    // Global finger zoom (pinch / double-tap), shared by every
+    // page in this book — NOT the sheet zoom steps above, which
+    // are per-book render widths and already apply to all
+    // pages. A pinch or double-tap on one page settles to a
+    // scale, the viewer writes it here, and every Zoomable
+    // page follows it (see ZoomablePageContainer.zoomScale),
+    // so turning the page no longer snaps back to 1x.
+    // Session-only, like ComicScreen's PhotoView zoom: it is
+    // deliberately NOT saved per book — a saved 2x would
+    // reopen every page zoomed, which is not what a reader
+    // expects from a fresh open. Reset per book.
+    var globalZoom by remember(book.id) { mutableFloatStateOf(1f) }
 
     // ComicScreen-style chrome. The old bars were always visible
     // and crowded: five text buttons up top, two more below, on a
@@ -1904,6 +1916,8 @@ private fun NativeImageBookViewer(
                             halfSide = halfSide,
                             onTap = { handlePageTap() },
                             onDoubleTap = { tapSuppress = true },
+                            globalZoom = globalZoom,
+                            onZoomSettled = { globalZoom = it },
                             bitmapCache = pageBitmapCache
                         )
                     }
@@ -2019,6 +2033,8 @@ private fun NativeImageBookViewer(
                                 horizontalStrip = true,
                                 onTap = { handlePageTap() },
                                 onDoubleTap = { tapSuppress = true },
+                                globalZoom = globalZoom,
+                                onZoomSettled = { globalZoom = it },
                                 bitmapCache = pageBitmapCache
                             )
                         }
@@ -2062,6 +2078,8 @@ private fun NativeImageBookViewer(
                             manualCropRect = manualCropRects[page],
                             onTap = { handlePageTap() },
                             onDoubleTap = { tapSuppress = true },
+                            globalZoom = globalZoom,
+                            onZoomSettled = { globalZoom = it },
                             bitmapCache = pageBitmapCache
                         )
                     }
@@ -3981,6 +3999,13 @@ private fun NativePageItem(
     // second tap on its own (see the viewer note).
     onTap: () -> Unit = {},
     onDoubleTap: () -> Unit = {},
+    // Global finger zoom (see the viewer note): the scale
+    // every page in this book currently shows, and the
+    // callback a settled pinch/double-tap on THIS page
+    // reports through, so the viewer can write it back for
+    // all pages. Defaults keep old callers compiling.
+    globalZoom: Float = 1f,
+    onZoomSettled: (Float) -> Unit = {},
     // The viewer's page-return park (see
     // NativePageBitmapCache). Null = today's behaviour exactly:
     // render on compose, recycle on dispose, no parking.
@@ -4039,12 +4064,37 @@ private fun NativePageItem(
     // Threshold-guarded: the container reports only the
     // settled scale (once per gesture), and only a threshold
     // crossing re-renders — so a re-render never runs
-    // mid-pinch and stalls the gesture.
+    // mid-pinch and stalls the gesture. Every settled scale
+    // is also reported to the viewer as the new global zoom,
+    // so all pages follow it (see globalZoom above).
     val onPinchScale: (Float) -> Unit = { s ->
         if (s > 1.75f && renderScale != 2) {
             renderScale = 2
         } else if (s < 1.25f && renderScale != 1) {
             renderScale = 1
+        }
+        onZoomSettled(s)
+    }
+    // Known page ratio (width / height) from the source's
+    // bounds-only size — ComicScreen's dimension prefetch:
+    // CBZ reads image headers, PDF reads PDFium points, both
+    // without decoding pixels, so the strip placeholder can
+    // already be the page's real height before the bitmap
+    // arrives. Without it the placeholder is a fixed 200dp
+    // and every page jumps to its real height when its
+    // bitmap lands — the fling-breaking jump in fast scroll.
+    // Null until the query returns (or the source has no
+    // size), in which case the old 200dp placeholder stands.
+    // View rotation swaps it below (90/270), crop does not:
+    // a cropped page's ratio is only known after the crop,
+    // so a cropped page still jumps once — crop is opt-in,
+    // and the uncropped ratio is still closer than 200dp.
+    var knownRatio by remember(page) { mutableStateOf<Float?>(null) }
+    LaunchedEffect(page) {
+        knownRatio = withContext(Dispatchers.IO) {
+            runCatching { source.nativePageSize(page) }.getOrNull()
+                ?.takeIf { it.first > 0 && it.second > 0 }
+                ?.let { it.first.toFloat() / it.second.toFloat() }
         }
     }
 
@@ -4483,6 +4533,13 @@ private fun NativePageItem(
                     } else {
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
                     },
+                    // Animated pages have no bitmap re-render
+                    // to trigger, so the settled scale goes
+                    // straight to the global zoom, not through
+                    // onPinchScale (which would re-run the
+                    // pipeline effect for no bitmap).
+                    zoomScale = globalZoom,
+                    onScaleChange = onZoomSettled,
                     onDoubleTap = onDoubleTap,
                     onTap = onTap,
                 ) {
@@ -4612,6 +4669,7 @@ private fun NativePageItem(
                                 modifier = Modifier
                                     .fillMaxWidth(shrink)
                                     .aspectRatio(ratio),
+                                zoomScale = globalZoom,
                                 onScaleChange = onPinchScale,
                                 onDoubleTap = onDoubleTap,
                                 onTap = onTap,
@@ -4645,6 +4703,7 @@ private fun NativePageItem(
                     } else {
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
                     },
+                    zoomScale = globalZoom,
                     onScaleChange = onPinchScale,
                     onDoubleTap = onDoubleTap,
                     onTap = onTap,
@@ -4721,11 +4780,41 @@ private fun NativePageItem(
             }
         }
         else -> {
+            // Loading placeholder: when the page ratio is
+            // already known (see knownRatio), the placeholder
+            // is the page's real size — same shrink, same
+            // aspect as the bitmap branch — so the item does
+            // NOT jump when the bitmap lands. That jump was
+            // the fast-scroll break: every page arriving
+            // shifted the list and killed the fling. When the
+            // ratio is not known yet, the old fixed 200dp
+            // placeholder stands, and the item jumps once,
+            // exactly as before.
+            val effectiveRatio = knownRatio?.let {
+                if (viewRotation == 90 || viewRotation == 270) 1f / it else it
+            }
+            val placeholderShrink = if (paddingRatio > 0f) {
+                (1f - 1.25f * paddingRatio).coerceAtLeast(0.5f)
+            } else {
+                1f
+            }
             Box(
                 modifier = (if (paged) {
                     Modifier.fillMaxSize()
+                } else if (horizontalStrip) {
+                    if (effectiveRatio != null) {
+                        Modifier.fillMaxHeight(placeholderShrink)
+                            .aspectRatio(effectiveRatio)
+                    } else {
+                        Modifier.fillMaxHeight().width(200.dp)
+                    }
                 } else {
-                    if (horizontalStrip) Modifier.fillMaxHeight().width(200.dp) else Modifier.fillMaxWidth().height(200.dp)
+                    if (effectiveRatio != null) {
+                        Modifier.fillMaxWidth(placeholderShrink)
+                            .aspectRatio(effectiveRatio)
+                    } else {
+                        Modifier.fillMaxWidth().height(200.dp)
+                    }
                 }),
                 contentAlignment = Alignment.Center
             ) {
