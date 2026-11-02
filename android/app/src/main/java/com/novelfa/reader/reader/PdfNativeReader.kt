@@ -215,9 +215,13 @@ import kotlinx.coroutines.withContext
  *   (no folders) shows no chapter control at all, reading
  *   exactly as before.
  * - CBR (RAR) is not supported: it needs a RAR decoder.
- * - Password PDFs work only because import already stores them
- *   decrypted; neither renderer can open an encrypted file
- *   without a password, so this viewer never sees one.
+ * - Password PDFs: import still stores copy-mode PDFs
+ *   decrypted (so most PDFs never prompt), but a PDF that
+ *   reaches this viewer still encrypted — an in-place or
+ *   directly opened file — is NOT a dead end anymore: the
+ *   viewer asks for its password here (see PdfiumNativeSource
+ *   .needsPassword and the viewer dialog), session-only,
+ *   never persisted, exactly like the ZIP password.
  */
 
 /** One page source for the native viewer, PDF or CBZ alike. */
@@ -848,9 +852,10 @@ fun PdfReaderRoute(
                 book = entity!!,
                 dao = dao,
                 onClose = onClose,
-                sourceFactory = { PdfiumNativeSource(bookFile, context) },
+                sourceFactory = { pw -> PdfiumNativeSource(bookFile, context, pw) },
                 loadingRes = R.string.pdf_native_loading,
-                errorRes = R.string.pdf_native_error
+                errorRes = R.string.pdf_native_error,
+                isPdf = true
             )
         }
         BookFormat.detect(resolvedFile!!) == BookFormat.CBZ -> {
@@ -1024,7 +1029,13 @@ private fun NativeImageBookViewer(
     onClose: () -> Unit,
     sourceFactory: (CharArray?) -> NativePageSource,
     loadingRes: Int,
-    errorRes: Int
+    errorRes: Int,
+    // True only on the PDF route: the password dialog then
+    // uses the PDF strings (title + book title + Unlock),
+    // otherwise the ZIP strings (Archive password + OK).
+    // Default false, so the CBZ and image-ZIP routes — which
+    // do not pass it — keep exactly their old dialog.
+    isPdf: Boolean = false
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1067,25 +1078,44 @@ private fun NativeImageBookViewer(
 
     var source by remember { mutableStateOf<NativePageSource?>(null) }
     var openError by remember { mutableStateOf(false) }
-    // Encrypted-archive password (ComicScreen's ZIP password
-    // support): null until the user supplies one. The open
-    // effect restarts when it changes, so submitting the
-    // dialog retries the open with the password. Session-only
-    // by design — a password is never persisted.
-    var zipPassword by remember { mutableStateOf<CharArray?>(null) }
+    // Book password (ZIP archive or PDF document — the name
+    // used to say zipPassword, but the PDF dialog writes the
+    // same state now, so the name follows the use): null
+    // until the user supplies one. The open effect restarts
+    // when it changes, so submitting the dialog retries the
+    // open with the password. Session-only by design — a
+    // password is never persisted.
+    var bookPassword by remember { mutableStateOf<CharArray?>(null) }
     var showPasswordDialog by remember { mutableStateOf(false) }
     var passwordWrong by remember { mutableStateOf(false) }
     var totalChaptersFixed by remember { mutableStateOf(false) }
 
     // Open on IO: renderer/zip construction parses the file header
     // and must never block the main thread on a big book.
-    LaunchedEffect(book.id, book.filePath, zipPassword) {
+    LaunchedEffect(book.id, book.filePath, bookPassword) {
         val opened = withContext(Dispatchers.IO) {
-            runCatching { sourceFactory(zipPassword) }.getOrNull()
+            runCatching { sourceFactory(bookPassword) }.getOrNull()
         }
-        if (opened == null || opened.pageCount <= 0) {
-            runCatching { opened?.close() }
+        if (opened == null) {
             openError = true
+        } else if (opened.pageCount <= 0) {
+            // Open failed with a source in hand: for a PDF
+            // this is where the password case lives — a
+            // wrong or missing password gives 0 pages, and
+            // PdfiumNativeSource.needsPassword (trailer
+            // check) separates that from a corrupt file.
+            // For a CBZ, 0 pages means an empty archive, not
+            // a password (encrypted entries still list, and
+            // the probe below handles their password), so
+            // only the PDF flag triggers the dialog here.
+            val needsPw = (opened as? PdfiumNativeSource)?.needsPassword == true
+            runCatching { opened.close() }
+            if (needsPw) {
+                passwordWrong = bookPassword != null
+                showPasswordDialog = true
+            } else {
+                openError = true
+            }
         } else {
             // Encrypted entries the password cannot open (or
             // no password yet): ask, do not show a broken book.
@@ -1101,7 +1131,7 @@ private fun NativeImageBookViewer(
             }
             if (!probeOk) {
                 runCatching { opened.close() }
-                passwordWrong = zipPassword != null
+                passwordWrong = bookPassword != null
                 showPasswordDialog = true
             } else {
                 source = opened
@@ -2641,10 +2671,15 @@ private fun NativeImageBookViewer(
         )
     }
 
-    // Encrypted-archive password dialog: shown when the open
-    // probe fails (no password yet, or a wrong one). Submitting
-    // restarts the open with the password; cancelling lands on
-    // the error screen instead of a spinner that never ends.
+    // Book password dialog: shown when the open probe fails
+    // (ZIP) or a PDF open fails with needsPassword (no
+    // password yet, or a wrong one). Submitting restarts the
+    // open with the password; cancelling lands on the error
+    // screen instead of a spinner that never ends. The PDF
+    // strings are the import dialog's own strings (title +
+    // book title + Unlock), reused here so no new strings
+    // and no hardcoded text are needed; the ZIP strings
+    // stay exactly as before for archives.
     if (showPasswordDialog) {
         var passwordText by remember { mutableStateOf("") }
         AlertDialog(
@@ -2652,12 +2687,29 @@ private fun NativeImageBookViewer(
                 showPasswordDialog = false
                 openError = true
             },
-            title = { Text(stringResource(R.string.comic_zip_password)) },
+            title = {
+                Text(
+                    stringResource(
+                        if (isPdf) R.string.pdf_password_title
+                        else R.string.comic_zip_password
+                    )
+                )
+            },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (isPdf) {
+                        Text(
+                            text = stringResource(
+                                R.string.pdf_password_message, book.title
+                            )
+                        )
+                    }
                     if (passwordWrong) {
                         Text(
-                            text = stringResource(R.string.comic_password_wrong),
+                            text = stringResource(
+                                if (isPdf) R.string.pdf_password_wrong
+                                else R.string.comic_password_wrong
+                            ),
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall
                         )
@@ -2677,11 +2729,16 @@ private fun NativeImageBookViewer(
                 TextButton(
                     enabled = passwordText.isNotEmpty(),
                     onClick = {
-                        zipPassword = passwordText.toCharArray()
+                        bookPassword = passwordText.toCharArray()
                         showPasswordDialog = false
                     }
                 ) {
-                    Text(stringResource(R.string.ok))
+                    Text(
+                        stringResource(
+                            if (isPdf) R.string.pdf_password_unlock
+                            else R.string.ok
+                        )
+                    )
                 }
             },
             dismissButton = {

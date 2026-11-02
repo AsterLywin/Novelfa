@@ -62,7 +62,17 @@ import java.io.File
  */
 internal class PdfiumNativeSource(
     private val pdfFile: File,
-    context: Context
+    context: Context,
+    // Viewer password, session-only, never persisted — the
+    // same contract as the ZIP password in the viewer. Kept
+    // as the caller's CharArray (no copy), and converted to
+    // the String PdfiumCore requires only transiently, at
+    // each open (render doc here, bridge doc in pageWords),
+    // so no password String is ever stored in a field.
+    // Null = no password yet (plain PDFs, and the first
+    // attempt on an encrypted PDF, which is how the viewer
+    // learns it needs one).
+    private val password: CharArray? = null
 ) : NativePageSource {
     private val appContext = context.applicationContext
     private val core = PdfiumCore(appContext)
@@ -75,13 +85,59 @@ internal class PdfiumNativeSource(
     override val pageCount: Int
     override val chapters: List<CbzChapter>
 
+    /**
+     * True when the open failed AND the file is encrypted —
+     * the viewer's signal to show its password dialog instead
+     * of the error screen. False for plain PDFs (success, or
+     * a corrupt file that no password would fix). Set only
+     * here, in init: a wrong password and a missing password
+     * look identical to PDFium (a doc with 0 pages, or an
+     * open exception), so the trailer check below is what
+     * separates "needs a password" from "broken file".
+     */
+    val needsPassword: Boolean
+
     init {
-        val opened = core.newDocument(pfd)
-        doc = opened
-        pageCount = runCatching { core.getPageCount(opened) }.getOrDefault(0)
-        chapters = runCatching {
-            flattenBookmarks(core.getTableOfContents(opened), pageCount)
-        }.getOrDefault(emptyList())
+        var openedDoc: PdfDocument? = null
+        var openedCount = 0
+        var openedChapters: List<CbzChapter> = emptyList()
+        // Transient String for PdfiumCore only: it goes out
+        // of scope when init returns and is never stored.
+        val passwordString = password?.let { String(it) }
+        try {
+            openedDoc = if (passwordString != null) {
+                core.newDocument(pfd, passwordString)
+            } else {
+                core.newDocument(pfd)
+            }
+            openedCount =
+                runCatching { core.getPageCount(openedDoc) }.getOrDefault(0)
+            openedChapters = if (openedCount > 0) {
+                runCatching {
+                    flattenBookmarks(core.getTableOfContents(openedDoc), openedCount)
+                }.getOrDefault(emptyList())
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            // An open exception (not just 0 pages) still
+            // lands here: the doc stays null, the count stays
+            // 0, and needsPassword below decides dialog vs
+            // error. The exception itself is not rethrown, so
+            // the viewer can read needsPassword instead of
+            // seeing only a null source from runCatching.
+            openedDoc = null
+            openedCount = 0
+            openedChapters = emptyList()
+        }
+        doc = openedDoc
+        pageCount = openedCount
+        chapters = openedChapters
+        needsPassword = if (openedCount <= 0) {
+            runCatching { isEncrypted(pdfFile) }.getOrDefault(false)
+        } else {
+            false
+        }
     }
 
     /**
@@ -180,9 +236,16 @@ internal class PdfiumNativeSource(
         if (closed) return 0
         if (!PdfiumText.available) return 0
         if (index < 0 || index >= pageCount) return 0
+        // The bridge doc needs the same password as the
+        // render doc, or a password PDF would read 0 words
+        // and credit only the 1 XP floor. Transient String
+        // again, never stored — the bridge handle is what
+        // persists, not the password.
         val bridge = bridgeDoc.takeIf { it != 0L } ?: runCatching {
-            PdfiumText.openDocument(pdfFile.absolutePath, null)
-                .also { bridgeDoc = it }
+            PdfiumText.openDocument(
+                pdfFile.absolutePath,
+                password?.let { String(it) }
+            ).also { bridgeDoc = it }
         }.getOrNull() ?: return 0
         val text = runCatching { PdfiumText.pageText(bridge, index) }.getOrNull()
             ?: return 0
@@ -207,6 +270,121 @@ internal class PdfiumNativeSource(
 
     companion object {
         private const val MAX_RENDER_HEIGHT = 8192
+
+        /**
+         * Whether a PDF file is encrypted, from its trailer
+         * dicts only — a tail-check port of
+         * PdfParser.maybeEncrypted, which needs the whole
+         * file in memory. This one seeks with
+         * RandomAccessFile instead, so a 100-page book is
+         * not loaded just to ask "does it need a password".
+         * Uncertain (no startxref, a dict that does not
+         * close, a broken /Prev chain) answers TRUE, exactly
+         * like maybeEncrypted: prompting for a password is
+         * recoverable (Cancel lands on the error screen),
+         * while an error screen with no prompt is a dead
+         * end for an encrypted file. A plain file answers
+         * false only when its last trailer is read cleanly
+         * and has no /Encrypt and no further /Prev.
+         */
+        internal fun isEncrypted(pdfFile: File): Boolean {
+            val raf = try {
+                java.io.RandomAccessFile(pdfFile, "r")
+            } catch (e: Exception) {
+                return false
+            }
+            return try {
+                val length = raf.length()
+                if (length <= 0L) return false
+                val tailLen = minOf(2048L, length).toInt()
+                val tailBytes = ByteArray(tailLen)
+                raf.seek(length - tailLen)
+                raf.readFully(tailBytes)
+                val tail = String(tailBytes, Charsets.ISO_8859_1)
+                val sx = tail.lastIndexOf("startxref")
+                if (sx < 0) return true
+                var offset = tail.substring(sx + "startxref".length)
+                    .trimStart().takeWhile { it.isDigit() }
+                    .toIntOrNull() ?: return true
+                val seen = mutableSetOf<Int>()
+                var guard = 0
+                while (guard++ < 25) {
+                    if (offset < 0 || offset.toLong() >= length ||
+                        !seen.add(offset)
+                    ) return true
+                    val winLen = minOf(65536L, length - offset).toInt()
+                    val winBytes = ByteArray(winLen)
+                    raf.seek(offset.toLong())
+                    raf.readFully(winBytes)
+                    val win = String(winBytes, Charsets.ISO_8859_1)
+                    val body = win.trimStart()
+                    val dictStart = if (body.startsWith("xref")) {
+                        val tr = body.indexOf("trailer")
+                        if (tr < 0) return true
+                        body.indexOf("<<", tr)
+                    } else {
+                        body.indexOf("<<")
+                    }
+                    if (dictStart < 0) return true
+                    val dict = balancedDict(body, dictStart) ?: return true
+                    if (dict.contains("/Encrypt")) return true
+                    val prev = Regex("/Prev\\s+(\\d+)").find(dict)
+                        ?.groupValues?.get(1)?.toIntOrNull() ?: return false
+                    offset = prev
+                }
+                true
+            } catch (e: Exception) {
+                false
+            } finally {
+                runCatching { raf.close() }
+            }
+        }
+
+        /**
+         * Balanced `<<...>>` dict starting at [start], or
+         * null if it does not close inside the text — the
+         * same walk PdfParser uses, so a "/Encrypt" inside
+         * a nested dict or a literal string is not mistaken
+         * for the trailer's own /Encrypt, and stream bytes
+         * after the dict are never scanned.
+         */
+        private fun balancedDict(text: String, start: Int): String? {
+            var depth = 0
+            var i = start
+            while (i < text.length) {
+                when {
+                    text.startsWith("<<", i) -> {
+                        depth++
+                        i += 2
+                    }
+                    text.startsWith(">>", i) -> {
+                        depth--
+                        i += 2
+                        if (depth == 0) return text.substring(start, i)
+                    }
+                    text[i] == '(' -> {
+                        var d = 1
+                        i++
+                        while (i < text.length && d > 0) {
+                            when {
+                                text[i] == '\\' -> i += 2
+                                text[i] == '(' -> {
+                                    d++
+                                    i++
+                                }
+                                text[i] == ')' -> {
+                                    d--
+                                    i++
+                                }
+                                else -> i++
+                            }
+                        }
+                    }
+                    else -> i++
+                }
+            }
+            return null
+        }
 
         /**
          * Flattens a nested bookmark tree depth-first (a parent,
