@@ -1,5 +1,6 @@
 package com.novelfa.reader.theme
 
+import com.novelfa.reader.reader.ReaderViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -71,8 +72,10 @@ class ThemesTest {
     }
 
     @Test
-    fun characterPages_size12() {
-        assertEquals(12, characterPages().size)
+    fun characterPages_size14() {
+        // 7 character themes (subaru, ram, rem, beatrice, emilia,
+        // echidna, tsugi) x night + day.
+        assertEquals(14, characterPages().size)
     }
 
     @Test
@@ -129,24 +132,25 @@ class ThemesTest {
 
     @Test
     fun themeResolve_lockedCharacterPage_fallsBackToDark() {
-        val resolved = currentReaderTheme("rz.echidna.night") { false }
+        // rz.* key with no character theme active falls back to dark.
+        val resolved = ReaderViewModel.themeForBook("rz.echidna.night", null, false)
         assertEquals(Themes.DARK, resolved)
     }
 
     @Test
     fun themeResolve_unlockedCharacterPage_resolves() {
-        val resolved = currentReaderTheme("rz.subaru.night") { true }
+        val resolved = ReaderViewModel.themeForBook("rz.subaru.night", "subaru", false)
         assertEquals("rz.subaru.night", resolved.key)
         assertEquals("#17231D", resolved.bg)
     }
 
     @Test
     fun themeResolve_staticKey_resolves() {
-        assertEquals("#FFFFFF", currentReaderTheme("white") { false }.bg)
+        assertEquals("#FFFFFF", ReaderViewModel.themeForBook("white", null, false).bg)
     }
 
     @Test
     fun themeResolve_unknownKey_fallsBackToDark() {
-        assertEquals(Themes.DARK, currentReaderTheme("nope") { true })
+        assertEquals(Themes.DARK, ReaderViewModel.themeForBook("nope", null, false))
     }
 }

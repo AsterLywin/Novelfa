@@ -19,7 +19,7 @@ class BookFormatTest {
         assertEquals(BookFormat.MARKDOWN, BookFormat.fromExtension("doc.markdown"))
         assertEquals(BookFormat.PDF, BookFormat.fromExtension("paper.pdf"))
         assertEquals(BookFormat.DOCX, BookFormat.fromExtension("report.docx"))
-        assertNull(BookFormat.fromExtension("archive.zip"))
+        assertEquals(BookFormat.ZIP, BookFormat.fromExtension("archive.zip"))
         assertNull(BookFormat.fromExtension("noext"))
     }
 

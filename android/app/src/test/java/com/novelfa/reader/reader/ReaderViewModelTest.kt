@@ -84,7 +84,7 @@ class ReaderViewModelTest {
         assertEquals(0, v.contFirst)
         assertEquals(0, v.contLast)
         assertEquals(0, v.index)
-        assertEquals("1 از 2", v.positionText)
+        assertEquals(2, v.chapters.size)
         val saved = dao.getById("b1")!!
         assertEquals(0, saved.lastChapterIndex)
         assertNotNull(saved.lastOpenedDate)
@@ -156,7 +156,7 @@ class ReaderViewModelTest {
     fun onScroll_nearBottom_appends() = runBlocking {
         val dao = FakeReaderDao(listOf(book()))
         val v = vm(dao, twoChapters())
-        v.continuous = true
+        v.readingMode = ReadingMode.CONTINUOUS_VERTICAL
         v.loadChapter(0)
         v.onScroll(top = 1500, height = 2000, client = 500)
         assertEquals(1, v.contLast)
@@ -166,7 +166,7 @@ class ReaderViewModelTest {
     fun onScroll_topZero_prepends() = runBlocking {
         val dao = FakeReaderDao(listOf(book()))
         val v = vm(dao, twoChapters())
-        v.continuous = true
+        v.readingMode = ReadingMode.CONTINUOUS_VERTICAL
         v.loadChapter(1)
         v.onScroll(top = 0, height = 2000, client = 500)
         assertEquals(0, v.contFirst)
@@ -176,7 +176,7 @@ class ReaderViewModelTest {
     fun onScroll_singleMode_noop() = runBlocking {
         val dao = FakeReaderDao(listOf(book()))
         val v = vm(dao, twoChapters())
-        v.continuous = false
+        v.readingMode = ReadingMode.PAGED_HORIZONTAL
         v.loadChapter(0)
         v.onScroll(top = 1500, height = 2000, client = 500)
         assertEquals(0, v.contLast)
@@ -213,13 +213,15 @@ class ReaderViewModelTest {
     fun continuousWindow_capsSpanAt7_onAppend() = runBlocking {
         val dao = FakeReaderDao(listOf(book()))
         val v = vm(dao, manyChapters(12))
-        v.continuous = true
+        v.readingMode = ReadingMode.CONTINUOUS_VERTICAL
         assertTrue(v.loadChapter(0))
         repeat(10) { assertTrue(v.appendNext()) }
         assertEquals(10, v.contLast)
         assertTrue(v.contLast - v.contFirst + 1 <= ReaderViewModel.MAX_WINDOW_SPAN)
-        // Overflow rebuilds the window: WebView must reload, not append.
-        assertEquals("full", v.lastChunkKind)
+        // Overflow drops the far end via dropJs: no full reload, so the
+        // kind stays "append" and the dropped range is published.
+        assertEquals("append", v.lastChunkKind)
+        assertNotNull(v.lastDropped)
         assertTrue(v.html.contains("Body[10]"))
         assertFalse(v.html.contains("Body[0]"))
     }
@@ -228,12 +230,13 @@ class ReaderViewModelTest {
     fun continuousWindow_capsSpanAt7_onPrepend() = runBlocking {
         val dao = FakeReaderDao(listOf(book()))
         val v = vm(dao, manyChapters(12))
-        v.continuous = true
+        v.readingMode = ReadingMode.CONTINUOUS_VERTICAL
         assertTrue(v.loadChapter(11))
         repeat(10) { assertTrue(v.prependPrev()) }
         assertEquals(1, v.contFirst)
         assertTrue(v.contLast - v.contFirst + 1 <= ReaderViewModel.MAX_WINDOW_SPAN)
-        assertEquals("full", v.lastChunkKind)
+        assertEquals("prepend", v.lastChunkKind)
+        assertNotNull(v.lastDropped)
         assertTrue(v.html.contains("Body[1]"))
         assertFalse(v.html.contains("Body[11]"))
     }

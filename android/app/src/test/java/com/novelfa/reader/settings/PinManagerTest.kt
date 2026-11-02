@@ -1,5 +1,6 @@
 package com.novelfa.reader.settings
 
+import com.novelfa.reader.R
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -50,7 +51,9 @@ class PinManagerTest {
             m.setPin("12")
             fail("expected PinException")
         } catch (e: PinException) {
-            assertEquals("پین باید حداقل ۴ کاراکتر باشه", e.message)
+            // Messages live in string resources now (no hardcoded UI text):
+            // the resId resolves to the same fa text as before.
+            assertEquals(R.string.the_pin_must_be_at_least_4_characters, e.resId)
         }
         assertFalse(m.hasPin())
     }
@@ -63,7 +66,7 @@ class PinManagerTest {
             m.changePin("0000", "5678")
             fail("expected PinException")
         } catch (e: PinException) {
-            assertEquals("پین اشتباهه", e.message)
+            assertEquals(R.string.wrong_pin, e.resId)
         }
         assertTrue(m.verify("1234"))
         m.changePin("1234", "5678")
