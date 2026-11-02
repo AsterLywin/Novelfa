@@ -1,4 +1,5 @@
 package com.novelfa.reader
+import com.novelfa.reader.theme.emblemPath
 
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.LocalContentColor
@@ -17,7 +18,7 @@ import android.net.Uri
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.theme.Accent
 import com.novelfa.reader.theme.rememberAppTypography
-import com.novelfa.reader.theme.CharacterThemes
+import com.novelfa.reader.domain.CharacterThemes
 import com.novelfa.reader.theme.buildPlainPalette
 import com.novelfa.reader.theme.hexToColor
 import androidx.compose.foundation.Canvas

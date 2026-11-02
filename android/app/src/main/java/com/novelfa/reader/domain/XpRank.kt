@@ -1,0 +1,671 @@
+package com.novelfa.reader.domain
+
+import kotlin.math.max
+
+/**
+ * XP rank system (replaces the finished-books-only rank for progression).
+ *
+ * Rules (see ~/workspace/your_files/Novelfa-XP-Rank-System.md for the full
+ * spec, in Persian):
+ * - Unit = one EPUB spine item (a novel chapter, or a section/chapter of a
+ *   light novel / digital book). XP is by TEXT VOLUME, not by raw unit:
+ *   xp = max(1, (words + 1000) / 2000), so a ~2000-word chapter = 1 XP.
+ * - 12 titles x 5 stars. Entering a title = 1 star, each further 20% of the
+ *   way to the next title = +1 star (so a title shows 1..5 stars).
+ * - After the last title (27,000 XP) every further 10,000 XP = 1 eternity
+ *   mark. Marks never end; only their count grows. The first 10 marks have
+ *   distinct names/designs, the 10th being the most beautiful.
+ * - Book-completion bonus: max(10, bookXp / 10), only when the book is
+ *   finished AND >= 90% of its units have earned XP. Units under
+ *   [XpRank.BONUS_MIN_WORDS] words (cover, table of contents, copyright,
+ *   one-line pages) are exempt from BOTH sides of that 90% — they still
+ *   earn their own unit XP when visited, but they can no longer block
+ *   the bonus by being skipped. The exemption needs the book's
+ *   qualifying-unit count, which only the text reader knows at open
+ *   time, so it applies through [XpStore.creditUnit]'s qualifying
+ *   parameters; callers that do not supply them keep the old rule
+ *   (native page books: a page's word count is not a chapter, and an
+ *   image page would count as "small").
+ * - Anti-cheat lives in [XpSessionTracker] (visited-only, >= 5 s dwell,
+ *   once per unit per book) and [XpLedger] (no double credit, private
+ *   books excluded by the caller).
+ *
+ * This file is pure JVM (no Android imports) so the engine stays unit-
+ * testable; persistence goes through the existing [RankPrefs] string store.
+ */
+
+data class XpTitle(val index: Int, val nameFa: String, val nameEn: String, val minXp: Int) {
+    fun displayName(isEnglish: Boolean): String = if (isEnglish) nameEn else nameFa
+}
+
+data class EternityMark(val index: Int, val nameFa: String, val nameEn: String) {
+    fun displayName(isEnglish: Boolean): String = if (isEnglish) nameEn else nameFa
+}
+
+/** One readable level: title + stars, or (past the cap) eternity marks. */
+data class XpLevel(
+    val xp: Int,
+    val titleIndex: Int,
+    val title: XpTitle,
+    /** 1..5 inside a title; always 5 once past the cap. */
+    val stars: Int,
+    /** 0 before the first mark (27,000..36,999 XP), then 1, 2, … unbounded. */
+    val eternityMarks: Int,
+    /** XP still needed for the next title (or next mark past the cap). */
+    val xpToNext: Int,
+    /** 0.0..1.0 progress inside the current title (or towards the next mark). */
+    val progress: Double
+) {
+    val mark: EternityMark? get() = if (eternityMarks >= 1) {
+        XpRank.eternityMarkFor(eternityMarks)
+    } else {
+        null
+    }
+
+    /**
+     * Continuous star fill for the drawn StarRow (0..5 across the row):
+     * progress inside the current title, so 12% in fills ~0.6 of a star
+     * instead of one whole glyph star. Past the cap the title is
+     * complete, so 5. [displayName] keeps the whole-glyph text form
+     * (used in sentences and unit tests); the drawn UI uses this.
+     */
+    val starFill: Float
+        get() = if (eternityMarks >= 1) 5f else (progress * 5.0).toFloat().coerceIn(0f, 5f)
+
+    /** Display like «کتابدار ★★★☆☆» / «بلعنده‌ی جهان‌ها ✦۳». */
+    fun displayName(isEnglish: Boolean): String {
+        val base = title.displayName(isEnglish)
+        return if (eternityMarks >= 1) {
+            "$base ✦$eternityMarks"
+        } else {
+            val filled = "★".repeat(stars)
+            val empty = "☆".repeat(max(0, 5 - stars))
+            "$base $filled$empty"
+        }
+    }
+
+    /** Same title, stars and marks => same celebration level. */
+    fun celebrationKey(): Triple<Int, Int, Int> = Triple(titleIndex, stars, eternityMarks)
+}
+
+enum class CelebrationTier { STAR, TITLE, ETERNITY, ETERNITY_FINAL }
+
+object XpRank {
+    const val CAP_XP = 27_000
+    const val MARK_STEP_XP = 10_000
+
+    /** Units below this word count are exempt from the bonus 90% rule. */
+    const val BONUS_MIN_WORDS = 50
+
+    val Titles: List<XpTitle> = listOf(
+        XpTitle(0, "تازه‌وارد", "Newcomer", 0),
+        XpTitle(1, "رهگذر کتابخانه", "Library Passerby", 25),
+        XpTitle(2, "کتاب‌باز", "Book Lover", 100),
+        XpTitle(3, "کتاب‌خور", "Bookworm", 300),
+        XpTitle(4, "شکارچی داستان", "Story Hunter", 750),
+        XpTitle(5, "کتابدار", "Librarian", 1500),
+        XpTitle(6, "غرق‌شده در دنیاها", "Lost in Worlds", 3000),
+        XpTitle(7, "نگهبان کتابخانه‌ی ممنوعه", "Keeper of the Forbidden Library", 5000),
+        XpTitle(8, "افسانه‌ی کتابخانه", "Library Legend", 8000),
+        XpTitle(9, "دانای پلایادس", "Sage of Pleiades", 12000),
+        XpTitle(10, "هیولای پلایادس", "Monster of Pleiades", 18000),
+        XpTitle(11, "بلعنده‌ی جهان‌ها", "Devourer of Worlds", 27000)
+    )
+
+    /** The 10 designed eternity marks; mark 10 is the most beautiful. */
+    val EternityMarks: List<EternityMark> = listOf(
+        EternityMark(1, "اخگر ابدیت", "Ember of Eternity"),
+        EternityMark(2, "شبنم ستاره‌ای", "Stardew"),
+        EternityMark(3, "برگ زرین", "Golden Leaf"),
+        EternityMark(4, "هلال نقره‌ای", "Silver Crescent"),
+        EternityMark(5, "خورشید کاغذی", "Paper Sun"),
+        EternityMark(6, "تاج کهکشانی", "Galactic Crown"),
+        EternityMark(7, "بالِ نگهبان کتاب", "Keeper’s Wing"),
+        EternityMark(8, "قلب پلایادس", "Heart of Pleiades"),
+        EternityMark(9, "تخت ابدیت", "Throne of Eternity"),
+        EternityMark(10, "خورشید ابدیتِ جهان‌ها", "Eternal Sun of Worlds")
+    )
+
+    /** Mark design for a count: 1..10 by index, 11+ reuse the 10th design. */
+    fun eternityMarkFor(count: Int): EternityMark =
+        EternityMarks[minOf(max(1, count), EternityMarks.size) - 1]
+
+    fun levelFor(rawXp: Int): XpLevel {
+        val xp = max(0, rawXp)
+        if (xp < CAP_XP) {
+            var title = Titles[0]
+            var nextMin = CAP_XP
+            for (i in Titles.indices) {
+                if (xp >= Titles[i].minXp) {
+                    title = Titles[i]
+                    nextMin = if (i + 1 < Titles.size) Titles[i + 1].minXp else CAP_XP
+                } else {
+                    break
+                }
+            }
+            val span = max(1, nextMin - title.minXp)
+            val fraction = (xp - title.minXp).toDouble() / span.toDouble()
+            val stars = minOf(5, 1 + (fraction * 5.0).toInt())
+            return XpLevel(
+                xp = xp,
+                titleIndex = title.index,
+                title = title,
+                stars = stars,
+                eternityMarks = 0,
+                xpToNext = nextMin - xp,
+                progress = fraction.coerceIn(0.0, 1.0)
+            )
+        }
+        val over = xp - CAP_XP
+        val marks = over / MARK_STEP_XP
+        val intoMark = over % MARK_STEP_XP
+        return XpLevel(
+            xp = xp,
+            titleIndex = 11,
+            title = Titles[11],
+            stars = 5,
+            eternityMarks = marks,
+            xpToNext = MARK_STEP_XP - intoMark,
+            progress = intoMark.toDouble() / MARK_STEP_XP.toDouble()
+        )
+    }
+
+    /** XP for one unit from its word count. */
+    fun xpForUnit(words: Int): Int = max(1, (max(0, words) + 1000) / 2000)
+
+    /** Book-completion bonus from the book's own credited XP total. */
+    fun bookBonus(bookXp: Int): Int = max(10, bookXp / 10)
+
+    /** Fair old-rank -> minimum new XP (name-for-name; see spec §9). */
+    fun oldRankToMinXp(oldRank: Int): Int = when (oldRank) {
+        0 -> 0
+        1 -> 100
+        2 -> 300
+        3 -> 1500
+        4 -> 8000
+        5 -> 12000
+        6 -> 18000
+        else -> 0
+    }
+
+    fun celebrationTier(from: XpLevel, to: XpLevel): CelebrationTier = when {
+        to.eternityMarks > from.eternityMarks ->
+            if (to.eternityMarks >= 10) CelebrationTier.ETERNITY_FINAL
+            else CelebrationTier.ETERNITY
+        to.titleIndex > from.titleIndex -> CelebrationTier.TITLE
+        else -> CelebrationTier.STAR
+    }
+
+    private fun isCjk(c: Char): Boolean =
+        c in '\u3400'..'\u4DBF' || c in '\u4E00'..'\u9FFF' ||
+            c in '\u3040'..'\u30FF' || c in '\uAC00'..'\uD7AF'
+
+    /** Word count of plain text (CJK chars count one each, see spec §2). */
+    fun countWords(plainText: String): Int {
+        var count = 0
+        var inWord = false
+        for (c in plainText) {
+            when {
+                isCjk(c) -> {
+                    count++
+                    inWord = false
+                }
+                c.isWhitespace() -> inWord = false
+                !inWord -> {
+                    count++
+                    inWord = true
+                }
+            }
+        }
+        return count
+    }
+
+    /** Strip tags/scripts/styles and decode the common entities. */
+    fun plainTextFromHtml(html: String): String {
+        var out = html
+        out = Regex("<script[\\s\\S]*?</script\\s*>", RegexOption.IGNORE_CASE).replace(out, " ")
+        out = Regex("<style[\\s\\S]*?</style\\s*>", RegexOption.IGNORE_CASE).replace(out, " ")
+        out = Regex("<[^>]+>").replace(out, " ")
+        out = out.replace("&nbsp;", " ").replace("&amp;", "&")
+            .replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&quot;", "\"").replace("&#39;", "'")
+        return out
+    }
+
+    fun wordsFromHtml(html: String): Int = countWords(plainTextFromHtml(html))
+}
+
+/**
+ * Per-book ledger of XP-credited units. Sequential reading collapses to a
+ * single [upTo] int (units 0..upTo credited); jumped-to units live in
+ * [extras]. [bookXp] is the sum of XP credited for that book (bonus base).
+ * [smallCredited] holds the credited units that were under
+ * [XpRank.BONUS_MIN_WORDS] words, so the bonus 90% can count qualifying
+ * units only; it is empty for books credited without the exemption.
+ * Format (device-local, book ids are UUIDs, so no separator collisions):
+ * `id:upTo:extraCsv:bookXp;id:…|bonusId,bonusId` — lenient parse, bad
+ * entries are skipped rather than failing the whole ledger. Entries with
+ * a small-unit set append a 5th field (`:smallCsv`); entries without one
+ * keep the old 4-field shape, so old backups still parse.
+ */
+class XpLedger {
+    private data class BookLedger(
+        var upTo: Int = -1,
+        val extras: MutableSet<Int> = mutableSetOf(),
+        var bookXp: Int = 0,
+        val smallCredited: MutableSet<Int> = mutableSetOf()
+    )
+
+    private val books = mutableMapOf<String, BookLedger>()
+    private val bonusAwarded = mutableSetOf<String>()
+
+    fun isCredited(bookId: String, unit: Int): Boolean {
+        val b = books[bookId] ?: return false
+        return unit <= b.upTo || unit in b.extras
+    }
+
+    fun creditedCount(bookId: String): Int {
+        val b = books[bookId] ?: return 0
+        val base = if (b.upTo >= 0) b.upTo + 1 else 0
+        return base + b.extras.count { it > b.upTo }
+    }
+
+    fun bookXp(bookId: String): Int = books[bookId]?.bookXp ?: 0
+
+    /** Credited units that count toward the bonus 90% (small ones out). */
+    fun creditedQualifyingCount(bookId: String): Int {
+        val b = books[bookId] ?: return 0
+        return creditedCount(bookId) -
+            b.smallCredited.count { it <= b.upTo || it in b.extras }
+    }
+
+    fun isBonusAwarded(bookId: String): Boolean = bookId in bonusAwarded
+
+    fun markBonusAwarded(bookId: String) {
+        bonusAwarded += bookId
+    }
+
+    /** Returns false when the unit was already credited. */
+    fun markCredited(bookId: String, unit: Int, xp: Int, isSmall: Boolean = false): Boolean {
+        if (isCredited(bookId, unit)) return false
+        val b = books.getOrPut(bookId) { BookLedger() }
+        if (isSmall) b.smallCredited += unit
+        if (unit == b.upTo + 1) {
+            b.upTo = unit
+            while (b.upTo + 1 in b.extras) {
+                b.extras.remove(b.upTo + 1)
+                b.upTo++
+            }
+        } else {
+            b.extras += unit
+        }
+        b.bookXp += xp
+        return true
+    }
+
+    /**
+     * Merge one entry into another (used by [transfer] and by backup
+     * restore): units union, bonus flag union, bookXp = max. Max, not
+     * sum, for bookXp: per-unit XP is not stored, so a sum would
+     * double-count units present in both entries, while max never
+     * over-awards the book bonus (which is bookXp-derived). In normal
+     * flow both entries never hold distinct credited units at once —
+     * after a transfer the old key is gone, and later credits use
+     * only the new key — so max is exact there, and only a
+     * conservative undercount in the pathological overlap case.
+     */
+    private fun mergeEntryInto(target: BookLedger, source: BookLedger) {
+        if (source.upTo > target.upTo) target.upTo = source.upTo
+        target.smallCredited += source.smallCredited
+        target.extras += source.extras
+        target.extras.removeAll { it <= target.upTo }
+        while (target.upTo + 1 in target.extras) {
+            target.extras.remove(target.upTo + 1)
+            target.upTo++
+        }
+        if (source.bookXp > target.bookXp) target.bookXp = source.bookXp
+    }
+
+    /**
+     * Re-key one book's ledger entry from [oldKey] to [newKey]
+     * (UUID -> content key, see [XpStore]). Returns false when there
+     * was nothing to move (no old entry, or keys already equal).
+     * Idempotent: after a successful transfer the old key is gone,
+     * so a second call finds nothing and does nothing.
+     */
+    fun transfer(oldKey: String, newKey: String): Boolean {
+        if (oldKey == newKey) return false
+        val old = books.remove(oldKey) ?: return false
+        val wasBonus = oldKey in bonusAwarded
+        if (wasBonus) bonusAwarded.remove(oldKey)
+        val target = books.getOrPut(newKey) { BookLedger() }
+        mergeEntryInto(target, old)
+        if (wasBonus) bonusAwarded += newKey
+        return true
+    }
+
+    /**
+     * Merge another ledger's CONTENT-keyed entries into this one
+     * (backup restore across devices): UUID-keyed entries are
+     * device-local and are ignored, because a UUID from another
+     * device never matches a book on this device. Content keys
+     * (file SHA-256) are the same on every device for the same file.
+     */
+    fun mergeContentFrom(other: XpLedger) {
+        for ((key, entry) in other.books) {
+            if (!isContentKey(key)) continue
+            val target = books.getOrPut(key) { BookLedger() }
+            mergeEntryInto(target, entry)
+            if (key in other.bonusAwarded) bonusAwarded += key
+        }
+    }
+
+    /** Serialize only the portable (content-keyed) entries, for backup. */
+    fun serializeContentOnly(): String {
+        val filtered = XpLedger()
+        for ((key, entry) in books) {
+            if (!isContentKey(key)) continue
+            filtered.books[key] = BookLedger(
+                entry.upTo, entry.extras.toMutableSet(), entry.bookXp,
+                entry.smallCredited.toMutableSet()
+            )
+            if (key in bonusAwarded) filtered.bonusAwarded += key
+        }
+        return filtered.serialize()
+    }
+
+    /** Legacy migration: units 0..unitsRead-1 credited, 1 XP each. */
+    fun setLegacy(bookId: String, unitsRead: Int, bookXpValue: Int, bonus: Boolean) {
+        if (unitsRead <= 0) return
+        val b = books.getOrPut(bookId) { BookLedger() }
+        if (unitsRead - 1 > b.upTo) b.upTo = unitsRead - 1
+        b.extras.removeAll { it <= b.upTo }
+        if (bookXpValue > b.bookXp) b.bookXp = bookXpValue
+        if (bonus) bonusAwarded += bookId
+    }
+
+    fun serialize(): String {
+        val booksPart = books.entries.sortedBy { it.key }.joinToString(";") { (id, b) ->
+            val extras = b.extras.sorted().joinToString(",")
+            val base = "$id:${b.upTo}:$extras:${b.bookXp}"
+            if (b.smallCredited.isEmpty()) base
+            else base + ":" + b.smallCredited.sorted().joinToString(",")
+        }
+        return if (bonusAwarded.isEmpty()) booksPart
+        else booksPart + "|" + bonusAwarded.sorted().joinToString(",")
+    }
+
+    companion object {
+        /**
+         * Content key for a book: "h" + lowercase SHA-256 hex of the
+         * stored file bytes. No separator characters (the ledger
+         * format splits on `:`, `;`, `|`), so it can never collide
+         * with a UUID key (which contains dashes) and parses cleanly.
+         * The same file always yields the same key, on any device
+         * and after any re-import — unlike the UUID assigned at
+         * import, which is new every time.
+         */
+        fun contentKeyFor(hash: String): String = "h$hash"
+
+        /** True for keys produced by [contentKeyFor] (65 chars: h + 64 hex). */
+        fun isContentKey(key: String): Boolean =
+            key.length == 65 && key[0] == 'h' &&
+                key.drop(1).all { it in '0'..'9' || it in 'a'..'f' }
+
+        fun parse(raw: String): XpLedger {
+            val out = XpLedger()
+            if (raw.isBlank()) return out
+            val parts = raw.split("|", limit = 2)
+            val booksPart = parts[0]
+            if (booksPart.isNotBlank()) {
+                for (entry in booksPart.split(";")) {
+                    if (entry.isBlank()) continue
+                    val fields = entry.split(":")
+                    if (fields.size != 4 && fields.size != 5) continue
+                    val id = fields[0]
+                    if (id.isBlank()) continue
+                    val upTo = fields[1].toIntOrNull() ?: continue
+                    val extras = fields[2].takeIf { it.isNotBlank() }
+                        ?.split(",")?.mapNotNull { it.toIntOrNull() }
+                        ?.filter { it >= 0 }?.toMutableSet() ?: mutableSetOf()
+                    val bookXp = fields[3].toIntOrNull() ?: continue
+                    val small = if (fields.size == 5) {
+                        fields[4].takeIf { it.isNotBlank() }
+                            ?.split(",")?.mapNotNull { it.toIntOrNull() }
+                            ?.filter { it >= 0 }?.toMutableSet() ?: mutableSetOf()
+                    } else mutableSetOf()
+                    if (upTo < -1 || upTo > 1_000_000 || bookXp < 0) continue
+                    val b = BookLedger(upTo.coerceIn(-1, 1_000_000), extras, bookXp, small)
+                    b.extras.removeAll { it <= b.upTo }
+                    b.smallCredited.removeAll { it !in b.extras && it > b.upTo }
+                    out.books[id] = b
+                }
+            }
+            if (parts.size > 1) {
+                for (id in parts[1].split(",")) {
+                    if (id.isNotBlank()) out.bonusAwarded += id
+                }
+            }
+            return out
+        }
+    }
+}
+
+/**
+ * In-session anti-cheat tracker: a unit only becomes creditable when the
+ * reader LEAVES it (to another unit, or on reader close) after at least
+ * [MIN_DWELL_MS] inside it. Fast flings and drawer jumps therefore earn
+ * nothing for the units they skip through; [enter] returns the previous
+ * unit only when its dwell qualified, otherwise it is silently dropped.
+ */
+class XpSessionTracker(private val clock: () -> Long = { System.currentTimeMillis() }) {
+    companion object {
+        const val MIN_DWELL_MS = 5_000L
+    }
+
+    private var current: Int? = null
+    private var enteredMs: Long = 0L
+
+    /** Returns the previous unit to credit (or null) when moving to [unit]. */
+    fun enter(unit: Int): Int? {
+        val now = clock()
+        if (unit == current) return null
+        val prev = current
+        val prevEntered = enteredMs
+        current = unit
+        enteredMs = now
+        if (prev == null) return null
+        return if (now - prevEntered >= MIN_DWELL_MS) prev else null
+    }
+
+    /** Credit the current unit on reader close, if its dwell qualified. */
+    fun flush(): Int? {
+        val now = clock()
+        val cur = current ?: return null
+        current = null
+        return if (now - enteredMs >= MIN_DWELL_MS) cur else null
+    }
+}
+
+/** Result of crediting one unit (null = no XP: private, duplicate, invalid). */
+data class XpCreditResult(
+    val unitXp: Int,
+    val bonusXp: Int,
+    val totalXp: Int,
+    val creditedUnits: Int
+)
+
+/**
+ * Persistence for total XP + ledger + celebration state, on the existing
+ * sync [RankPrefs] store (same cache pattern as MaxRank/SecretThemes).
+ */
+class XpStore(private val prefs: RankPrefs) {
+    companion object {
+        const val TOTAL_XP_KEY = "TotalXp"
+        const val LEDGER_KEY = "XpLedger"
+        const val MIGRATED_KEY = "XpMigrated"
+        const val CELEBRATED_XP_KEY = "XpCelebratedXp"
+        const val REKEYED_KEY = "XpRekeyed"
+
+        /**
+         * One lock for every ledger read-modify-write in the process
+         * (credits, transfers, backup merges, mass rekeying): without
+         * it, two concurrent writers could each read the old ledger
+         * and overwrite the other's credit or transfer. The lock is
+         * held only for the in-memory read-modify-cache-write; the
+         * DataStore persistence itself already runs in the background.
+         */
+        private val ledgerLock = Any()
+    }
+
+    var totalXp: Int
+        get() = prefs.getString(TOTAL_XP_KEY, "0").toIntOrNull()?.coerceAtLeast(0) ?: 0
+        set(value) {
+            prefs.setString(TOTAL_XP_KEY, max(0, value).toString())
+        }
+
+    var ledger: XpLedger
+        get() = XpLedger.parse(prefs.getString(LEDGER_KEY, ""))
+        set(value) {
+            prefs.setString(LEDGER_KEY, value.serialize())
+        }
+
+    var migrated: Boolean
+        get() = prefs.getString(MIGRATED_KEY, "0") == "1"
+        set(value) {
+            prefs.setString(MIGRATED_KEY, if (value) "1" else "0")
+        }
+
+    /** One-time mass rekeying (see RankHook) has run. */
+    var rekeyed: Boolean
+        get() = prefs.getString(REKEYED_KEY, "0") == "1"
+        set(value) {
+            prefs.setString(REKEYED_KEY, if (value) "1" else "0")
+        }
+
+    /**
+     * Re-key one book's ledger entry (UUID -> content key). Total XP
+     * is untouched: only the per-unit record moves, so a book can
+     * never gain or lose XP by being re-keyed.
+     */
+    fun transferLedger(oldKey: String, newKey: String): Boolean =
+        synchronized(ledgerLock) {
+            val led = ledger
+            if (!led.transfer(oldKey, newKey)) return false
+            ledger = led
+            true
+        }
+
+    /** Merge a backup's content-keyed ledger into this device's ledger. */
+    fun mergeContentLedger(serialized: String) {
+        if (serialized.isBlank()) return
+        synchronized(ledgerLock) {
+            val led = ledger
+            led.mergeContentFrom(XpLedger.parse(serialized))
+            ledger = led
+        }
+    }
+
+    /** Portable (content-keyed) ledger only, for backup export. */
+    fun contentLedgerSerialized(): String = ledger.serializeContentOnly()
+
+    /** XP at the last celebration shown on the home screen (see spec §6). */
+    var celebratedXp: Int
+        get() = prefs.getString(CELEBRATED_XP_KEY, "0").toIntOrNull()?.coerceAtLeast(0) ?: 0
+        set(value) {
+            prefs.setString(CELEBRATED_XP_KEY, max(0, value).toString())
+        }
+
+    /**
+     * Credit one unit. The book bonus is awarded the first time the book
+     * counts as finished — last unit credited AND >= 90% of units
+     * credited — whichever credit reaches that state (so a last unit read
+     * early, before 90%, does not lose the bonus forever: the credit that
+     * later pushes the book past 90% awards it).
+     *
+     * [qualifyingTotalUnits] / [lastQualifyingUnit] switch on the
+     * small-unit exemption: when both are given (and the qualifying
+     * total is positive), the 90% and the "finished" check count
+     * qualifying units only, and units under [XpRank.BONUS_MIN_WORDS]
+     * words are tracked as small instead of counting toward either
+     * side. When they are absent, the old rule runs unchanged.
+     */
+    fun creditUnit(
+        bookId: String,
+        unit: Int,
+        words: Int,
+        totalUnits: Int,
+        isPrivate: Boolean,
+        qualifyingTotalUnits: Int? = null,
+        lastQualifyingUnit: Int? = null
+    ): XpCreditResult? {
+        if (isPrivate || unit < 0 || totalUnits <= 0) return null
+        val useExemption = qualifyingTotalUnits != null &&
+            qualifyingTotalUnits > 0 && lastQualifyingUnit != null
+        return synchronized(ledgerLock) {
+            val led = ledger
+            if (led.isCredited(bookId, unit)) return@synchronized null
+            val unitXp = XpRank.xpForUnit(words)
+            val isSmall = useExemption && words < XpRank.BONUS_MIN_WORDS
+            if (!led.markCredited(bookId, unit, unitXp, isSmall)) return@synchronized null
+            var bonus = 0
+            val credited = led.creditedCount(bookId)
+            val finished: Boolean
+            val qualifies: Boolean
+            if (useExemption) {
+                finished = led.isCredited(bookId, lastQualifyingUnit!!)
+                val creditedQualifying = led.creditedQualifyingCount(bookId)
+                qualifies = creditedQualifying * 10 >= qualifyingTotalUnits!! * 9
+            } else {
+                finished = led.isCredited(bookId, totalUnits - 1)
+                qualifies = credited * 10 >= totalUnits * 9
+            }
+            if (finished && !led.isBonusAwarded(bookId) && qualifies) {
+                bonus = XpRank.bookBonus(led.bookXp(bookId))
+                led.markBonusAwarded(bookId)
+            }
+            val newTotal = totalXp + unitXp + bonus
+            // Pair write through the RankPrefs interface: the default
+            // setXpState does the two plain writes (the old else
+            // branch, fine for in-memory implementations), while
+            // PrefsStoreRankPrefs overrides it with a single
+            // DataStore transaction — so a process death between
+            // the two writes can never leave the ledger saying
+            // "credited" while the total missed the XP. XpStore
+            // never checks which implementation it holds.
+            prefs.setXpState(led.serialize(), newTotal.toString())
+            XpCreditResult(unitXp, bonus, newTotal, credited)
+        }
+    }
+}
+
+/**
+ * Per-reader-session resolver from a book's import UUID to its
+ * content key. The caller computes the file hash once (on the first
+ * credit, on IO — never per unit, never on the main thread) and hands
+ * it here; this class transfers the old UUID entry to the content
+ * key BEFORE the first credit lands, then returns the same key for
+ * every later credit in the session. If the hash cannot be computed,
+ * the book keeps its UUID key (old behaviour, never a failure).
+ * One instance per reader session: its cached key must never leak
+ * across books.
+ */
+class XpContentKeyResolver(private val store: XpStore) {
+    var key: String? = null
+        private set
+    var resolved: Boolean = false
+        private set
+
+    /** Returns the credit key for [bookId]; [hash] is used only on first call. */
+    fun resolve(bookId: String, hash: String?): String {
+        if (!resolved) {
+            val contentKey = hash?.let { XpLedger.contentKeyFor(it) }
+            if (contentKey != null && contentKey != bookId) {
+                store.transferLedger(bookId, contentKey)
+            }
+            key = contentKey ?: bookId
+            resolved = true
+        }
+        return key!!
+    }
+}

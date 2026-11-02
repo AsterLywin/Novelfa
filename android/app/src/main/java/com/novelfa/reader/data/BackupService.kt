@@ -3,10 +3,8 @@ package com.novelfa.reader.data
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.graphics.Typeface
-import com.novelfa.reader.theme.PrefsStoreRankPrefs
-import com.novelfa.reader.theme.RankService
-import com.novelfa.reader.theme.XpStore
-import com.novelfa.reader.theme.fontDisplayName
+import com.novelfa.reader.domain.RankService
+import com.novelfa.reader.domain.XpStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext

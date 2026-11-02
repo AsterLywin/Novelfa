@@ -1,6 +1,11 @@
 package com.novelfa.reader.theme
+import com.novelfa.reader.domain.EternityMark
+import com.novelfa.reader.domain.CharacterThemes
+import com.novelfa.reader.domain.XpTitle
+import com.novelfa.reader.domain.XpLevel
 
 import androidx.compose.foundation.layout.Column
+import com.novelfa.reader.domain.XpRank
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth

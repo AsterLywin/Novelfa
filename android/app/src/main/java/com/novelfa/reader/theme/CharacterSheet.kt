@@ -1,4 +1,6 @@
 package com.novelfa.reader.theme
+import com.novelfa.reader.domain.CharacterThemes
+import com.novelfa.reader.domain.CharacterTheme
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

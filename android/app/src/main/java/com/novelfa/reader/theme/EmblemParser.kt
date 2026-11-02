@@ -1,6 +1,17 @@
 package com.novelfa.reader.theme
+import com.novelfa.reader.domain.CharacterTheme
+import com.novelfa.reader.domain.CharacterThemes
 
 import androidx.compose.ui.graphics.Path
+
+/**
+ * Parsed emblem path for a character theme. This is a Compose Path,
+ * so it lives here in theme as an extension on the domain data class
+ * rather than as a member: call sites read it exactly as before
+ * (`theme.emblemPath`), null when emblemData is empty/invalid.
+ */
+val CharacterTheme.emblemPath: Path?
+    get() = parseEmblemPath(emblemData)
 
 /**
  * Minimal WPF PathGeometry parser for the character emblems.

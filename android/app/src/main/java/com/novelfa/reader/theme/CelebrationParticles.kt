@@ -1,6 +1,7 @@
 package com.novelfa.reader.theme
 
 import androidx.compose.foundation.Canvas
+import com.novelfa.reader.domain.CelebrationTier
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect

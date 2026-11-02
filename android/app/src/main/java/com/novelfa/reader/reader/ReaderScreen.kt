@@ -126,11 +126,11 @@ import java.io.File
 import java.io.IOException
 import androidx.compose.material3.rememberDrawerState
 import coil.compose.AsyncImage
-import com.novelfa.reader.theme.CharacterThemes
+import com.novelfa.reader.domain.CharacterThemes
 import com.novelfa.reader.theme.ParticleLayer
-import com.novelfa.reader.theme.PrefsStoreRankPrefs
-import com.novelfa.reader.theme.XpContentKeyResolver
-import com.novelfa.reader.theme.XpStore
+import com.novelfa.reader.data.PrefsStoreRankPrefs
+import com.novelfa.reader.domain.XpContentKeyResolver
+import com.novelfa.reader.domain.XpStore
 import com.novelfa.reader.theme.characterPages
 
 /**
@@ -560,12 +560,12 @@ fun ReaderScreen(
             val qualifyingUnits = withContext(Dispatchers.IO) {
                 parsed.chapters.map { ch ->
                     runCatching {
-                        com.novelfa.reader.theme.XpRank.wordsFromHtml(ch.file.readText())
+                        com.novelfa.reader.domain.XpRank.wordsFromHtml(ch.file.readText())
                     }.getOrDefault(0)
                 }
             }
-            val qualifyingTotal = qualifyingUnits.count { it >= com.novelfa.reader.theme.XpRank.BONUS_MIN_WORDS }
-            val lastQualifying = qualifyingUnits.indexOfLast { it >= com.novelfa.reader.theme.XpRank.BONUS_MIN_WORDS }
+            val qualifyingTotal = qualifyingUnits.count { it >= com.novelfa.reader.domain.XpRank.BONUS_MIN_WORDS }
+            val lastQualifying = qualifyingUnits.indexOfLast { it >= com.novelfa.reader.domain.XpRank.BONUS_MIN_WORDS }
             val xpPrefs = PrefsStoreRankPrefs(prefs)
             // Lazy content-key rekeying: the first credit in this
             // session hashes the stored file once (on IO, inside the

@@ -3,6 +3,10 @@ package com.novelfa.reader.theme
 import com.novelfa.reader.parser.ConvertedBook
 import com.novelfa.reader.parser.ConvertedBook.Section
 import com.novelfa.reader.parser.EpubParser
+import com.novelfa.reader.domain.RankPrefs
+import com.novelfa.reader.domain.XpCreditResult
+import com.novelfa.reader.domain.XpRank
+import com.novelfa.reader.domain.XpStore
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals

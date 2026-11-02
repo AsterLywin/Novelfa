@@ -13,7 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.toArgb
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.settings.SettingsViewModel
-import com.novelfa.reader.theme.CharacterThemes
+import com.novelfa.reader.domain.CharacterThemes
 import com.novelfa.reader.theme.buildPlainPalette
 import com.novelfa.reader.theme.parseHex
 import kotlinx.coroutines.Dispatchers

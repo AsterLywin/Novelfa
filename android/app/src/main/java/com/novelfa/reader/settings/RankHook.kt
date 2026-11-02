@@ -3,16 +3,15 @@ package com.novelfa.reader.settings
 import com.novelfa.reader.data.BookDao
 import com.novelfa.reader.data.isCompleted
 import com.novelfa.reader.data.sha256OfFile
-import com.novelfa.reader.theme.CelebrationTier
-import com.novelfa.reader.theme.CharacterTheme
-import com.novelfa.reader.theme.CharacterThemes
-import com.novelfa.reader.theme.PrefsStoreRankPrefs
-import com.novelfa.reader.theme.RankPrefs
-import com.novelfa.reader.theme.RankService
-import com.novelfa.reader.theme.XpLedger
-import com.novelfa.reader.theme.XpLevel
-import com.novelfa.reader.theme.XpRank
-import com.novelfa.reader.theme.XpStore
+import com.novelfa.reader.domain.CelebrationTier
+import com.novelfa.reader.domain.CharacterTheme
+import com.novelfa.reader.domain.CharacterThemes
+import com.novelfa.reader.domain.RankPrefs
+import com.novelfa.reader.domain.RankService
+import com.novelfa.reader.domain.XpLedger
+import com.novelfa.reader.domain.XpLevel
+import com.novelfa.reader.domain.XpRank
+import com.novelfa.reader.domain.XpStore
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -37,17 +36,12 @@ data class RankUp(
  */
 object RankHook {
 
-    /** Await the DataStore preload when the concrete bridge is used; a
-     * plain in-memory RankPrefs needs no waiting. */
-    private suspend fun awaitPrefs(rankPrefs: RankPrefs) {
-        if (rankPrefs is PrefsStoreRankPrefs) rankPrefs.awaitLoaded()
-    }
-
-
+    /** Await the DataStore preload (a no-op for plain in-memory
+     * RankPrefs — see the interface default). */
     suspend fun refreshRank(dao: BookDao, rankPrefs: RankPrefs, floor: Int = 0): RankUp? {
         // Wait for the bridge's DataStore preload: recordProgress is
         // monotonic, so it must read the real stored maxRank, not a default.
-        awaitPrefs(rankPrefs)
+        rankPrefs.awaitLoaded()
         // Backup floor (plan §7): a restored lifetime count keeps the
         // record alive on an empty library; max() never double-counts.
         val done = maxOf(
@@ -95,7 +89,7 @@ object RankHook {
         rankPrefs: RankPrefs,
         floor: Int = 0
     ): Int {
-        awaitPrefs(rankPrefs)
+        rankPrefs.awaitLoaded()
         val store = XpStore(rankPrefs)
         if (store.migrated) return store.totalXp
         val books = dao.allBooks().first()
@@ -144,7 +138,7 @@ object RankHook {
      * the start (already-transferred books are no-ops).
      */
     suspend fun rekeyXpLedgerIfNeeded(dao: BookDao, rankPrefs: RankPrefs) {
-        awaitPrefs(rankPrefs)
+        rankPrefs.awaitLoaded()
         val store = XpStore(rankPrefs)
         if (store.rekeyed) return
         val books = withContext(Dispatchers.IO) { dao.allBooks().first() }
@@ -181,7 +175,7 @@ object RankHook {
         rankPrefs: RankPrefs,
         floor: Int = 0
     ): XpRankUp? {
-        awaitPrefs(rankPrefs)
+        rankPrefs.awaitLoaded()
         val total = migrateXpIfNeeded(dao, rankPrefs, floor)
         val store = XpStore(rankPrefs)
         val toLevel = XpRank.levelFor(total)
@@ -202,7 +196,7 @@ object RankHook {
 
     /** Mark a shown celebration as seen (see [refreshXpRank]). */
     suspend fun acknowledgeXpCelebration(rankPrefs: RankPrefs, toXp: Int) {
-        awaitPrefs(rankPrefs)
+        rankPrefs.awaitLoaded()
         val store = XpStore(rankPrefs)
         if (toXp > store.celebratedXp) store.celebratedXp = toXp
     }

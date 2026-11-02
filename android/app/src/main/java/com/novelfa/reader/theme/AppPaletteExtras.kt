@@ -1,4 +1,5 @@
 package com.novelfa.reader.theme
+import com.novelfa.reader.domain.CharacterTheme
 
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color

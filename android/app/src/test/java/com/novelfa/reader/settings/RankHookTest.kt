@@ -1,7 +1,8 @@
 package com.novelfa.reader.settings
 
 import com.novelfa.reader.theme.InMemoryRankPrefs
-import com.novelfa.reader.theme.RankService
+import com.novelfa.reader.domain.RankPrefs
+import com.novelfa.reader.domain.RankService
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Test

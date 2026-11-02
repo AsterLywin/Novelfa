@@ -1,5 +1,7 @@
 package com.novelfa.reader.theme
 
+import com.novelfa.reader.domain.CharacterThemes
+import com.novelfa.reader.domain.ThemePalette
 import com.novelfa.reader.reader.ReaderViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

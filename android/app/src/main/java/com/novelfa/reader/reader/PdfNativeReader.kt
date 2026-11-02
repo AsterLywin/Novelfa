@@ -144,10 +144,10 @@ import com.novelfa.reader.parser.engine.ZipEngine
 import com.novelfa.reader.parser.engine.ZipKind
 import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
-import com.novelfa.reader.theme.PrefsStoreRankPrefs
-import com.novelfa.reader.theme.XpContentKeyResolver
-import com.novelfa.reader.theme.XpSessionTracker
-import com.novelfa.reader.theme.XpStore
+import com.novelfa.reader.data.PrefsStoreRankPrefs
+import com.novelfa.reader.domain.XpContentKeyResolver
+import com.novelfa.reader.domain.XpSessionTracker
+import com.novelfa.reader.domain.XpStore
 import java.io.Closeable
 import java.io.File
 import java.time.Instant

@@ -1,5 +1,11 @@
 package com.novelfa.reader.theme
 
+import com.novelfa.reader.domain.RankPrefs
+import com.novelfa.reader.domain.XpContentKeyResolver
+import com.novelfa.reader.domain.XpLedger
+import com.novelfa.reader.domain.XpRank
+import com.novelfa.reader.domain.XpSessionTracker
+import com.novelfa.reader.domain.XpStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

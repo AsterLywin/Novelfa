@@ -6,9 +6,9 @@ import android.graphics.Color
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.novelfa.reader.theme.PrefsStoreRankPrefs
-import com.novelfa.reader.theme.RankService
-import com.novelfa.reader.theme.XpStore
+import com.novelfa.reader.data.PrefsStoreRankPrefs
+import com.novelfa.reader.domain.RankService
+import com.novelfa.reader.domain.XpStore
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray

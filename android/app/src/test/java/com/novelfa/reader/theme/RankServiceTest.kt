@@ -1,5 +1,9 @@
 package com.novelfa.reader.theme
 
+import com.novelfa.reader.domain.CharacterTheme
+import com.novelfa.reader.domain.CharacterThemes
+import com.novelfa.reader.domain.RankPrefs
+import com.novelfa.reader.domain.RankService
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

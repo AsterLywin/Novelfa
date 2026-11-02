@@ -1,0 +1,136 @@
+package com.novelfa.reader.domain
+
+/**
+ * Reader rank from finished (non-private) books, ported from
+ * EpubReader/Services/RankService.cs.
+ *
+ * Logic is copied EXACT: rankIndexFor desc loop, maxRank default -1
+ * (prefs "MaxRank"), isRankUnlocked(req) = req <= max(0, maxRank),
+ * secrets CSV in prefs "SecretThemes", isUnlocked = rank || secret,
+ * recordProgress monotonic (never decreases, so deleting a book
+ * never relocks themes).
+ *
+ * Persistence goes through [RankPrefs] (a tiny sync string store) so
+ * this class stays pure-JVM and unit-testable. Production wires it to
+ * Task 3 PrefsStore via [PrefsStoreRankPrefs] (see PrefsStore.kt
+ * additive keys MAX_RANK / SECRET_THEMES).
+ */
+data class RankInfo(val index: Int, val nameFa: String, val nameEn: String, val minBooks: Int) {
+    /** Display name in the app's UI language (English names ported from EpubReader/Services/LocStrings.cs). */
+    fun displayName(isEnglish: Boolean): String = if (isEnglish) nameEn else nameFa
+}
+
+/** Minimal sync string store backing RankService. */
+interface RankPrefs {
+    fun getString(key: String, default: String): String
+    fun setString(key: String, value: String)
+
+    /**
+     * Persists an XP credit (ledger + total) together. The default
+     * does the two plain writes (fine for in-memory
+     * implementations); PrefsStoreRankPrefs overrides it with a
+     * single DataStore transaction. Added when the XP cluster moved
+     * to domain so XpStore never needs to know which RankPrefs
+     * implementation it holds.
+     */
+    fun setXpState(ledgerValue: String, totalValue: String) {
+        setString(XpStore.LEDGER_KEY, ledgerValue)
+        setString(XpStore.TOTAL_XP_KEY, totalValue)
+    }
+
+    /**
+     * Suspends until the initial preload has finished, if any. The
+     * default is a no-op (in-memory implementations are loaded by
+     * construction); PrefsStoreRankPrefs overrides it to await its
+     * DataStore preload.
+     */
+    suspend fun awaitLoaded() {}
+}
+
+class RankService(private val prefs: RankPrefs) {
+
+    companion object {
+        const val MAX_RANK_KEY = "MaxRank"
+        const val SECRET_KEY = "SecretThemes"
+
+        val Ranks: List<RankInfo> = listOf(
+            RankInfo(0, "تازه‌وارد", "Newcomer", 0),
+            RankInfo(1, "کتاب‌باز", "Book Lover", 1),
+            RankInfo(2, "کتاب‌خور", "Bookworm", 3),
+            RankInfo(3, "کتابدار", "Librarian", 10),
+            RankInfo(4, "افسانه‌ی کتابخانه", "Library Legend", 25),
+            RankInfo(5, "دانای پلایادس", "Sage of Pleiades", 60),
+            RankInfo(6, "هیولای پلایادس", "Monster of Pleiades", 80)
+        )
+
+        /** Desc loop, like RankService.RankIndexFor. */
+        fun rankIndexForStatic(done: Int): Int {
+            for (i in Ranks.size - 1 downTo 0) {
+                if (done >= Ranks[i].minBooks) return i
+            }
+            return 0
+        }
+
+        fun parseMaxRank(raw: String?): Int = raw?.toIntOrNull() ?: -1
+    }
+
+    fun rankIndexFor(done: Int): Int = rankIndexForStatic(done)
+
+    /** Highest rank ever recorded. -1 = never recorded (first run). */
+    var maxRank: Int
+        get() = parseMaxRank(prefs.getString(MAX_RANK_KEY, "-1"))
+        set(value) {
+            prefs.setString(MAX_RANK_KEY, value.toString())
+        }
+
+    fun isRankUnlocked(requiredRank: Int): Boolean =
+        requiredRank <= maxOf(0, maxRank)
+
+    /**
+     * XP-title unlock: a theme is unlocked when the XP title reaches its
+     * [CharacterTheme.xpTitle], even if the legacy finished-books maxRank
+     * never did (e.g. a reader of one 3000-chapter novel: few finished
+     * books, high XP title). Before migration totalXp is 0, so this
+     * changes nothing for legacy users until their first XP migration runs.
+     */
+    fun isXpUnlocked(requiredTitle: Int): Boolean {
+        val xp = runCatching { XpStore(prefs).totalXp }.getOrDefault(0)
+        return XpRank.levelFor(xp).titleIndex >= requiredTitle
+    }
+
+    /**
+     * Theme unlocked by legacy rank, XP title, or by its own secret.
+     * The two rank gates are independent (legacy 0..6 vs XP title 0..11),
+     * so re-spreading themes across XP titles can never relock a theme
+     * a legacy user already earned.
+     */
+    fun isUnlocked(theme: CharacterTheme?): Boolean =
+        theme != null && (isRankUnlocked(theme.requiredRank) ||
+            isXpUnlocked(theme.xpTitle) || isSecretUnlocked(theme.id))
+
+    fun isSecretUnlocked(themeId: String?): Boolean {
+        if (themeId.isNullOrEmpty()) return false
+        return prefs.getString(SECRET_KEY, "")
+            .split(',')
+            .any { it.trim() == themeId }
+    }
+
+    fun secretUnlock(themeId: String) {
+        if (themeId.isEmpty() || isSecretUnlocked(themeId)) return
+        val old = prefs.getString(SECRET_KEY, "")
+        prefs.setString(SECRET_KEY, if (old.isEmpty()) themeId else "$old,$themeId")
+    }
+
+    fun visibleCount(): Int = CharacterThemes.visibleCount { isUnlocked(it) }
+
+    /** Count of themes unlocked by rank or secret (legacy helper, restored). */
+    fun unlockedCount(): Int = CharacterThemes.All.count { isUnlocked(it) }
+
+    /**
+     * Record finished-book progress. maxRank only moves up, never down.
+     */
+    fun recordProgress(completedNonPrivate: Int) {
+        val rank = rankIndexFor(completedNonPrivate)
+        if (rank > maxRank) maxRank = rank
+    }
+}

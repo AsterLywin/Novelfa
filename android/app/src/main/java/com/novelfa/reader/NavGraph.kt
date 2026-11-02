@@ -25,7 +25,7 @@ import com.novelfa.reader.settings.SettingsRoute
 import com.novelfa.reader.settings.SettingsViewModel
 import com.novelfa.reader.settings.SettingsViewModelFactory
 import com.novelfa.reader.settings.SupportTracker
-import com.novelfa.reader.theme.PrefsStoreRankPrefs
+import com.novelfa.reader.data.PrefsStoreRankPrefs
 
 @Composable
 fun NavGraph(

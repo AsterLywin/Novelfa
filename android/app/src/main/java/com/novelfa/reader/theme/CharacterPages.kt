@@ -1,4 +1,5 @@
 package com.novelfa.reader.theme
+import com.novelfa.reader.domain.CharacterThemes
 
 /**
  * Reading-page theme for each character (night + day), built from the

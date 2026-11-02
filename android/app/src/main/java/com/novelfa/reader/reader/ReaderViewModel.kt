@@ -6,9 +6,9 @@ import com.novelfa.reader.model.Chapter
 import com.novelfa.reader.parser.HrefResolver
 import com.novelfa.reader.theme.ReaderTheme
 import com.novelfa.reader.theme.Themes
-import com.novelfa.reader.theme.XpRank
-import com.novelfa.reader.theme.XpSessionTracker
-import com.novelfa.reader.theme.CharacterThemes
+import com.novelfa.reader.domain.XpRank
+import com.novelfa.reader.domain.XpSessionTracker
+import com.novelfa.reader.domain.CharacterThemes
 import com.novelfa.reader.theme.characterPages
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
