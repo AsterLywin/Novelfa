@@ -9,6 +9,7 @@ import android.graphics.pdf.PdfRenderer
 import android.widget.ImageView
 import java.nio.ByteBuffer
 import android.os.ParcelFileDescriptor
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -27,6 +28,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -575,15 +577,33 @@ internal class CbzNativeSource(
     }
 
     override fun renderPage(index: Int, targetWidthPx: Int): Bitmap {
-        synchronized(lock) {
-            if (index < 0 || index >= entries.size) {
-                throw IndexOutOfBoundsException("Comic page $index out of range")
-            }
-            val header = headerFor(entries[index])
-                ?: throw IllegalArgumentException("Missing comic entry: ${entries[index]}")
-            if (isAvifEntry(entries[index])) {
-                val bytes = avifBytes(header)
-                    ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
+        // Lock scope, narrowed for paging speed: zip4j's
+        // ZipFile is not thread-safe, so every stream open
+        // and read stays under [lock] — but the pixel decode
+        // (the slow part: JPEG decode, libaom AVIF decode)
+        // must NOT be under it. With the whole render
+        // serialized, a fling across pages queued every
+        // page's decode behind the previous one, which is
+        // the paged-mode lag: the target page waited for
+        // pages being skipped. So the entry bytes are read
+        // once under the lock, and everything below decodes
+        // from memory, in parallel across pages on
+        // Dispatchers.IO. The other methods (thumbnail,
+        // nativePageSize, animatedDrawable) still hold the
+        // lock for their whole stream use, so no zip access
+        // ever runs outside it.
+        if (index < 0 || index >= entries.size) {
+            throw IndexOutOfBoundsException("Comic page $index out of range")
+        }
+        val entryName = entries[index]
+        val bytes = synchronized(lock) {
+            val header = headerFor(entryName)
+                ?: throw IllegalArgumentException("Missing comic entry: $entryName")
+            runCatching {
+                zip.getInputStream(header).use { it.readBytes() }
+            }.getOrNull()
+        } ?: throw IllegalArgumentException("Unreadable comic image: $entryName")
+        if (isAvifEntry(entryName)) {
                 val decoded = AvifDecoder.decode(bytes)
                     ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
                 // Ceiling: the same 8192 x 16384 cap as the
@@ -609,11 +629,9 @@ internal class CbzNativeSource(
                 return scaled
             }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            zip.getInputStream(header).use { stream ->
-                BitmapFactory.decodeStream(stream, null, bounds)
-            }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
+                throw IllegalArgumentException("Unreadable comic image: $entryName")
             }
             // EXIF rotation, read BEFORE the sample loop: a
             // 90/270 rotation swaps the dimensions the ceiling
@@ -622,7 +640,12 @@ internal class CbzNativeSource(
             // The rotation itself is applied to the decoded
             // bitmap below, so the crop/resize/sharpen pipeline
             // downstream always sees the upright page.
-            val exifDegrees = exifDegrees(entries[index])
+            // EXIF from the same bytes, not a second stream:
+            // the bytes are already in memory, and a fresh
+            // stream would need the lock again.
+            val exifDegrees = runCatching {
+                ExifRotation.degreesFromStream(ByteArrayInputStream(bytes))
+            }.getOrDefault(0)
             val effWidth =
                 if (exifDegrees == 90 || exifDegrees == 270) bounds.outHeight else bounds.outWidth
             val effHeight =
@@ -660,35 +683,37 @@ internal class CbzNativeSource(
             // RGB_565 is only the fallback: a null result (a
             // decoder refusing a config, WebP in particular) or
             // an out-of-memory on a giant page retries as 565
-            // on a fresh stream before giving up. Each attempt
-            // needs its own stream — a consumed stream cannot
-            // be decoded twice. The extra memory is bounded:
+            // from the same bytes before giving up. The extra
+            // memory is bounded:
             // page bitmaps are owned per visible item and
             // recycled when the item leaves composition, so
             // only the visible window's pages are alive.
+            // Decodes from the bytes, not a stream: a consumed
+            // stream cannot be decoded twice, so the old code
+            // re-opened the zip for every attempt — and held
+            // the lock while doing it. Bytes decode identically
+            // and retry for free, with no zip access at all.
             fun decodeAs(config: Bitmap.Config, sampleSize: Int): Bitmap? {
                 return runCatching {
-                    zip.getInputStream(header).use { stream ->
-                        BitmapFactory.decodeStream(
-                            stream, null,
-                            BitmapFactory.Options().apply {
-                                inSampleSize = sampleSize
-                                inPreferredConfig = config
-                                // Quality over speed: ComicScreen's
-                                // tile decoder sets this, and it is
-                                // the one flag the JPEG decoder
-                                // actually listens to — fancy
-                                // chroma upsampling and a more
-                                // accurate IDCT instead of the fast
-                                // approximations. On line art and
-                                // flat manhwa colour the difference
-                                // is visible; the cost is decode
-                                // time on the IO thread, which is
-                                // where this already runs.
-                                inPreferQualityOverSpeed = true
-                            }
-                        )
-                    }
+                    BitmapFactory.decodeByteArray(
+                        bytes, 0, bytes.size,
+                        BitmapFactory.Options().apply {
+                            inSampleSize = sampleSize
+                            inPreferredConfig = config
+                            // Quality over speed: ComicScreen's
+                            // tile decoder sets this, and it is
+                            // the one flag the JPEG decoder
+                            // actually listens to — fancy
+                            // chroma upsampling and a more
+                            // accurate IDCT instead of the fast
+                            // approximations. On line art and
+                            // flat manhwa colour the difference
+                            // is visible; the cost is decode
+                            // time on the IO thread, which is
+                            // where this already runs.
+                            inPreferQualityOverSpeed = true
+                        }
+                    )
                 }.getOrNull()
             }
             // Out-of-memory retry, ComicScreen's way: a decode
@@ -714,12 +739,11 @@ internal class CbzNativeSource(
                 attemptSample *= 2
             }
             val decoded = bitmap
-                ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
+                ?: throw IllegalArgumentException("Unreadable comic image: $entryName")
             if (exifDegrees == 0) return decoded
             val rotated = rotateBitmap(decoded, exifDegrees)
             if (rotated !== decoded) decoded.recycle()
             return rotated
-        }
     }
 
     override fun close() {
@@ -1914,7 +1938,26 @@ private fun NativeImageBookViewer(
                     } else {
                         !directionRtl
                     },
-                    beyondViewportPageCount = 1
+                    // Prefetch two pages each way, not one:
+                    // a paged turn used to compose its target
+                    // only as the swipe started, so the target's
+                    // whole decode (zip stream + pixels, or a
+                    // PDFium render, serialized inside the
+                    // native library) ran while the user was
+                    // already dragging — the lag users report.
+                    // With two, both neighbours of the current
+                    // page are decoded while the user is still
+                    // reading it, so an ordinary one-page turn
+                    // lands on a finished bitmap. The cost is
+                    // up to two more live bitmaps beside the
+                    // current page; the return-visit park stays
+                    // at 4, so the bitmap budget grows by that
+                    // much and no more. A fast multi-page fling
+                    // still decodes pages it passes — no pager
+                    // setting can decode pages that were never
+                    // composed — but the first turn, the common
+                    // case, no longer waits on a decode.
+                    beyondViewportPageCount = 2
                 ) { pagerIdx ->
                     // One item, one set of parameters: the only
                     // thing that varies between single and dual
@@ -4558,20 +4601,41 @@ private fun NativePageItem(
                         }
                     }
                     else -> {
-                        Column(
+                        // Same top-stick fix as the bitmap
+                        // fit-width branch below: a short
+                        // animated page centers in a
+                        // viewport-tall Box, a tall one still
+                        // scrolls inside its page.
+                        BoxWithConstraints(
                             modifier = Modifier.fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                                .background(pageBg),
-                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            AnimatedPageImage(
-                                rotation = viewRotation.toFloat(),
-                                drawable = anim,
-                                scaleType = ImageView.ScaleType.FIT_CENTER,
-                                modifier = Modifier
-                                    .fillMaxWidth(shrink)
-                                    .aspectRatio(ratio)
-                            )
+                            // Captured here, not inside the
+                            // Column: the Column's own scope
+                            // shadows the constraints scope, so
+                            // maxHeight is not visible in there.
+                            val viewportHeight = maxHeight
+                            Column(
+                                modifier = Modifier.fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                                    .background(pageBg),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = viewportHeight),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    AnimatedPageImage(
+                                        rotation = viewRotation.toFloat(),
+                                        drawable = anim,
+                                        scaleType = ImageView.ScaleType.FIT_CENTER,
+                                        modifier = Modifier
+                                            .fillMaxWidth(shrink)
+                                            .aspectRatio(ratio)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -4716,28 +4780,61 @@ private fun NativePageItem(
                         // tall page is never cut in paged mode
                         // either: it scrolls vertically inside
                         // its page, exactly like the strip.
-                        Column(
+                        // But a scrollable Column always lays
+                        // its content out from the TOP — so a
+                        // page shorter than the viewport used
+                        // to stick to the top of the screen
+                        // instead of sitting in the middle, the
+                        // bug users see on short pages. The
+                        // inner Box fixes it without giving up
+                        // the scroll: its minimum height is the
+                        // viewport height, so when the page is
+                        // shorter the Box is viewport-tall and
+                        // centers the page inside it, and when
+                        // the page is taller the Box is
+                        // page-tall and the scroll works exactly
+                        // as before. The height/ original/
+                        // stretch branches above already center
+                        // through their outer Box; only this
+                        // fit-width branch needed the fix.
+                        BoxWithConstraints(
                             modifier = Modifier.fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                                .background(pageBg),
-                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            ZoomablePageContainer(
-                                modifier = Modifier
-                                    .fillMaxWidth(shrink)
-                                    .aspectRatio(ratio),
-                                zoomScale = globalZoom,
-                                onScaleChange = onPinchScale,
-                                onDoubleTap = onDoubleTap,
-                                onTap = onTap,
+                            // Captured here, not inside the
+                            // Column: the Column's own scope
+                            // shadows the constraints scope, so
+                            // maxHeight is not visible in there.
+                            val viewportHeight = maxHeight
+                            Column(
+                                modifier = Modifier.fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                                    .background(pageBg),
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Image(
-                                    bitmap = bmp.asImageBitmap(),
-                                    contentDescription = null,
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(Color.White)
-                                )
+                                        .fillMaxWidth()
+                                        .heightIn(min = viewportHeight),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    ZoomablePageContainer(
+                                        modifier = Modifier
+                                            .fillMaxWidth(shrink)
+                                            .aspectRatio(ratio),
+                                        zoomScale = globalZoom,
+                                        onScaleChange = onPinchScale,
+                                        onDoubleTap = onDoubleTap,
+                                        onTap = onTap,
+                                    ) {
+                                        Image(
+                                            bitmap = bmp.asImageBitmap(),
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(Color.White)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
