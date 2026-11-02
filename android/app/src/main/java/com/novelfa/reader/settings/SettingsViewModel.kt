@@ -3,9 +3,8 @@ package com.novelfa.reader.settings
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import com.novelfa.reader.data.BookDao
+import com.novelfa.reader.data.BookRepository
 import com.novelfa.reader.data.PrefsStore
-import com.novelfa.reader.data.isCompleted
 import com.novelfa.reader.domain.CharacterTheme
 import com.novelfa.reader.domain.CharacterThemes
 import com.novelfa.reader.domain.RankPrefs
@@ -35,13 +34,13 @@ data class XpProgressSummary(
  * survives configuration changes and stays alive while Settings is on
  * the back stack, instead of being rebuilt by remember on every
  * recomposition cycle). Owns theme/accent/character/font/locale/
- * support/PIN/rank state over [PrefsStore], [PinManager], [BookDao] and
+ * support/PIN/rank state over [PrefsStore], [PinManager], [BookRepository] and
  * [SupportTracker].
  */
 class SettingsViewModel(
     val prefs: PrefsStore,
     val pinManager: PinManager,
-    val dao: BookDao,
+    val repo: BookRepository,
     val rankPrefs: RankPrefs,
     val support: SupportTracker
 ) : ViewModel() {
@@ -125,9 +124,9 @@ class SettingsViewModel(
      */
     suspend fun xpProgress(): XpProgressSummary {
         val floor = prefs.getFinishedBooksRestored()
-        val level = RankHook.xpLevelNow(dao, rankPrefs, floor)
+        val level = RankHook.xpLevelNow(repo, rankPrefs, floor)
         val finished = maxOf(
-            dao.allBooks().first().count { !it.isPrivate && isCompleted(it) },
+            repo.finishedCount(),
             floor
         )
         val service = rankService()
@@ -186,7 +185,7 @@ class SettingsViewModel(
 class SettingsViewModelFactory(
     private val prefs: PrefsStore,
     private val pinManager: PinManager,
-    private val dao: BookDao,
+    private val repo: BookRepository,
     private val rankPrefs: RankPrefs,
     private val support: SupportTracker
 ) : ViewModelProvider.Factory {
@@ -195,6 +194,6 @@ class SettingsViewModelFactory(
         require(modelClass.isAssignableFrom(SettingsViewModel::class.java)) {
             "Unknown ViewModel class: ${modelClass.name}"
         }
-        return SettingsViewModel(prefs, pinManager, dao, rankPrefs, support) as T
+        return SettingsViewModel(prefs, pinManager, repo, rankPrefs, support) as T
     }
 }

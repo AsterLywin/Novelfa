@@ -1,7 +1,7 @@
 package com.novelfa.reader.settings
 
-import com.novelfa.reader.data.BookDao
-import com.novelfa.reader.data.isCompleted
+import com.novelfa.reader.data.BookRepository
+import com.novelfa.reader.domain.isCompleted
 import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.domain.CelebrationTier
 import com.novelfa.reader.domain.CharacterTheme
@@ -38,14 +38,14 @@ object RankHook {
 
     /** Await the DataStore preload (a no-op for plain in-memory
      * RankPrefs — see the interface default). */
-    suspend fun refreshRank(dao: BookDao, rankPrefs: RankPrefs, floor: Int = 0): RankUp? {
+    suspend fun refreshRank(repo: BookRepository, rankPrefs: RankPrefs, floor: Int = 0): RankUp? {
         // Wait for the bridge's DataStore preload: recordProgress is
         // monotonic, so it must read the real stored maxRank, not a default.
         rankPrefs.awaitLoaded()
         // Backup floor (plan §7): a restored lifetime count keeps the
         // record alive on an empty library; max() never double-counts.
         val done = maxOf(
-            dao.allBooks().first().count { !it.isPrivate && isCompleted(it) },
+            repo.finishedCount(),
             floor
         )
         val service = RankService(rankPrefs)
@@ -85,14 +85,14 @@ object RankHook {
      * celebration dialog; only post-migration progress celebrates.
      */
     suspend fun migrateXpIfNeeded(
-        dao: BookDao,
+        repo: BookRepository,
         rankPrefs: RankPrefs,
         floor: Int = 0
     ): Int {
         rankPrefs.awaitLoaded()
         val store = XpStore(rankPrefs)
         if (store.migrated) return store.totalXp
-        val books = dao.allBooks().first()
+        val books = repo.books().first()
         val oldService = RankService(rankPrefs)
         val libraryFinished = books.count { !it.isPrivate && isCompleted(it) }
         val doneBooks = maxOf(libraryFinished, floor)
@@ -137,11 +137,11 @@ object RankHook {
      * is only set at the end, so an interrupted run re-runs from
      * the start (already-transferred books are no-ops).
      */
-    suspend fun rekeyXpLedgerIfNeeded(dao: BookDao, rankPrefs: RankPrefs) {
+    suspend fun rekeyXpLedgerIfNeeded(repo: BookRepository, rankPrefs: RankPrefs) {
         rankPrefs.awaitLoaded()
         val store = XpStore(rankPrefs)
         if (store.rekeyed) return
-        val books = withContext(Dispatchers.IO) { dao.allBooks().first() }
+        val books = withContext(Dispatchers.IO) { repo.books().first() }
         for (book in books) {
             if (book.isPrivate) continue
             val file = File(book.filePath)
@@ -156,8 +156,8 @@ object RankHook {
     }
 
     /** Current XP level (migrates first; idempotent after the first run). */
-    suspend fun xpLevelNow(dao: BookDao, rankPrefs: RankPrefs, floor: Int = 0): XpLevel {
-        val total = migrateXpIfNeeded(dao, rankPrefs, floor)
+    suspend fun xpLevelNow(repo: BookRepository, rankPrefs: RankPrefs, floor: Int = 0): XpLevel {
+        val total = migrateXpIfNeeded(repo, rankPrefs, floor)
         return XpRank.levelFor(total)
     }
 
@@ -171,12 +171,12 @@ object RankHook {
      * dialog is dismissed, otherwise it reappears on the next home visit.
      */
     suspend fun refreshXpRank(
-        dao: BookDao,
+        repo: BookRepository,
         rankPrefs: RankPrefs,
         floor: Int = 0
     ): XpRankUp? {
         rankPrefs.awaitLoaded()
-        val total = migrateXpIfNeeded(dao, rankPrefs, floor)
+        val total = migrateXpIfNeeded(repo, rankPrefs, floor)
         val store = XpStore(rankPrefs)
         val toLevel = XpRank.levelFor(total)
         val fromLevel = XpRank.levelFor(store.celebratedXp)

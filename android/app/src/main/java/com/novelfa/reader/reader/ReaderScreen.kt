@@ -1,6 +1,5 @@
 package com.novelfa.reader.reader
 
-import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,7 +20,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
@@ -43,7 +41,6 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.OutlinedTextField
@@ -55,7 +52,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,40 +61,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.novelfa.reader.R
-import com.novelfa.reader.data.BookDao
-import com.novelfa.reader.data.CoverBackfill
+import com.novelfa.reader.data.BookRepository
 import com.novelfa.reader.data.FontStore
-import com.novelfa.reader.data.InPlaceSource
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.ReaderExtrasStore
 import com.novelfa.reader.data.TextHighlight
 import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.parser.BookFormat
-import com.novelfa.reader.parser.CacheStamp
-import com.novelfa.reader.parser.ConvertedBook
-import com.novelfa.reader.parser.EpubParser
 import com.novelfa.reader.parser.PdfImageBook
 import com.novelfa.reader.parser.engine.ArchiveCandidate
-import com.novelfa.reader.parser.engine.EngineRegistry
-import com.novelfa.reader.parser.engine.EpubEngine
 import com.novelfa.reader.parser.engine.ZipEngine
 import com.novelfa.reader.parser.engine.ZipKind
 import com.novelfa.reader.settings.SupportDialog
@@ -115,8 +99,6 @@ import com.novelfa.reader.theme.ThemePreviewCard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -146,7 +128,7 @@ private val HIGHLIGHT_COLORS = listOf("#FFE45E", "#F8BBD0", "#C8E6C9", "#BBDEFB"
 @Composable
 fun ReaderScreen(
     bookId: String,
-    dao: BookDao,
+    repo: BookRepository,
     onClose: () -> Unit,
     // Task 8: optional support-reminder tracker. While a book is open, every
     // 10s of foreground reading accumulates (like the WPF DispatcherTimer);
@@ -485,7 +467,7 @@ fun ReaderScreen(
 
     LaunchedEffect(bookId, zipCandidate) {
         try {
-            val entity = withContext(Dispatchers.IO) { dao.getById(bookId) }
+            val book = withContext(Dispatchers.IO) { repo.book(bookId) }
                 ?: throw IOException("book not found")
             // Resolve the book to a File the engines can open FIRST:
             // for copy books this is the stored file (unchanged);
@@ -493,19 +475,12 @@ fun ReaderScreen(
             // transient working copy for `content://` sources (see
             // InPlaceSource). Everything below — classification,
             // parse, XP hashing, PDF background fill — uses the
-            // resolved file, never the raw entity path, so an
+            // resolved file, never the raw book path, so an
             // in-place book whose working copy does not exist yet
             // still opens instead of failing on a missing file.
             preparingFile = true
             val resolvedFile = withContext(Dispatchers.IO) {
-                InPlaceSource.resolve(context, entity) { hash ->
-                    // Persist the deferred content hash (step 2):
-                    // this build digested it for free.
-                    val cur = dao.getById(entity.id)
-                    if (cur != null && cur.contentHash == null) {
-                        dao.update(cur.copy(contentHash = hash))
-                    }
-                }
+                repo.resolveBookFile(context, book)
             }
             preparingFile = false
             // Archive choice, before any parse: a ZIP holding several
@@ -523,7 +498,7 @@ fun ReaderScreen(
             }
             val parsed = withContext(Dispatchers.IO) {
                 openParsed(
-                    context, resolvedFile.absolutePath, bookId, entity.originalFileName,
+                    context, resolvedFile.absolutePath, bookId, book.originalFileName,
                     onProgress = { done, total ->
                         val prev = convertProgress?.first ?: 0
                         if (done > prev) convertProgress = done to total
@@ -534,7 +509,7 @@ fun ReaderScreen(
             val store = FontStore(context)
             val files = withContext(Dispatchers.IO) {
                 store.list().filter {
-                    it.nameWithoutExtension.contains(entity.fontFamily, ignoreCase = true)
+                    it.nameWithoutExtension.contains(book.fontFamily, ignoreCase = true)
                 }
             }
             // Bundled fallback faces (Vazirmatn): installed from assets
@@ -576,7 +551,7 @@ fun ReaderScreen(
             // never hash again. Hash failure = UUID key, old behaviour.
             val xpResolver = XpContentKeyResolver(XpStore(xpPrefs))
             val xpCallback: (suspend (Int, Int) -> Unit)? =
-                if (entity.isPrivate) null else { unit, words ->
+                if (book.isPrivate) null else { unit, words ->
                     runCatching {
                         xpPrefs.awaitLoaded()
                         withContext(Dispatchers.IO) {
@@ -595,7 +570,7 @@ fun ReaderScreen(
                     }
                 }
             val v = ReaderViewModel(
-                dao, bookId, entity.copy(totalChapters = parsed.chapters.size),
+                repo, bookId, book.copy(totalChapters = parsed.chapters.size),
                 parsed.chapters,
                 theme = ReaderViewModel.themeForBook(savedTheme, charThemeId, isLight),
                 fontFiles = files,
@@ -614,9 +589,9 @@ fun ReaderScreen(
             // forced saveProgress must preserve the saved anchor for
             // the target chapter (not clear it), and onPageStarted
             // restores it after the reload.
-            v.pagedAnchor = entity.lastAnchor
-            v.pagedAnchorChapter = entity.lastChapterIndex
-            val target = entity.lastChapterIndex.coerceIn(0, parsed.chapters.size - 1)
+            v.pagedAnchor = book.lastAnchor
+            v.pagedAnchorChapter = book.lastChapterIndex
+            val target = book.lastChapterIndex.coerceIn(0, parsed.chapters.size - 1)
             if (!v.loadChapter(target)) {
                 throw IOException(v.lastError ?: "")
             }
@@ -630,9 +605,9 @@ fun ReaderScreen(
             // runs after the open already succeeded, on a child
             // of this effect — leaving the reader cancels it, and
             // the next open retries, because the job is idempotent.
-            if (entity.importMode == "IN_PLACE") {
+            if (book.importMode == "IN_PLACE") {
                 launch {
-                    CoverBackfill.backfill(context, dao, entity, resolvedFile)
+                    repo.backfillCover(context, book, resolvedFile)
                 }
             }
             // Background fill for lazily-opened PDFs: the open phase
@@ -660,7 +635,7 @@ fun ReaderScreen(
             // explanation. Say so once, on open. A blank fontFamily
             // means "no font chosen", and the contains("") filter above
             // matches every file then, so it is never a missing font.
-            if (entity.fontFamily.isNotBlank() && files.isEmpty()) {
+            if (book.fontFamily.isNotBlank() && files.isEmpty()) {
                 snackbar.showSnackbar(fontMissingMsg)
             }
         } catch (e: CancellationException) {
@@ -2490,379 +2465,3 @@ fun ReaderScreen(
         } // Close particle Box
 } // Close ReaderScr
 
-@Composable
-private fun SpacingDialog(
-    lineHeight: Float,
-    sideMargin: Int,
-    paragraphSpacing: Float,
-    onDismiss: () -> Unit,
-    onApply: (Float, Int, Float) -> Unit,
-    onReset: () -> Unit
-) {
-    var lh by remember { mutableFloatStateOf(lineHeight) }
-    var margin by remember { mutableIntStateOf(sideMargin) }
-    var para by remember { mutableFloatStateOf(paragraphSpacing) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = { onApply(lh, margin, para) }) {
-                Text(stringResource(R.string.ok))
-            }
-        },
-        dismissButton = {
-            Row {
-                TextButton(onClick = onReset) {
-                    Text(stringResource(R.string.reset_to_default))
-                }
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.cancel))
-                }
-            }
-        },
-        title = { Text(stringResource(R.string.spacing_settings)) },
-        text = {
-            Column {
-                Text(stringResource(R.string.line_spacing) + ": " + lh.toString())
-                Slider(
-                    value = lh,
-                    onValueChange = { lh = it },
-                    valueRange = 1.2f..3.0f,
-                    steps = 17
-                )
-                Text(stringResource(R.string.side_margins) + ": " + margin.toString())
-                Slider(
-                    value = margin.toFloat(),
-                    onValueChange = { margin = it.toInt() },
-                    valueRange = 0f..160f,
-                    steps = 159
-                )
-                Text(stringResource(R.string.paragraph_spacing) + ": " + para.toString())
-                Slider(
-                    value = para,
-                    onValueChange = { para = it },
-                    valueRange = 0f..2.5f,
-                    steps = 24
-                )
-            }
-        }
-    )
-}
-
-/**
- * Opens a stored book into its chapter files. Each format is opened
- * through its own rendering engine (see parser/engine): EPUBs are
- * extracted (once per source change, guarded by the stamp) and parsed
- * from the tree; TXT / Markdown / PDF / DOCX are converted into
- * chapter files in the same cache directory, and a valid stamp lets the
- * next open rebuild the book from those files without re-converting.
- * The stamp ([CacheStamp]) covers mtime, length AND a first/last-bytes
- * fingerprint, so a replaced file with an unchanged mtime and the same
- * length still re-converts. TXT/Markdown caches are filled at import
- * time, so their first open is normally a cache hit; EPUB, DOCX and
- * book-carrying ZIPs are parsed at first open instead.
- */
-@Throws(IOException::class)
-private suspend fun openParsed(
-    context: Context,
-    bookPath: String,
-    bookId: String,
-    /** Original file name, when known: title fallback instead of the "$uuid.<ext>" storage name. */
-    titleFallback: String? = null,
-    /** PDF conversion progress for the loading UI: (pages done, pages total). */
-    onProgress: ((Int, Int) -> Unit)? = null,
-    /** For a multi-book ZIP archive: the book the user chose from
-     *  the archive-choice dialog. Null for every other format, and
-     *  for single-book ZIPs (the engine picks the only candidate). */
-    zipCandidate: ArchiveCandidate? = null
-): com.novelfa.reader.model.ParsedBook {
-    val book = File(bookPath)
-    if (!book.exists()) {
-        throw IOException("book missing: " + book.absolutePath)
-    }
-    val format = BookFormat.detect(book)
-        ?: throw IOException("unsupported book format: " + book.name)
-    // Converted/extracted chapters live in filesDir, NOT cacheDir:
-    // Android may evict cacheDir under storage pressure, and every
-    // eviction forced a full re-parse on the next open — for DOCX that
-    // is the "render takes forever" users see on every open. filesDir
-    // is never evicted by the system; removeBook + the startup prune
-    // delete a book's dir, and backup rules exclude it (regenerable).
-    val outDir = File(context.filesDir, "epub_open/" + bookId)
-    outDir.mkdirs()
-    val chapterFallback: (Int) -> String = { n ->
-        context.getString(R.string.chapter_fallback, n)
-    }
-    val stampOk = CacheStamp.isValidStamp(outDir, book)
-    if (stampOk) {
-        if (format == BookFormat.EPUB) {
-            return EpubParser.parse(outDir, titleFallback ?: book.name, chapterFallback)
-        }
-        val cached = ConvertedBook.read(outDir, titleFallback ?: book.name, chapterFallback)
-        if (cached != null && isConvertedCacheValid(outDir, cached)) {
-            return cached
-        }
-        // Cache present but empty, unreadable, or missing its images
-        // (e.g. a crashed convert, or media files deleted by hand):
-        // fall through to a fresh conversion below instead of
-        // showing blank chapters / broken images silently.
-    }
-    // Stamp-miss rescue (converted formats only; EPUB re-unzips
-    // cheaply and keeps its old path): a conversion killed AFTER it
-    // wrote its chapters but BEFORE the stamp landed used to be
-    // deleted here and converted from zero on the next open — for
-    // a big PDF that is the whole slow conversion again. Chapters
-    // are only written at the end of a conversion, so a cache that
-    // passes the same validity check the stamp-hit path uses is a
-    // finished conversion, not a partial one, and is safe to return;
-    // the reader's background renderMissing still fills any missing
-    // scanned pages afterwards.
-    if (!stampOk && format != BookFormat.EPUB) {
-        val rescued = ConvertedBook.read(outDir, titleFallback ?: book.name, chapterFallback)
-        if (rescued != null && isConvertedCacheValid(outDir, rescued)) {
-            return rescued
-        }
-    }
-    outDir.deleteRecursively()
-    outDir.mkdirs()
-    // Rendering is engine-owned now: each format's engine parses
-    // (or, for a book inside a ZIP, extracts + parses) through its
-    // own path. The old code branched here on EPUB vs. one shared
-    // dispatch for everything else; a format's rendering change
-    // could no longer be reasoned about in isolation.
-    // Capture the coroutine context once: currentCoroutineContext()
-    // is itself suspend, so it cannot be called inside the plain
-    // cancel-check lambda the engines receive.
-    val openCtx = currentCoroutineContext()
-    val cancelCheck = { openCtx.ensureActive() }
-    val parsed = when {
-        format == BookFormat.EPUB -> EpubEngine.open(
-            book, outDir, chapterFallback, titleFallback, onProgress, cancelCheck
-        )
-        format == BookFormat.ZIP && zipCandidate != null -> ZipEngine.openCandidate(
-            book, zipCandidate, outDir, chapterFallback, titleFallback, onProgress, cancelCheck
-        )
-        else -> EngineRegistry.engineFor(format).open(
-            book, outDir, chapterFallback, titleFallback, onProgress, cancelCheck
-        )
-    }
-    CacheStamp.writeStamp(outDir, book)
-    return parsed
-}
-
-/**
- * Health check for a converted-book cache hit: every chapter file must
- * exist and be non-empty, and if any chapter references `media/` images
- * (DOCX / scanned PDF), that folder must actually hold files. A cache
- * that fails this is re-converted, never shown half-broken.
- */
-private fun isConvertedCacheValid(
-    outDir: File,
-    parsed: com.novelfa.reader.model.ParsedBook
-): Boolean {
-    if (parsed.chapters.isEmpty()) return false
-    var needsMedia = false
-    for (chapter in parsed.chapters) {
-        val file = chapter.file
-        if (!file.isFile || file.length() == 0L) return false
-        if (!needsMedia) {
-            val text = runCatching { file.readText(Charsets.UTF_8) }.getOrNull()
-            if (text != null && text.contains("media/")) needsMedia = true
-        }
-    }
-    if (needsMedia) {
-        val media = File(outDir, "media").listFiles()
-        if (media.isNullOrEmpty()) return false
-    }
-    return true
-}
-
-/**
- * Book-level reading direction from content: the majority script of the
- * first few chapters' plain text. Latin majority → LTR; anything else
- * (Persian/Arabic majority, or no letters at all) → RTL, matching the
- * app's Persian-first default. Only a sample is read (4 KB per chapter)
- * so opening a long book stays cheap.
- */
-private fun detectBookIsLtr(chapters: List<com.novelfa.reader.model.Chapter>): Boolean {
-    // Sample the first TEXT-bearing chapters, not blindly the first
-    // three: a book whose first chapters are cover / TOC / image-only
-    // (scanned PDF, illustrated EPUB) used to be judged from an empty
-    // sample and always paginated RTL. Empty chapters are skipped,
-    // up to 10 chapters are consulted, and a book with no letters at
-    // all still falls back to RTL (the Persian-first default) — for a
-    // purely image-only book there is simply no content signal.
-    val sample = StringBuilder()
-    var consulted = 0
-    for (chapter in chapters) {
-        if (consulted >= 10) break
-        val text = runCatching {
-            chapter.file.inputStream().bufferedReader(Charsets.UTF_8).use { reader ->
-                val buf = CharArray(4096)
-                val n = reader.read(buf)
-                if (n > 0) String(buf, 0, n) else ""
-            }
-        }.getOrNull() ?: continue
-        val plain = HtmlText.htmlToPlainText(text)
-        if (plain.isBlank()) continue
-        consulted++
-        sample.append(plain).append(' ')
-        if (sample.length >= 8192) break
-    }
-    return HtmlText.detectDirection(sample.toString()) == 1
-}
-
-/** Zip-bomb guardrails for EPUB extraction (generous: real books are far smaller). */
-
-/**
- * One row of the diagnostic dialog: a localized label on one side
- * and the raw diagnostic value on the other. Values are codes and
- * numbers, never prose, so they need no translation; labels are
- * all in strings.xml.
- */
-@Composable
-private fun DiagRow(label: String, value: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium
-        )
-    }
-}
-
-/**
- * One reading-mode option in the mode picker popup: the mode's drawn
- * icon (IcoStack pages for horizontal, IcoScroll for vertical-continuous)
- * with its label underneath, highlighted when selected.
- */
-@Composable
-private fun ReadingModeChoice(
-    icon: AppIconKind,
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .border(
-                width = if (selected) 2.dp else 1.dp,
-                color = if (selected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.outline,
-                shape = RoundedCornerShape(12.dp)
-            )
-            .background(
-                if (selected) MaterialTheme.colorScheme.primaryContainer
-                else Color.Transparent,
-                RoundedCornerShape(12.dp)
-            )
-            .padding(horizontal = 20.dp, vertical = 12.dp)
-    ) {
-        AppIcon(
-            icon,
-            tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-            else MaterialTheme.colorScheme.onSurface,
-            size = 38.dp
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-            else MaterialTheme.colorScheme.onSurface
-        )
-    }
-}
-
-/**
- * Numeric font-size box between −A and +A — port of WPF txtFontSize
- * (MainWindow.xaml:101 + ApplyFontSize/CommitFontSizeText).
- *
- * Shows the current size; tap to type a new one. Windows parity:
- * - digits only (MaxLength=2); Persian/Arabic digits are accepted and
- *   normalized to English digits on commit (NormalizeDigits parity);
- * - Done/Enter commits, focus loss commits (LostFocus parity);
- * - invalid/empty input reverts to the current size;
- * - A+/A− presses update the box via [fontSize].
- *
- * The raw typed value reaches [onCommit] unclamped: the caller reports
- * an out-of-range value (10..72) to the user, and the ViewModel clamps
- * as a safety net. Clamping here would hide the limit hit again.
- */
-@Composable
-private fun FontSizeBox(
-    fontSize: Int,
-    enabled: Boolean,
-    onCommit: (Int) -> Unit
-) {
-    val focusManager = LocalFocusManager.current
-    // Reset to the live size whenever it changes externally (A+/A−);
-    // while the user types, fontSize doesn't change so their input is kept.
-    var text by remember(fontSize) { mutableStateOf(fontSize.toString()) }
-    var wasFocused by remember { mutableStateOf(false) }
-
-    fun commit() {
-        // NormalizeDigits parity: keep every Unicode digit, map to 0-9.
-        val digits = text.filter { it.isDigit() }
-            .map { Character.getNumericValue(it) }
-            .joinToString("") { it.toString() }
-        val value = digits.toIntOrNull()
-        if (value != null) {
-            onCommit(value)
-        }
-        // Revert the box to the current size (the remember(fontSize)
-        // above refreshes it once the ViewModel reports the new size).
-        text = fontSize.toString()
-    }
-
-    BasicTextField(
-        value = text,
-        onValueChange = { input ->
-            // PreviewTextInput parity: digits only, MaxLength=2.
-            text = input.filter { it.isDigit() }.take(2)
-        },
-        enabled = enabled,
-        singleLine = true,
-        textStyle = MaterialTheme.typography.labelLarge.copy(
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurface
-        ),
-        keyboardOptions = KeyboardOptions(
-            keyboardType = KeyboardType.Number,
-            imeAction = ImeAction.Done
-        ),
-        keyboardActions = KeyboardActions(
-            onDone = {
-                commit()
-                focusManager.clearFocus()
-            }
-        ),
-        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        modifier = Modifier
-            .width(44.dp)
-            .onFocusChanged { state ->
-                if (wasFocused && !state.isFocused) {
-                    commit()
-                }
-                wasFocused = state.isFocused
-            }
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                shape = RoundedCornerShape(6.dp)
-            )
-            .padding(vertical = 6.dp)
-    )
-}

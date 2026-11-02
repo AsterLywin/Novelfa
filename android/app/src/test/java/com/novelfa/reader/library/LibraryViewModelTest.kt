@@ -1,7 +1,11 @@
 package com.novelfa.reader.library
 
-import com.novelfa.reader.data.BookDao
-import com.novelfa.reader.data.BookEntity
+import android.content.Context
+import com.novelfa.reader.data.BookRepository
+import com.novelfa.reader.data.SeekableZip
+import com.novelfa.reader.domain.Book
+import com.novelfa.reader.domain.isCompleted
+import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -10,32 +14,50 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-private class FakeBookDao(initial: List<BookEntity>) : BookDao {
+/** In-memory fake BookRepository for library tests. */
+private class FakeBookRepository(initial: List<Book>) : BookRepository {
     private val data = MutableStateFlow(initial)
 
-    override suspend fun insert(book: BookEntity) {
+    override fun books(): Flow<List<Book>> = data
+
+    override fun booksInCollection(name: String): Flow<List<Book>> =
+        data.map { list -> list.filter { it.collectionName == name } }
+
+    override fun searchBooks(query: String): Flow<List<Book>> =
+        data.map { list -> list.filter { it.title.contains(query, ignoreCase = true) } }
+
+    override suspend fun book(id: String): Book? =
+        data.value.firstOrNull { it.id == id }
+
+    override suspend fun save(book: Book) {
         data.value = data.value + book
     }
 
-    override suspend fun update(book: BookEntity) {
+    override suspend fun update(book: Book) {
         data.value = data.value.map { if (it.id == book.id) book else it }
     }
 
-    override suspend fun delete(book: BookEntity) {
+    override suspend fun delete(book: Book) {
         data.value = data.value - book
     }
 
-    override suspend fun getById(id: String): BookEntity? =
-        data.value.firstOrNull { it.id == id }
+    override suspend fun finishedCount(): Int =
+        data.value.count { !it.isPrivate && isCompleted(it) }
 
-    override fun allBooks(): Flow<List<BookEntity>> = data
+    override fun isSourceAvailable(context: Context, book: Book): Boolean = true
 
-    override fun byCollection(name: String): Flow<List<BookEntity>> =
-        data.map { list -> list.filter { it.collectionName == name } }
+    override fun isExternalFile(book: Book): Boolean = false
 
-    override fun search(query: String): Flow<List<BookEntity>> =
-        data.map { list -> list.filter { it.title.contains(query, ignoreCase = true) } }
+    override suspend fun resolveBookFile(context: Context, book: Book): File =
+        File(book.filePath)
 
+    override suspend fun backfillCover(context: Context, book: Book, resolvedFile: File) {}
+
+    override suspend fun backfillDirectPdf(context: Context, book: Book) {}
+
+    override suspend fun backfillDirectCbz(context: Context, book: Book, seekable: SeekableZip) {}
+
+    fun current(): List<Book> = data.value
 }
 
 private fun book(
@@ -48,7 +70,7 @@ private fun book(
     isPrivate: Boolean = false,
     isFavorite: Boolean = false,
     collectionName: String? = null
-) = BookEntity(
+) = Book(
     id = id,
     title = title,
     filePath = filePath,
@@ -68,11 +90,11 @@ class LibraryViewModelTest {
     private val fresh = book("c3", "New Book")
     private val secret = book("c4", "Secret Book", lastChapterIndex = 9, lastOpenedDate = "2026-01-06T00:00:00Z", isPrivate = true)
 
-    private fun vm(books: List<BookEntity> = listOf(completed, reading, fresh, secret)) =
+    private fun vm(books: List<Book> = listOf(completed, reading, fresh, secret)) =
         // Importer needs Android Context so it is intentionally not faked here;
         // pass a null-guard via reflection-free placeholder is impossible on JVM,
         // so tests construct with a test-only overload documented in LibraryViewModel.
-        LibraryViewModel(FakeBookDao(books), pinGate = PinGate { false })
+        LibraryViewModel(FakeBookRepository(books), pinGate = PinGate { false })
 
     @Test
     fun allTab_excludesPrivate() = runBlocking {

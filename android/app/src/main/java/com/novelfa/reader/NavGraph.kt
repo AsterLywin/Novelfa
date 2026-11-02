@@ -26,6 +26,7 @@ import com.novelfa.reader.settings.SettingsViewModel
 import com.novelfa.reader.settings.SettingsViewModelFactory
 import com.novelfa.reader.settings.SupportTracker
 import com.novelfa.reader.data.PrefsStoreRankPrefs
+import com.novelfa.reader.data.RoomBookRepository
 
 @Composable
 fun NavGraph(
@@ -43,7 +44,7 @@ fun NavGraph(
             // navigation, unlike the previous remember construction.
             val viewModel: LibraryViewModel = viewModel(
                 factory = LibraryViewModelFactory(
-                    db.bookDao(),
+                    RoomBookRepository(db.bookDao()),
                     Importer(context, db, prefs),
                     PinManager(PrefsStorePinPrefs(prefs)),
                     cacheDir = context.cacheDir,
@@ -66,7 +67,7 @@ fun NavGraph(
             val prefs = remember { PrefsStore(context.applicationContext) } // applicationContext: the DataStore delegate is process-wide; an Activity context would leak on recreation
             val viewModel: LibraryViewModel = viewModel(
                 factory = LibraryViewModelFactory(
-                    db.bookDao(),
+                    RoomBookRepository(db.bookDao()),
                     Importer(context, db, prefs),
                     PinManager(PrefsStorePinPrefs(prefs)),
                     cacheDir = context.cacheDir,
@@ -94,7 +95,7 @@ fun NavGraph(
             // other format uses ReaderScreen.
             PdfReaderRoute(
                 bookId = bookId,
-                dao = db.bookDao(),
+                repo = RoomBookRepository(db.bookDao()),
                 onClose = { navController.popBackStack() },
                 support = supportTracker
             )
@@ -107,7 +108,7 @@ fun NavGraph(
                 factory = SettingsViewModelFactory(
                     prefs = prefs,
                     pinManager = PinManager(PrefsStorePinPrefs(prefs)),
-                    dao = db.bookDao(),
+                    repo = RoomBookRepository(db.bookDao()),
                     rankPrefs = PrefsStoreRankPrefs(prefs),
                     support = SupportTracker(PrefsStoreSupportPrefs(prefs))
                 )

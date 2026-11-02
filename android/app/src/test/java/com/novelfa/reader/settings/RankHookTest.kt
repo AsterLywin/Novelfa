@@ -12,7 +12,7 @@ class RankHookTest {
 
     @Test
     fun refreshRank_countsCompletedNonPrivate() = runBlocking {
-        val dao = FakeBookDao(
+        val repo = FakeBookRepository(
             listOf(
                 testBook("done", lastChapterIndex = 9, lastOpenedDate = "2026-01-05T00:00:00Z"),
                 testBook("donePrivate", lastChapterIndex = 9, lastOpenedDate = "2026-01-05T00:00:00Z", isPrivate = true),
@@ -21,7 +21,7 @@ class RankHookTest {
             )
         )
         val prefs = InMemoryRankPrefs()
-        RankHook.refreshRank(dao, prefs)
+        RankHook.refreshRank(repo, prefs)
         // Only "done" counts -> rank 1 ("کتاب‌باز", minBooks=1).
         assertEquals(1, RankService(prefs).maxRank)
     }

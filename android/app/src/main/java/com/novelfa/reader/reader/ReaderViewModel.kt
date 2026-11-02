@@ -1,7 +1,7 @@
 package com.novelfa.reader.reader
 
-import com.novelfa.reader.data.BookDao
-import com.novelfa.reader.data.BookEntity
+import com.novelfa.reader.data.BookRepository
+import com.novelfa.reader.domain.Book
 import com.novelfa.reader.model.Chapter
 import com.novelfa.reader.parser.HrefResolver
 import com.novelfa.reader.theme.ReaderTheme
@@ -99,9 +99,9 @@ private object SharedReaderCache {
 }
 
 class ReaderViewModel(
-    private val dao: BookDao,
+    private val repo: BookRepository,
     private val bookId: String,
-    initialBook: BookEntity,
+    initialBook: Book,
     val chapters: List<Chapter>,
     var theme: ReaderTheme = Themes.DARK,
     var isEnglish: Boolean = false,
@@ -147,7 +147,7 @@ class ReaderViewModel(
         val toCredit = xpTracker.flush() ?: return
         xpCreditUnit(toCredit)
     }
-    private var book: BookEntity = initialBook
+    private var book: Book = initialBook
 
     /** In-memory cache of prepared chapter bodies (trimWindow rebuilds). */
     private val preparedCache = LinkedHashMap<Int, String>()
@@ -195,7 +195,7 @@ class ReaderViewModel(
     /**
      * Paged-mode text-point anchor ("li:tok", see rdrCurrentAnchor)
      * for the chapter in [pagedAnchorChapter]. Together with
-     * [BookEntity.lastAnchor] this is the ReadEra-XPath idea in the
+     * [Book.lastAnchor] this is the ReadEra-XPath idea in the
      * pager's own coordinates: a stable text point, not a page
      * number, so reopening, a settings reload or a mode switch
      * lands on the same sentence even after repagination changes
@@ -625,7 +625,7 @@ class ReaderViewModel(
             lastOpenedDate = Instant.now().toString(),
             lastAnchor = anchor
         )
-        dao.update(book)
+        repo.update(book)
     }
 
     /**
@@ -672,7 +672,7 @@ class ReaderViewModel(
             sideMargin = sideMargin,
             paragraphSpacing = paragraphSpacing
         )
-        dao.update(book)
+        repo.update(book)
         refreshSpacing()
     }
 
@@ -692,7 +692,7 @@ class ReaderViewModel(
         }
         fontSize = next
         book = book.copy(fontSize = next)
-        dao.update(book)
+        repo.update(book)
         if (html.isNotEmpty()) {
             html = Regex("font-size:\\d+px").replaceFirst(html, "font-size:" + next + "px")
         }
@@ -708,7 +708,7 @@ class ReaderViewModel(
         fontFamily = clean
         fontFiles = files
         book = book.copy(fontFamily = clean)
-        dao.update(book)
+        repo.update(book)
         return if (html.isNotEmpty()) reloadForSettings() else true
     }
 

@@ -73,6 +73,7 @@ import com.novelfa.reader.theme.CharacterSheet
 import com.novelfa.reader.theme.FontPickerDialog
 import com.novelfa.reader.theme.FontSelectDialog
 import com.novelfa.reader.data.PrefsStoreRankPrefs
+import com.novelfa.reader.NovelfaApplication
 import com.novelfa.reader.domain.RankService
 import com.novelfa.reader.theme.RanksDialog
 import com.novelfa.reader.theme.StarRow
@@ -968,7 +969,7 @@ private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit
     val isEnglishUi = lang.startsWith("en")
     val rankPrefs = remember(viewModel.prefs) { PrefsStoreRankPrefs(viewModel.prefs) }
     val service = remember {
-        BackupService(context.applicationContext, viewModel.prefs, viewModel.dao, rankPrefs)
+        BackupService(context.applicationContext, viewModel.prefs, (context.applicationContext as NovelfaApplication).db.bookDao(), rankPrefs)
     }
     var busy by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<BackupPreview?>(null) }

@@ -5,16 +5,16 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import com.novelfa.reader.data.BookDao
-import com.novelfa.reader.data.BookEntity
+import com.novelfa.reader.data.BookRepository
+import com.novelfa.reader.domain.Book
 import com.novelfa.reader.data.Importer
 import com.novelfa.reader.data.PdfPasswordProvider
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.SortFa
-import com.novelfa.reader.data.isCompleted
-import com.novelfa.reader.data.isInProgress
+import com.novelfa.reader.domain.isCompleted
+import com.novelfa.reader.domain.isInProgress
 import com.novelfa.reader.data.isUuidLikeTitle
-import com.novelfa.reader.data.progressPercent
+import com.novelfa.reader.domain.progressPercent
 import com.novelfa.reader.settings.CollectionManager
 import com.novelfa.reader.settings.ManualCollectionRegistry
 import java.io.File
@@ -68,11 +68,11 @@ enum class SortMode {
 }
 
 fun sortBooks(
-    list: List<BookEntity>,
-    all: List<BookEntity>,
+    list: List<Book>,
+    all: List<Book>,
     mode: SortMode,
     useFileName: Boolean = false
-): List<BookEntity> = when (mode) {
+): List<Book> = when (mode) {
     // DEFAULT preserves the filter's own order (e.g. RECENT stays
     // lastOpenedDate-desc); NAME_AZ is the explicit title sort.
     SortMode.DEFAULT -> list
@@ -118,7 +118,7 @@ fun cleanFileName(name: String): String {
  * is the fallback, with UUID-like storage names rejected exactly like
  * the duplicate-title fallback below. The result is [cleanFileName]d.
  */
-fun fileNameTitle(book: BookEntity): String? {
+fun fileNameTitle(book: Book): String? {
     val original = book.originalFileName?.substringBeforeLast('.')
         ?.takeIf { it.isNotBlank() && !isUuidLikeTitle(it) }
     if (original != null) return cleanFileName(original)
@@ -139,7 +139,7 @@ fun fileNameTitle(book: BookEntity): String? {
  * shows that cleaned name instead of its stored title, mirroring
  * upstream AssignDisplayTitles; books without one keep their title.
  */
-fun displayTitleMap(all: List<BookEntity>, useFileName: Boolean = false): Map<String, String> {
+fun displayTitleMap(all: List<Book>, useFileName: Boolean = false): Map<String, String> {
     // Count normalized titles once.
     val titleCounts = mutableMapOf<String, Int>()
     for (b in all) {
@@ -176,7 +176,7 @@ fun displayTitleMap(all: List<BookEntity>, useFileName: Boolean = false): Map<St
     }
 }
 
-fun displayTitle(book: BookEntity, all: List<BookEntity>, useFileName: Boolean = false): String {
+fun displayTitle(book: Book, all: List<Book>, useFileName: Boolean = false): String {
     // Legacy per-book path (kept for call sites without a precomputed map).
     // Prefer displayTitleMap for lists.
     return displayTitleMap(all, useFileName)[book.id] ?: book.title
@@ -191,14 +191,14 @@ private fun isGenericTitle(title: String): Boolean {
 }
 
 /**
- * Thin ViewModel over [BookDao] + [Importer].
+ * Thin ViewModel over [BookRepository] + [Importer].
  *
  * [importer] is nullable only so pure-JVM unit tests can construct this class
  * without an Android Context; production code (NavGraph) always passes a real
  * Importer and [import] delegates straight to it.
  */
 class LibraryViewModel(
-    val dao: BookDao,
+    val repo: BookRepository,
     private val importer: Importer? = null,
     val pinGate: PinGate = NoPinGate,
     cacheDir: File? = null,
@@ -208,7 +208,7 @@ class LibraryViewModel(
     // book's per-book reader theme.
     private val prefs: PrefsStore? = null
 ) : ViewModel() {
-    val books: Flow<List<BookEntity>> = dao.allBooks()
+    val books: Flow<List<Book>> = repo.books()
 
     /** Library file-name titles (Settings switch; false when no prefs exist, e.g. unit tests). */
     val fileNameTitle: Flow<Boolean> = prefs?.fileNameTitle ?: flowOf(false)
@@ -225,7 +225,7 @@ class LibraryViewModel(
 
     /** Task 8 collection/book ops (pure logic in CollectionManager). */
     val collections = CollectionManager(
-        dao,
+        repo,
         cacheDir,
         filesDir,
         prefs?.let { p ->
@@ -238,12 +238,12 @@ class LibraryViewModel(
         }
     )
 
-    fun filtered(tab: Tab, query: String): Flow<List<BookEntity>> =
-        combine(dao.allBooks(), fileNameTitle) { list, useFileName ->
+    fun filtered(tab: Tab, query: String): Flow<List<Book>> =
+        combine(repo.books(), fileNameTitle) { list, useFileName ->
             applyFilter(list, tab, query, useFileName)
         }
 
-    fun byCollection(name: String): Flow<List<BookEntity>> = dao.byCollection(name)
+    fun byCollection(name: String): Flow<List<Book>> = repo.booksInCollection(name)
 
     /** One failed import in a batch: file name + human-readable reason. */
     data class FailedImport(val name: String, val reason: String)
@@ -291,7 +291,7 @@ class LibraryViewModel(
         onFile: ((Int, String?) -> Unit)? = null
     ): ImportSummary {
         val imp = requireNotNull(importer) { "Importer not provided" }
-        val existingBooks = dao.allBooks().first()
+        val existingBooks = repo.books().first()
         val knownByName = existingBooks
             .mapNotNull { b -> b.originalFileName?.lowercase()?.let { it to b } }
             .toMap()
@@ -312,7 +312,7 @@ class LibraryViewModel(
             if (uri !in uriHashes) uriHashes[uri] = imp.sha256OfUri(uri)
             return uriHashes[uri]
         }
-        suspend fun isSameContent(uri: Uri, book: BookEntity): Boolean? {
+        suspend fun isSameContent(uri: Uri, book: Book): Boolean? {
             val newHash = hashOf(uri) ?: return null
             // Step 2: a persisted content hash answers without
             // re-reading the stored book at all — the old path
@@ -367,7 +367,7 @@ class LibraryViewModel(
                             duplicateNames.add(displayName)
                             skip = true
                         } else {
-                            var duplicate: BookEntity? = null
+                            var duplicate: Book? = null
                             var undecided = false
                             if (key != null && key in known) {
                                 when (isSameContent(uri, knownByName.getValue(key))) {
@@ -498,7 +498,7 @@ class LibraryViewModel(
             try {
                 // Remove the existing book with the same file name.
                 if (key != null) {
-                    val existing = dao.allBooks().first()
+                    val existing = repo.books().first()
                         .firstOrNull { it.originalFileName?.lowercase() == key }
                     if (existing != null) {
                         removeBook(existing)
@@ -525,12 +525,12 @@ class LibraryViewModel(
         )
     }
 
-    suspend fun toggleFavorite(book: BookEntity) {
-        dao.update(book.copy(isFavorite = !book.isFavorite))
+    suspend fun toggleFavorite(book: Book) {
+        repo.update(book.copy(isFavorite = !book.isFavorite))
     }
 
-    suspend fun setCollection(book: BookEntity, name: String?) {
-        dao.update(book.copy(collectionName = name?.takeIf { it.isNotBlank() }))
+    suspend fun setCollection(book: Book, name: String?) {
+        repo.update(book.copy(collectionName = name?.takeIf { it.isNotBlank() }))
     }
 
     // Task 8 delegates (rename/delete collections, reset progress, remove
@@ -542,9 +542,9 @@ class LibraryViewModel(
 
     suspend fun createCollection(name: String) = collections.createCollection(name)
 
-    suspend fun resetProgress(book: BookEntity) = collections.resetProgress(book.id)
+    suspend fun resetProgress(book: Book) = collections.resetProgress(book.id)
 
-    suspend fun removeBook(book: BookEntity) {
+    suspend fun removeBook(book: Book) {
         // Keep the reading record so re-importing this file later
         // restores its place; capture must run before the file goes.
         importer?.captureReadingRecord(book.id)
@@ -578,21 +578,21 @@ class LibraryViewModel(
      * content cannot be kept, so it is destroyed instead of bypassed.
      */
     suspend fun deleteAllPrivateBooks() {
-        dao.allBooks().first().filter { it.isPrivate }.forEach { removeBook(it) }
+        repo.books().first().filter { it.isPrivate }.forEach { removeBook(it) }
     }
 
-    suspend fun togglePrivate(book: BookEntity) = collections.togglePrivate(book.id)
+    suspend fun togglePrivate(book: Book) = collections.togglePrivate(book.id)
 
-    suspend fun removeFromCollection(book: BookEntity) =
+    suspend fun removeFromCollection(book: Book) =
         collections.removeFromCollection(book.id)
 }
 
 internal fun applyFilter(
-    all: List<BookEntity>,
+    all: List<Book>,
     tab: Tab,
     query: String,
     useFileName: Boolean = false
-): List<BookEntity> {
+): List<Book> {
     var list = if (tab == Tab.PRIVATE) {
         all.filter { it.isPrivate }
     } else {
@@ -637,7 +637,7 @@ internal fun applyFilter(
  * deliberately: import error strings resolve in the app's locale).
  */
 class LibraryViewModelFactory(
-    private val dao: BookDao,
+    private val repo: BookRepository,
     private val importer: Importer,
     private val pinGate: PinGate,
     private val cacheDir: File?,
@@ -649,6 +649,6 @@ class LibraryViewModelFactory(
         require(modelClass.isAssignableFrom(LibraryViewModel::class.java)) {
             "Unknown ViewModel class: ${modelClass.name}"
         }
-        return LibraryViewModel(dao, importer, pinGate, cacheDir, filesDir, prefs) as T
+        return LibraryViewModel(repo, importer, pinGate, cacheDir, filesDir, prefs) as T
     }
 }

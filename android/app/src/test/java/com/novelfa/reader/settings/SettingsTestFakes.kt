@@ -1,40 +1,59 @@
 package com.novelfa.reader.settings
 
-import com.novelfa.reader.data.BookDao
-import com.novelfa.reader.data.BookEntity
+import android.content.Context
+import com.novelfa.reader.data.BookRepository
+import com.novelfa.reader.data.SeekableZip
+import com.novelfa.reader.domain.Book
+import com.novelfa.reader.domain.isCompleted
+import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 
-/** Shared fake BookDao for settings tests (mirrors LibraryViewModelTest's fake). */
-internal class FakeBookDao(initial: List<BookEntity>) : BookDao {
+/** Shared in-memory fake BookRepository for settings tests. */
+internal class FakeBookRepository(initial: List<Book>) : BookRepository {
     private val data = MutableStateFlow(initial)
 
-    override suspend fun insert(book: BookEntity) {
+    override fun books(): Flow<List<Book>> = data
+
+    override fun booksInCollection(name: String): Flow<List<Book>> =
+        data.map { list -> list.filter { it.collectionName == name } }
+
+    override fun searchBooks(query: String): Flow<List<Book>> =
+        data.map { list -> list.filter { it.title.contains(query, ignoreCase = true) } }
+
+    override suspend fun book(id: String): Book? =
+        data.value.firstOrNull { it.id == id }
+
+    override suspend fun save(book: Book) {
         data.value = data.value + book
     }
 
-    override suspend fun update(book: BookEntity) {
+    override suspend fun update(book: Book) {
         data.value = data.value.map { if (it.id == book.id) book else it }
     }
 
-    override suspend fun delete(book: BookEntity) {
+    override suspend fun delete(book: Book) {
         data.value = data.value - book
     }
 
-    override suspend fun getById(id: String): BookEntity? =
-        data.value.firstOrNull { it.id == id }
+    override suspend fun finishedCount(): Int =
+        data.value.count { !it.isPrivate && isCompleted(it) }
 
-    override fun allBooks(): Flow<List<BookEntity>> = data
+    override fun isSourceAvailable(context: Context, book: Book): Boolean = true
 
-    override fun byCollection(name: String): Flow<List<BookEntity>> =
-        data.map { list -> list.filter { it.collectionName == name } }
+    override fun isExternalFile(book: Book): Boolean = false
 
-    override fun search(query: String): Flow<List<BookEntity>> =
-        data.map { list -> list.filter { it.title.contains(query, ignoreCase = true) } }
+    override suspend fun resolveBookFile(context: Context, book: Book): File =
+        File(book.filePath)
 
+    override suspend fun backfillCover(context: Context, book: Book, resolvedFile: File) {}
 
-    fun current(): List<BookEntity> = data.value
+    override suspend fun backfillDirectPdf(context: Context, book: Book) {}
+
+    override suspend fun backfillDirectCbz(context: Context, book: Book, seekable: SeekableZip) {}
+
+    fun current(): List<Book> = data.value
 }
 
 internal fun testBook(
@@ -48,7 +67,7 @@ internal fun testBook(
     isPrivate: Boolean = false,
     isFavorite: Boolean = false,
     collectionName: String? = null
-) = BookEntity(
+) = Book(
     id = id,
     title = title,
     filePath = filePath,

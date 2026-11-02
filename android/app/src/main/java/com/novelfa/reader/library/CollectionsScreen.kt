@@ -47,11 +47,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.widget.Toast
 import com.novelfa.reader.R
 import com.novelfa.reader.data.SUPPORTED_BOOK_MIME_TYPES
-import com.novelfa.reader.data.BookEntity
+import com.novelfa.reader.domain.Book
 import com.novelfa.reader.settings.CollectionException
-import com.novelfa.reader.data.isCompleted
-import com.novelfa.reader.data.isInProgress
-import com.novelfa.reader.data.progressPercent
+import com.novelfa.reader.domain.isCompleted
+import com.novelfa.reader.domain.isInProgress
+import com.novelfa.reader.domain.progressPercent
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -78,11 +78,11 @@ fun CollectionsScreen(
     val collections by viewModel.collectionNames.collectAsState(initial = emptyList())
     var selected by remember { mutableStateOf<String?>(null) }
     var createOpen by remember { mutableStateOf(false) }
-    var assignTarget by remember { mutableStateOf<BookEntity?>(null) }
+    var assignTarget by remember { mutableStateOf<Book?>(null) }
     var renameTarget by remember { mutableStateOf<String?>(null) }
     var deleteTarget by remember { mutableStateOf<String?>(null) }
-    var resetTarget by remember { mutableStateOf<BookEntity?>(null) }
-    var removeTarget by remember { mutableStateOf<BookEntity?>(null) }
+    var resetTarget by remember { mutableStateOf<Book?>(null) }
+    var removeTarget by remember { mutableStateOf<Book?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val addedFmt = stringResource(R.string.import_summary_added)

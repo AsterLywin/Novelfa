@@ -1,7 +1,7 @@
 package com.novelfa.reader.settings
 
 import com.novelfa.reader.R
-import com.novelfa.reader.data.BookDao
+import com.novelfa.reader.data.BookRepository
 import com.novelfa.reader.data.SortFa
 import java.io.File
 import kotlinx.coroutines.flow.first
@@ -28,11 +28,11 @@ interface ManualCollectionRegistry {
  * (RenameCollection, RemoveFromCollection/SetCollection, ResetProgress,
  * RemoveBook + CleanupUnusedCovers minimally, TogglePrivate).
  *
- * Pure logic over [BookDao] (suspend, no Android APIs) so it is unit-testable
- * with a fake dao. LibraryViewModel delegates to this class.
+ * Pure logic over [BookRepository] (suspend, no Android APIs) so it is unit-testable
+ * with a fake repo. LibraryViewModel delegates to this class.
  */
 class CollectionManager(
-    private val dao: BookDao,
+    private val repo: BookRepository,
     private val cacheDir: File? = null,
     private val filesDir: File? = null,
     private val manualRegistry: ManualCollectionRegistry? = null
@@ -59,23 +59,23 @@ class CollectionManager(
         if (existing.any { it.equals(clean, ignoreCase = true) && !it.equals(old, ignoreCase = true) }) {
             throw CollectionException(R.string.collection_name_exists)
         }
-        dao.allBooks().first()
+        repo.books().first()
             .filter { it.collectionName == old }
-            .forEach { dao.update(it.copy(collectionName = clean)) }
+            .forEach { repo.update(it.copy(collectionName = clean)) }
         manualRegistry?.rename(old, clean)
     }
 
     /** Delete a collection: nulls out the name on every member book (books stay). */
     suspend fun deleteCollection(name: String) {
-        dao.allBooks().first()
+        repo.books().first()
             .filter { it.collectionName == name }
-            .forEach { dao.update(it.copy(collectionName = null)) }
+            .forEach { repo.update(it.copy(collectionName = null)) }
         manualRegistry?.remove(name)
     }
 
     /** Distinct non-blank collection names incl. empty manual ones. */
     suspend fun allCollectionNames(): List<String> {
-        val fromBooks = dao.allBooks().first()
+        val fromBooks = repo.books().first()
             .mapNotNull { it.collectionName?.takeIf { n -> n.isNotBlank() } }
         val manual = manualRegistry?.get() ?: emptySet()
         // Persian natural order like the book list (the default sort used
@@ -90,11 +90,11 @@ class CollectionManager(
      * progressPercent/isCompleted treat identically (isNullOrEmpty).
      */
     suspend fun resetProgress(id: String) {
-        val book = dao.getById(id) ?: return
+        val book = repo.book(id) ?: return
         // Reset also clears the text-point anchor: it belongs to the
         // old chapter, and reopening at chapter 0 must start at its
         // top, not at a stale li:tok from another chapter.
-        dao.update(book.copy(lastChapterIndex = 0, lastOpenedDate = null, lastAnchor = null))
+        repo.update(book.copy(lastChapterIndex = 0, lastOpenedDate = null, lastAnchor = null))
     }
 
     /**
@@ -104,8 +104,8 @@ class CollectionManager(
      * the confirm dialog text reflects this.)
      */
     suspend fun removeBook(id: String) {
-        val book = dao.getById(id) ?: return
-        dao.delete(book)
+        val book = repo.book(id) ?: return
+        repo.delete(book)
         // In-place safety rule: when the book's filePath IS the
         // user's own file (in-place, picked by path), deleting the
         // book must NEVER delete that file. Every other shape's
@@ -114,7 +114,7 @@ class CollectionManager(
         // (The persistable permission for `content://` in-place
         // books is released by the ViewModel, which owns the
         // Context; this class is deliberately Context-free.)
-        if (!com.novelfa.reader.data.InPlaceSource.isExternalFile(book)) {
+        if (!repo.isExternalFile(book)) {
             runCatching { File(book.filePath).takeIf { it.isFile }?.delete() }
         }
         // The transient working copy of a `content://` in-place
@@ -143,7 +143,7 @@ class CollectionManager(
             }
         }
         val cover = book.coverPath?.takeIf { it.isNotBlank() } ?: return
-        val stillUsed = dao.allBooks().first().any { it.coverPath == cover }
+        val stillUsed = repo.books().first().any { it.coverPath == cover }
         if (!stillUsed) {
             runCatching { File(cover).takeIf { it.isFile }?.delete() }
         }
@@ -151,13 +151,13 @@ class CollectionManager(
 
     /** Port of TogglePrivate. */
     suspend fun togglePrivate(id: String) {
-        val book = dao.getById(id) ?: return
-        dao.update(book.copy(isPrivate = !book.isPrivate))
+        val book = repo.book(id) ?: return
+        repo.update(book.copy(isPrivate = !book.isPrivate))
     }
 
     /** Remove a single book from its collection (port of RemoveFromCollection). */
     suspend fun removeFromCollection(id: String) {
-        val book = dao.getById(id) ?: return
-        dao.update(book.copy(collectionName = null))
+        val book = repo.book(id) ?: return
+        repo.update(book.copy(collectionName = null))
     }
 }
