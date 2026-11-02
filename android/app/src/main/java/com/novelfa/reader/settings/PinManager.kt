@@ -27,6 +27,10 @@ interface PinPrefs {
     /** Brute-force throttle state (failures, locked-until epoch ms). */
     suspend fun throttleState(): Pair<Int, Long> = 0 to 0L
     suspend fun setThrottleState(failures: Int, lockedUntilMs: Long) {}
+
+    /** Elapsed-realtime ms at which the current lockout started (0 = none). */
+    suspend fun throttleLockStartedElapsed(): Long = 0L
+    suspend fun setThrottleLockStartedElapsed(elapsedMs: Long) {}
 }
 
 /** In-memory PinPrefs for tests and previews. */
@@ -59,6 +63,13 @@ class PrefsStorePinPrefs(private val store: PrefsStore) : PinPrefs {
     override suspend fun setThrottleState(failures: Int, lockedUntilMs: Long) {
         store.setInt(PrefsStore.PIN_FAILURES, failures)
         store.setLong(PrefsStore.PIN_LOCKED_UNTIL, lockedUntilMs)
+    }
+
+    override suspend fun throttleLockStartedElapsed(): Long =
+        store.getLong(PrefsStore.PIN_LOCK_START_ELAPSED, 0L)
+
+    override suspend fun setThrottleLockStartedElapsed(elapsedMs: Long) {
+        store.setLong(PrefsStore.PIN_LOCK_START_ELAPSED, elapsedMs)
     }
 }
 
@@ -117,6 +128,13 @@ class PinManager(private val prefs: PinPrefs) : PinGate {
 
     suspend fun setThrottleState(failures: Int, lockedUntilMs: Long) {
         prefs.setThrottleState(failures, lockedUntilMs)
+    }
+
+    /** Elapsed-realtime start of the current lockout (see PinThrottle). */
+    suspend fun throttleLockStartedElapsed(): Long = prefs.throttleLockStartedElapsed()
+
+    suspend fun setThrottleLockStartedElapsed(elapsedMs: Long) {
+        prefs.setThrottleLockStartedElapsed(elapsedMs)
     }
 
     companion object {

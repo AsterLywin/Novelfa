@@ -35,37 +35,75 @@ enum class PinMode { SETUP, VERIFY, CHANGE }
  * is mirrored to DataStore through [PinManager] (see PinDialog): an
  * in-memory-only throttle was reset by force-stopping the app, which
  * defeated the lockout entirely.
+ *
+ * The lockout clock is [SystemClock.elapsedRealtime], NOT the wall clock:
+ * moving the system clock forward used to end a lockout early, because
+ * the old check compared [System.currentTimeMillis] against a stored
+ * wall-clock expiry. Elapsed time is monotonic within a boot and the
+ * user cannot move it, so a lockout now always lasts the full 30 s.
+ *
+ * Reboot edge case: elapsed time resets on reboot, so a persisted
+ * elapsed start from a previous boot would look far in the future.
+ * [restore] detects that (stored start > now, i.e. a reboot happened)
+ * and falls back to the stored wall-clock expiry for the remainder —
+ * after a reboot that remainder is normally already spent, and at most
+ * the original 30 s. Legacy installs with no elapsed start stored
+ * (0) use the wall-clock expiry the same way, once.
  */
 object PinThrottle {
     private const val MAX_FAILURES = 5
     private const val LOCKOUT_MS = 30_000L
     private var failures = 0
     private var lockedUntilMs = 0L
+    private var lockStartedElapsedMs = 0L
 
-    fun isLockedOut(): Boolean = System.currentTimeMillis() < lockedUntilMs
+    fun isLockedOut(): Boolean =
+        if (lockStartedElapsedMs > 0L) {
+            android.os.SystemClock.elapsedRealtime() <
+                lockStartedElapsedMs + LOCKOUT_MS
+        } else {
+            System.currentTimeMillis() < lockedUntilMs
+        }
 
-    fun remainingSeconds(): Long =
-        ((lockedUntilMs - System.currentTimeMillis()) / 1000).coerceAtLeast(1)
+    fun remainingSeconds(): Long {
+        val remaining = if (lockStartedElapsedMs > 0L) {
+            lockStartedElapsedMs + LOCKOUT_MS -
+                android.os.SystemClock.elapsedRealtime()
+        } else {
+            lockedUntilMs - System.currentTimeMillis()
+        }
+        return (remaining / 1000).coerceAtLeast(1)
+    }
 
     fun recordFailure() {
         if (++failures >= MAX_FAILURES) {
             failures = 0
             lockedUntilMs = System.currentTimeMillis() + LOCKOUT_MS
+            lockStartedElapsedMs = android.os.SystemClock.elapsedRealtime()
         }
     }
 
     fun reset() {
         failures = 0
         lockedUntilMs = 0L
+        lockStartedElapsedMs = 0L
     }
 
     /** Current state for persisting after a change. */
-    fun snapshot(): Pair<Int, Long> = failures to lockedUntilMs
+    fun snapshot(): Triple<Int, Long, Long> =
+        Triple(failures, lockedUntilMs, lockStartedElapsedMs)
 
     /** Restores persisted state (e.g. after a restart mid-lockout). */
-    fun restore(failures: Int, lockedUntilMs: Long) {
+    fun restore(failures: Int, lockedUntilMs: Long, lockStartedElapsedMs: Long) {
         this.failures = failures
         this.lockedUntilMs = lockedUntilMs
+        // Same boot only: a stored start ahead of now means the device
+        // rebooted since the lockout began, so elapsed time is useless
+        // and the wall-clock expiry above is the only honest remainder.
+        this.lockStartedElapsedMs =
+            if (lockStartedElapsedMs > 0L &&
+                lockStartedElapsedMs <= android.os.SystemClock.elapsedRealtime()
+            ) lockStartedElapsedMs else 0L
     }
 }
 
@@ -102,15 +140,20 @@ fun PinDialog(
     // Restore a persisted lockout (e.g. the app was force-stopped while
     // locked out): without this, the in-memory throttle started clean.
     LaunchedEffect(manager) {
-        val (failures, lockedUntil) = runCatching { manager.throttleState() }
-            .getOrDefault(0 to 0L)
-        PinThrottle.restore(failures, lockedUntil)
+        val (failures, lockedUntil, lockStartedElapsed) = runCatching {
+            val (f, until) = manager.throttleState()
+            Triple(f, until, manager.throttleLockStartedElapsed())
+        }.getOrDefault(Triple(0, 0L, 0L))
+        PinThrottle.restore(failures, lockedUntil, lockStartedElapsed)
     }
 
     /** Persists the throttle after every change, in the same coroutine. */
     suspend fun persistThrottle() {
-        val (failures, lockedUntil) = PinThrottle.snapshot()
-        runCatching { manager.setThrottleState(failures, lockedUntil) }
+        val (failures, lockedUntil, lockStartedElapsed) = PinThrottle.snapshot()
+        runCatching {
+            manager.setThrottleState(failures, lockedUntil)
+            manager.setThrottleLockStartedElapsed(lockStartedElapsed)
+        }
     }
 
     val emptyErr = stringResource(R.string.the_pin_can_t_be_empty)

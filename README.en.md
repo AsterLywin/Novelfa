@@ -5,7 +5,7 @@
 <h1 align="center">Novelfa | ناول‌فا</h1>
 
 <p align="center">
-  <b>A Persian EPUB reader with first-class RTL support — for Android</b><br/>
+  <b>A Persian reader for Android — EPUB, PDF, comics (CBZ/ZIP), TXT, Markdown and DOCX — with first-class RTL support</b><br/>
   <i>کتاب‌خوان EPUB فارسی با پشتیبانی کامل از راست‌به‌چپ — برای اندروید.</i><br/>
   🇮🇷 <a href="README.md">فارسی</a>
 </p>
@@ -35,7 +35,7 @@
 
 ## 📖 About
 
-**Novelfa** is a Persian EPUB reader: a personal library for novels and e-books that goes beyond opening a file — day/night character themes, book collections, an XP rank system, a private lock for personal books, and a portable backup — all built around one goal: comfortable, enjoyable reading of Persian books, with full RTL text and layout support.
+**Novelfa** is a Persian reader: a personal library for novels and e-books that goes beyond opening a file — day/night character themes, book collections, an XP rank system, a private lock for personal books, and a portable backup — all built around one goal: comfortable, enjoyable reading of Persian books, with full RTL text and layout support.
 
 This repository holds the **Android version** of Novelfa, developed by **[AsterLywin](https://github.com/AsterLywin)**. The project is based on **[NovelFaReader](https://github.com/ali1234536/NovelFaReader)**, the original Windows WPF app by **[ali1234536](https://github.com/ali1234536)**; the Windows app itself is not in this repository — it lives upstream with Ali.
 
@@ -43,7 +43,8 @@ This repository holds the **Android version** of Novelfa, developed by **[AsterL
 
 | | |
 |---|---|
-| 📚 **Book format** | EPUB |
+| 📚 **Book formats** | EPUB · PDF · CBZ/ZIP · TXT · Markdown · DOCX |
+| 🖼️ **Native viewer** | PDF and comics with the PDFium engine and native rendering, no EPUB conversion |
 | 📱 **Platform** | Android (Kotlin + Jetpack Compose) |
 | 🌐 **UI languages** | Persian (RTL) · English (LTR) |
 | 💾 **Backup file** | ‎`.novelfabak` — portable between devices |
@@ -69,6 +70,7 @@ This repository holds the **Android version** of Novelfa, developed by **[AsterL
 ### 📚 Reading
 
 - Full EPUB rendering with automatic direction and layout from the book's own language (RTL / LTR)
+- TXT, Markdown and DOCX books are read too, converted into the same text-reading flow
 - Two reading modes: **vertical** (continuous scroll or single-section) and **horizontal paged** (page-by-page)
 - Images sized to the page in paged mode — no blank pages, no cropped images
 - Per-book settings: font, text size (A+/A− buttons and numeric box, with a notice at the 10–72 limits), line spacing and margins
@@ -76,12 +78,15 @@ This repository holds the **Android version** of Novelfa, developed by **[AsterL
 - Resume exactly at the last position, with a per-chapter progress bar
 - Chapter list with a number chip per chapter and the current chapter highlighted
 - Page-turn by finger drag and by tap (outer quarters turn, middle half is inert, links never turn) with automatic pagination recovery on failure
+- **Native page viewer for PDF and comics (CBZ/ZIP):** native PDFium rendering — scanned pages as images, PDF outline, a PDF password asked in the viewer itself (session-only, never stored), and ZIP passwords opened there too
+- Native viewer modes: paged, vertical and horizontal strips, dual-page; finger zoom applies to all pages (not just the current one), animated double-tap zoom, manual margin crop, filters (grey/contrast/invert) and page rotation
+- AVIF comics use a native decoder; prebuilt libraries ship in the repo, so no NDK is needed to build
 
 ### 🗂️ Library & Collections
 
 - Search, sorting, and tabs for all books / reading / finished / favorites / recently opened
-- Single and batch EPUB import, with an overwrite-confirmation dialog for duplicates
-- Open an EPUB directly from Android's file manager with automatic import
+- Single and batch import of EPUB, PDF, CBZ/ZIP, TXT, Markdown and DOCX, with an overwrite-confirmation dialog for duplicates
+- Open a file directly from Android's file manager with automatic import; optional in-place reading (off by default) opens a book without copying it and never touches the original file
 - Multi-select and batch delete
 - Personal collections: create, rename, pin, per-collection stats, and "continue reading" inside each collection
 - A "continue reading" card and live library stats on the home screen
@@ -101,7 +106,7 @@ This repository holds the **Android version** of Novelfa, developed by **[AsterL
 
 ### 🔐 Privacy
 
-- PIN lock for entering the app and for private books — secure PBKDF2 hashing and temporary lockout after repeated failed attempts
+- PIN lock for entering the app and for private books — secure PBKDF2 hashing and temporary lockout after repeated failed attempts; the lockout clock is the device's elapsed time, so moving the system clock forward cannot end a lockout early
 
 ---
 
@@ -115,7 +120,7 @@ Reading progress is measured in **XP**, not just finished books.
 
 - The XP unit is **one book section** (spine item): `max(1, (words + 1000) / 2000)` — in CJK text, each character counts as one word.
 - A section's XP is recorded only when you actually visited it, stayed at least 5 seconds, and left it; each section pays out once.
-- The book-completion bonus — `max(10, bookXp / 10)` — is paid only when the last section is credited and at least 90% of sections are credited; each book pays it once.
+- The book-completion bonus — `max(10, bookXp / 10)` — is paid only when the last section is credited and at least 90% of sections are credited; each book pays it once. Sections under 50 words (cover, table of contents, copyright, one-line pages) are exempt from both sides of the 90% — they still earn their own unit XP, but skipping them can no longer block the bonus.
 - Private-shelf books earn no XP.
 
 **12 titles, 5 stars each**
@@ -200,8 +205,8 @@ Novelfa/
 │   │   ├── data/                # Database (Room), settings (DataStore), backup
 │   │   ├── library/             # Library and collections
 │   │   ├── model/               # Data models
-│   │   ├── parser/              # EPUB parsing
-│   │   ├── reader/              # Reading engine (WebView)
+│   │   ├── parser/              # EPUB, PDF, DOCX, TXT and CBZ parsing
+│   │   ├── reader/              # Text reading engine (WebView) + native page viewer (PDF/CBZ)
 │   │   ├── settings/            # Settings and profile
 │   │   └── theme/               # Themes, ranks, particles, decorative effects
 │   └── task.cmd                 # Windows build tool (Debug / Release + output check)
@@ -222,7 +227,8 @@ Novelfa/
 | **Language** | Kotlin 2.0.20 |
 | **UI** | Jetpack Compose · Material 3 |
 | **Framework** | Android SDK 35 (min 29) |
-| **Book rendering** | Android WebView |
+| **Book rendering** | Android WebView for text books · native PDFium for PDF and comics |
+| **Images** | Native AVIF decoder (libavif) + Coil |
 | **Storage** | Room + DataStore |
 | **Build** | Gradle (AGP 8.5.2) |
 

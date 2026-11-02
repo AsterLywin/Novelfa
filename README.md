@@ -5,7 +5,7 @@
 <h1 align="center">ناول‌فا | Novelfa</h1>
 
 <p align="center">
-  <b>کتاب‌خوان EPUB فارسی با پشتیبانی کامل از راست‌به‌چپ — برای اندروید</b><br/>
+  <b>کتاب‌خوان فارسی برای اندروید — EPUB، PDF، کمیک (CBZ/ZIP)، TXT، Markdown و DOCX — با پشتیبانی کامل از راست‌به‌چپ</b><br/>
   <i>A Persian EPUB reader with first-class RTL support — for Android.</i><br/>
   🇬🇧 <a href="README.en.md">English</a>
 </p>
@@ -35,7 +35,7 @@
 
 ## 📖 درباره‌ی پروژه
 
-**ناول‌فا** یک کتاب‌خوان EPUB فارسی است؛ کتابخانه‌ای شخصی برای رمان‌ها و کتاب‌های الکترونیک که مطالعه را از باز کردن یک فایل ساده فراتر می‌برد: تم‌های کاراکتری روز و شب، کالکشن‌بندی کتاب‌ها، سیستم XP و رتبه، قفل خصوصی برای کتاب‌های شخصی و پشتیبان‌گیری قابل‌حمل — همه دور یک هدف جمع شده‌اند: مطالعه‌ی راحت و لذت‌بخش کتاب فارسی، با پشتیبانی کامل از متن و چیدمان راست‌به‌چپ.
+**ناول‌فا** یک کتاب‌خوان فارسی است؛ کتابخانه‌ای شخصی برای رمان‌ها و کتاب‌های الکترونیک که مطالعه را از باز کردن یک فایل ساده فراتر می‌برد: تم‌های کاراکتری روز و شب، کالکشن‌بندی کتاب‌ها، سیستم XP و رتبه، قفل خصوصی برای کتاب‌های شخصی و پشتیبان‌گیری قابل‌حمل — همه دور یک هدف جمع شده‌اند: مطالعه‌ی راحت و لذت‌بخش کتاب فارسی، با پشتیبانی کامل از متن و چیدمان راست‌به‌چپ.
 
 این ریپو **نسخه‌ی اندروید** ناول‌فاست که **[AsterLywin](https://github.com/AsterLywin)** توسعه می‌دهد. پروژه بر پایه‌ی کتاب‌خوان ویندوزی **[NovelFaReader](https://github.com/ali1234536/NovelFaReader)** اثر **[ali1234536](https://github.com/ali1234536)** ساخته شده است؛ نسخه‌ی ویندوز در این ریپو نیست و در ریپوی اصلی علی زندگی می‌کند.
 
@@ -43,7 +43,8 @@
 
 | | |
 |---|---|
-| 📚 **فرمت کتاب** | EPUB |
+| 📚 **فرمت کتاب** | EPUB · PDF · CBZ/ZIP · TXT · Markdown · DOCX |
+| 🖼️ **نمایشگر بومی** | PDF و کمیک با موتور PDFium و رندر بومی، بدون تبدیل به EPUB |
 | 📱 **پلتفرم** | اندروید (Kotlin + Jetpack Compose) |
 | 🌐 **زبان رابط کاربری** | فارسی (راست‌به‌چپ) · انگلیسی (چپ‌به‌راست) |
 | 💾 **فایل پشتیبان** | ‎`.novelfabak` — قابل انتقال بین دستگاه‌ها |
@@ -70,6 +71,7 @@
 ### 📚 مطالعه
 
 - رندر کامل EPUB با جهت و چیدمان خودکار بر اساس زبان کتاب (راست‌به‌چپ / چپ‌به‌راست)
+- کتاب‌های TXT، Markdown و DOCX هم خوانده می‌شوند و به همان جریان مطالعه‌ی متنی تبدیل می‌شوند
 - دو حالت مطالعه: **عمودی** (اسکرول پیوسته یا تک‌بخشی) و **افقیِ ورق‌زدنی** (صفحه‌به‌صفحه)
 - تناسب خودکار تصاویر با صفحه در حالت ورق‌زدنی — بدون صفحه‌ی خالی یا تصویر بریده
 - تنظیم جدا برای هر کتاب: فونت، اندازه‌ی متن (دکمه‌های ‎A+/A−‎ و کادر عددی، با هشدار رسیدن به حد ۱۰ تا ۷۲)، فاصله‌ی خطوط و حاشیه‌ها
@@ -77,12 +79,15 @@
 - ادامه‌ی مطالعه دقیقاً از آخرین موقعیت، با نوار پیشرفت فصل‌به‌فصل
 - فهرست بخش‌ها با شماره‌ی هر بخش و نمایش بخش جاری
 - ورق‌زدن با کشیدن انگشت و با ضربه (ربع‌های کناری ورق می‌زنند، نیمه‌ی میانی خنثی است، لینک‌ها ورق نمی‌زنند) و بازیابی خودکار صفحه‌بندی در صورت خرابی
+- **نمایشگر بومی صفحه‌ای برای PDF و کمیک (CBZ/ZIP):** رندر بومی با PDFium — صفحه‌های اسکن‌شده به‌صورت تصویر، فهرست PDF، رمز PDF در خود نمایشگر پرسیده می‌شود (فقط همان جلسه، ذخیره نمی‌شود) و رمز ZIP هم همان‌جا باز می‌شود
+- حالت‌های نمایشگر بومی: ورق‌زدنی، نوار عمودی و افقی، دوصفحه‌ای؛ زوم انگشتی برای همه‌ی صفحه‌ها (نه فقط صفحه‌ی جاری)، زوم دوبار ضربه با انیمیشن، برش دستی حاشیه، فیلترها (خاکستری/کنتراست/معکوس) و چرخش صفحه
+- کمیک‌های AVIF با دیکدر بومی خوانده می‌شوند؛ کتابخانه‌های ازپیش‌ساخته‌شده در ریپو هست، پس برای بیلد به NDK نیاز نیست
 
 ### 🗂️ کتابخانه و کالکشن‌ها
 
 - جستجو، مرتب‌سازی و تب‌های همه‌ی کتاب‌ها / در حال مطالعه / تمام‌شده / علاقه‌مندی‌ها / اخیراً بازشده
-- ایمپورت تکی و گروهی EPUB، با دیالوگ تأیید بازنویسی برای کتاب‌های تکراری
-- باز کردن مستقیم فایل EPUB از فایل‌منیجر اندروید و ایمپورت خودکار
+- ایمپورت تکی و گروهی EPUB، PDF، CBZ/ZIP، TXT، Markdown و DOCX، با دیالوگ تأیید بازنویسی برای کتاب‌های تکراری
+- باز کردن مستقیم فایل از فایل‌منیجر اندروید و ایمپورت خودکار؛ حالت «خواندن در محل» (اختیاری، پیش‌فرض خاموش) کتاب را بدون کپی‌کردن باز می‌کند و فایل اصلی را دست نمی‌زند
 - انتخاب چندتایی و حذف گروهی کتاب‌ها
 - کالکشن‌های شخصی: ساخت، تغییر نام، سنجاق‌کردن، آمار هر مجموعه و «ادامه‌ی مطالعه» در هر کالکشن
 - کارت «ادامه‌ی مطالعه» و آمار زنده‌ی کتابخانه در صفحه‌ی اصلی
@@ -102,7 +107,7 @@
 
 ### 🔐 حریم خصوصی
 
-- قفل PIN برای ورود به برنامه و کتاب‌های خصوصی — هش امن PBKDF2 و قفل موقت پس از تلاش‌های ناموفق پیاپی
+- قفل PIN برای ورود به برنامه و کتاب‌های خصوصی — هش امن PBKDF2 و قفل موقت پس از تلاش‌های ناموفق پیاپی؛ ساعت قفل موقت، زمان سپری‌شده‌ی دستگاه است، پس جلو کشیدن ساعت سیستم قفل را زودتر باز نمی‌کند
 
 ---
 
@@ -116,7 +121,7 @@
 
 - واحد XP، **یک بخش کتاب** (spine item) است: `max(1, (words + 1000) / 2000)` — در متن‌های CJK هر نویسه یک کلمه حساب می‌شود.
 - XP یک بخش وقتی ثبت می‌شود که آن بخش را واقعاً دیده باشی، حداقل ۵ ثانیه در آن مانده باشی و از آن خارج شوی؛ هر بخش فقط یک بار XP می‌دهد.
-- جایزه‌ی پایان کتاب — `max(10, bookXp / 10)` — فقط وقتی داده می‌شود که آخرین بخش ثبت شده باشد و حداقل ۹۰٪ بخش‌ها XP گرفته باشند؛ هر کتاب فقط یک بار.
+- جایزه‌ی پایان کتاب — `max(10, bookXp / 10)` — فقط وقتی داده می‌شود که آخرین بخش ثبت شده باشد و حداقل ۹۰٪ بخش‌ها XP گرفته باشند؛ هر کتاب فقط یک بار. بخش‌های زیر ۵۰ کلمه (جلد، فهرست، حق نشر، صفحه‌های تک‌خطی) از صورت و مخرج ۹۰٪ معاف‌اند — XP خودشان را می‌گیرند، ولی رد شدنشان بونوس را قفل نمی‌کند.
 - کتاب‌های قفسه‌ی خصوصی XP نمی‌دهند.
 
 **۱۲ عنوان، هر کدام ۵ ستاره**
@@ -201,8 +206,8 @@ Novelfa/
 │   │   ├── data/                # دیتابیس (Room)، تنظیمات (DataStore)، بکاپ
 │   │   ├── library/             # کتابخانه و کالکشن‌ها
 │   │   ├── model/               # مدل‌های داده
-│   │   ├── parser/              # پارس EPUB
-│   │   ├── reader/              # موتور مطالعه (WebView)
+│   │   ├── parser/              # پارس EPUB، PDF، DOCX، TXT و CBZ
+│   │   ├── reader/              # موتور مطالعه‌ی متنی (WebView) + نمایشگر بومی صفحه‌ای (PDF/CBZ)
 │   │   ├── settings/            # تنظیمات و پروفایل
 │   │   └── theme/               # تم‌ها، رتبه‌ها، ذرات و آثار تزئینی
 │   └── task.cmd                 # ابزار بیلد ویندوزی (Debug / Release + بررسی خروجی)
@@ -223,7 +228,8 @@ Novelfa/
 | **زبان** | Kotlin 2.0.20 |
 | **رابط کاربری** | Jetpack Compose · Material 3 |
 | **فریم‌ورک** | Android SDK 35 (حداقل 29) |
-| **رندر کتاب** | Android WebView |
+| **رندر کتاب** | Android WebView برای کتاب‌های متنی · PDFium بومی برای PDF و کمیک |
+| **تصویر** | دیکدر بومی AVIF (libavif) + Coil |
 | **ذخیره‌سازی** | Room + DataStore |
 | **بیلد** | Gradle (AGP 8.5.2) |
 
@@ -252,7 +258,7 @@ gradlew.bat assembleDebug
 
 **Novelfa** is a Persian EPUB reader with first-class RTL support, for Android. This repository holds the native Kotlin / Jetpack Compose app (`minSdk 29`, `targetSdk 35`), developed by **AsterLywin**. It is based on **[NovelFaReader](https://github.com/ali1234536/NovelFaReader)**, the original Windows WPF app by **ali1234536**; the Windows app itself is not in this repository.
 
-Highlights: per-book reading settings, vertical & paged reading modes, collections, 7 day/night character themes with animated particles and emblem artwork, secret unlockable themes, an XP rank system (12 titles × 5 fractional stars, eternity marks past 27,000 XP), PIN lock, custom fonts, full FA/EN bilingual UI, and a validated backup format (`.novelfabak`) that carries fonts, avatar, total XP, secret themes and per-book reading records between devices — re-import a book and it resumes exactly where you left off.
+Highlights: EPUB, PDF, CBZ/ZIP, TXT, Markdown and DOCX; a native page viewer for PDF and comics (PDFium rendering, global finger zoom, manual crop, filters, dual-page and strips); per-book reading settings, vertical & paged reading modes, collections, 7 day/night character themes with animated particles and emblem artwork, secret unlockable themes, an XP rank system (12 titles × 5 fractional stars, eternity marks past 27,000 XP), PIN lock, custom fonts, full FA/EN bilingual UI, and a validated backup format (`.novelfabak`) that carries fonts, avatar, total XP, secret themes and per-book reading records between devices — re-import a book and it resumes exactly where you left off.
 
 The full English version of this document is in [README.en.md](README.en.md).
 

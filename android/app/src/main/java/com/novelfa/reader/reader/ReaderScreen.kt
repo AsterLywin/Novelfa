@@ -546,6 +546,19 @@ fun ReaderScreen(
             // XP credit: private books never earn XP (old-rank parity).
             // The bridge preload is awaited so a credit can never clobber
             // the stored total with a not-yet-loaded default.
+            // Bonus 90% exemption: units under 50 words (cover, TOC,
+            // copyright, one-line pages) must not block the book bonus.
+            // Counted once at open, from the chapter files themselves,
+            // with the same word counter the credit path uses.
+            val qualifyingUnits = withContext(Dispatchers.IO) {
+                parsed.chapters.map { ch ->
+                    runCatching {
+                        com.novelfa.reader.theme.XpRank.wordsFromHtml(ch.file.readText())
+                    }.getOrDefault(0)
+                }
+            }
+            val qualifyingTotal = qualifyingUnits.count { it >= com.novelfa.reader.theme.XpRank.BONUS_MIN_WORDS }
+            val lastQualifying = qualifyingUnits.indexOfLast { it >= com.novelfa.reader.theme.XpRank.BONUS_MIN_WORDS }
             val xpPrefs = PrefsStoreRankPrefs(prefs)
             // Lazy content-key rekeying: the first credit in this
             // session hashes the stored file once (on IO, inside the
@@ -567,7 +580,9 @@ fun ReaderScreen(
                             }
                             val key = xpResolver.resolve(bookId, hash)
                             XpStore(xpPrefs).creditUnit(
-                                key, unit, words, parsed.chapters.size, false
+                                key, unit, words, parsed.chapters.size, false,
+                                qualifyingTotalUnits = qualifyingTotal,
+                                lastQualifyingUnit = lastQualifying
                             )
                         }
                     }

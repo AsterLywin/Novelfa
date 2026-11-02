@@ -41,6 +41,9 @@ class PrefsStore(private val context: Context) {
         // was reset by force-stopping the app, defeating the lockout).
         val PIN_FAILURES = intPreferencesKey("pinFailures")
         val PIN_LOCKED_UNTIL = longPreferencesKey("pinLockedUntil")
+        // Elapsed-realtime start of the PIN lockout (see PinThrottle):
+        // the wall-clock expiry above is kept only as a reboot fallback.
+        val PIN_LOCK_START_ELAPSED = longPreferencesKey("pinLockStartElapsed")
         val SUPPORT_SECONDS = intPreferencesKey("supportSeconds")
         val LANG = stringPreferencesKey("Lang")
         val FONT_FAMILY = stringPreferencesKey("fontFamily")

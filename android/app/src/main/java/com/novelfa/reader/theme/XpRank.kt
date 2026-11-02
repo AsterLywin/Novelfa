@@ -16,7 +16,16 @@ import kotlin.math.max
  *   mark. Marks never end; only their count grows. The first 10 marks have
  *   distinct names/designs, the 10th being the most beautiful.
  * - Book-completion bonus: max(10, bookXp / 10), only when the book is
- *   finished AND >= 90% of its units have earned XP.
+ *   finished AND >= 90% of its units have earned XP. Units under
+ *   [XpRank.BONUS_MIN_WORDS] words (cover, table of contents, copyright,
+ *   one-line pages) are exempt from BOTH sides of that 90% — they still
+ *   earn their own unit XP when visited, but they can no longer block
+ *   the bonus by being skipped. The exemption needs the book's
+ *   qualifying-unit count, which only the text reader knows at open
+ *   time, so it applies through [XpStore.creditUnit]'s qualifying
+ *   parameters; callers that do not supply them keep the old rule
+ *   (native page books: a page's word count is not a chapter, and an
+ *   image page would count as "small").
  * - Anti-cheat lives in [XpSessionTracker] (visited-only, >= 5 s dwell,
  *   once per unit per book) and [XpLedger] (no double credit, private
  *   books excluded by the caller).
@@ -84,6 +93,9 @@ enum class CelebrationTier { STAR, TITLE, ETERNITY, ETERNITY_FINAL }
 object XpRank {
     const val CAP_XP = 27_000
     const val MARK_STEP_XP = 10_000
+
+    /** Units below this word count are exempt from the bonus 90% rule. */
+    const val BONUS_MIN_WORDS = 50
 
     val Titles: List<XpTitle> = listOf(
         XpTitle(0, "تازه‌وارد", "Newcomer", 0),
@@ -227,12 +239,22 @@ object XpRank {
  * Per-book ledger of XP-credited units. Sequential reading collapses to a
  * single [upTo] int (units 0..upTo credited); jumped-to units live in
  * [extras]. [bookXp] is the sum of XP credited for that book (bonus base).
+ * [smallCredited] holds the credited units that were under
+ * [XpRank.BONUS_MIN_WORDS] words, so the bonus 90% can count qualifying
+ * units only; it is empty for books credited without the exemption.
  * Format (device-local, book ids are UUIDs, so no separator collisions):
  * `id:upTo:extraCsv:bookXp;id:…|bonusId,bonusId` — lenient parse, bad
- * entries are skipped rather than failing the whole ledger.
+ * entries are skipped rather than failing the whole ledger. Entries with
+ * a small-unit set append a 5th field (`:smallCsv`); entries without one
+ * keep the old 4-field shape, so old backups still parse.
  */
 class XpLedger {
-    private data class BookLedger(var upTo: Int = -1, val extras: MutableSet<Int> = mutableSetOf(), var bookXp: Int = 0)
+    private data class BookLedger(
+        var upTo: Int = -1,
+        val extras: MutableSet<Int> = mutableSetOf(),
+        var bookXp: Int = 0,
+        val smallCredited: MutableSet<Int> = mutableSetOf()
+    )
 
     private val books = mutableMapOf<String, BookLedger>()
     private val bonusAwarded = mutableSetOf<String>()
@@ -250,6 +272,13 @@ class XpLedger {
 
     fun bookXp(bookId: String): Int = books[bookId]?.bookXp ?: 0
 
+    /** Credited units that count toward the bonus 90% (small ones out). */
+    fun creditedQualifyingCount(bookId: String): Int {
+        val b = books[bookId] ?: return 0
+        return creditedCount(bookId) -
+            b.smallCredited.count { it <= b.upTo || it in b.extras }
+    }
+
     fun isBonusAwarded(bookId: String): Boolean = bookId in bonusAwarded
 
     fun markBonusAwarded(bookId: String) {
@@ -257,9 +286,10 @@ class XpLedger {
     }
 
     /** Returns false when the unit was already credited. */
-    fun markCredited(bookId: String, unit: Int, xp: Int): Boolean {
+    fun markCredited(bookId: String, unit: Int, xp: Int, isSmall: Boolean = false): Boolean {
         if (isCredited(bookId, unit)) return false
         val b = books.getOrPut(bookId) { BookLedger() }
+        if (isSmall) b.smallCredited += unit
         if (unit == b.upTo + 1) {
             b.upTo = unit
             while (b.upTo + 1 in b.extras) {
@@ -286,6 +316,7 @@ class XpLedger {
      */
     private fun mergeEntryInto(target: BookLedger, source: BookLedger) {
         if (source.upTo > target.upTo) target.upTo = source.upTo
+        target.smallCredited += source.smallCredited
         target.extras += source.extras
         target.extras.removeAll { it <= target.upTo }
         while (target.upTo + 1 in target.extras) {
@@ -334,7 +365,10 @@ class XpLedger {
         val filtered = XpLedger()
         for ((key, entry) in books) {
             if (!isContentKey(key)) continue
-            filtered.books[key] = BookLedger(entry.upTo, entry.extras.toMutableSet(), entry.bookXp)
+            filtered.books[key] = BookLedger(
+                entry.upTo, entry.extras.toMutableSet(), entry.bookXp,
+                entry.smallCredited.toMutableSet()
+            )
             if (key in bonusAwarded) filtered.bonusAwarded += key
         }
         return filtered.serialize()
@@ -353,7 +387,9 @@ class XpLedger {
     fun serialize(): String {
         val booksPart = books.entries.sortedBy { it.key }.joinToString(";") { (id, b) ->
             val extras = b.extras.sorted().joinToString(",")
-            "$id:${b.upTo}:$extras:${b.bookXp}"
+            val base = "$id:${b.upTo}:$extras:${b.bookXp}"
+            if (b.smallCredited.isEmpty()) base
+            else base + ":" + b.smallCredited.sorted().joinToString(",")
         }
         return if (bonusAwarded.isEmpty()) booksPart
         else booksPart + "|" + bonusAwarded.sorted().joinToString(",")
@@ -385,7 +421,7 @@ class XpLedger {
                 for (entry in booksPart.split(";")) {
                     if (entry.isBlank()) continue
                     val fields = entry.split(":")
-                    if (fields.size != 4) continue
+                    if (fields.size != 4 && fields.size != 5) continue
                     val id = fields[0]
                     if (id.isBlank()) continue
                     val upTo = fields[1].toIntOrNull() ?: continue
@@ -393,9 +429,15 @@ class XpLedger {
                         ?.split(",")?.mapNotNull { it.toIntOrNull() }
                         ?.filter { it >= 0 }?.toMutableSet() ?: mutableSetOf()
                     val bookXp = fields[3].toIntOrNull() ?: continue
+                    val small = if (fields.size == 5) {
+                        fields[4].takeIf { it.isNotBlank() }
+                            ?.split(",")?.mapNotNull { it.toIntOrNull() }
+                            ?.filter { it >= 0 }?.toMutableSet() ?: mutableSetOf()
+                    } else mutableSetOf()
                     if (upTo < -1 || upTo > 1_000_000 || bookXp < 0) continue
-                    val b = BookLedger(upTo.coerceIn(-1, 1_000_000), extras, bookXp)
+                    val b = BookLedger(upTo.coerceIn(-1, 1_000_000), extras, bookXp, small)
                     b.extras.removeAll { it <= b.upTo }
+                    b.smallCredited.removeAll { it !in b.extras && it > b.upTo }
                     out.books[id] = b
                 }
             }
@@ -540,24 +582,45 @@ class XpStore(private val prefs: RankPrefs) {
      * credited — whichever credit reaches that state (so a last unit read
      * early, before 90%, does not lose the bonus forever: the credit that
      * later pushes the book past 90% awards it).
+     *
+     * [qualifyingTotalUnits] / [lastQualifyingUnit] switch on the
+     * small-unit exemption: when both are given (and the qualifying
+     * total is positive), the 90% and the "finished" check count
+     * qualifying units only, and units under [XpRank.BONUS_MIN_WORDS]
+     * words are tracked as small instead of counting toward either
+     * side. When they are absent, the old rule runs unchanged.
      */
     fun creditUnit(
         bookId: String,
         unit: Int,
         words: Int,
         totalUnits: Int,
-        isPrivate: Boolean
+        isPrivate: Boolean,
+        qualifyingTotalUnits: Int? = null,
+        lastQualifyingUnit: Int? = null
     ): XpCreditResult? {
         if (isPrivate || unit < 0 || totalUnits <= 0) return null
+        val useExemption = qualifyingTotalUnits != null &&
+            qualifyingTotalUnits > 0 && lastQualifyingUnit != null
         return synchronized(ledgerLock) {
             val led = ledger
             if (led.isCredited(bookId, unit)) return@synchronized null
             val unitXp = XpRank.xpForUnit(words)
-            if (!led.markCredited(bookId, unit, unitXp)) return@synchronized null
+            val isSmall = useExemption && words < XpRank.BONUS_MIN_WORDS
+            if (!led.markCredited(bookId, unit, unitXp, isSmall)) return@synchronized null
             var bonus = 0
             val credited = led.creditedCount(bookId)
-            val finished = led.isCredited(bookId, totalUnits - 1)
-            if (finished && !led.isBonusAwarded(bookId) && credited * 10 >= totalUnits * 9) {
+            val finished: Boolean
+            val qualifies: Boolean
+            if (useExemption) {
+                finished = led.isCredited(bookId, lastQualifyingUnit!!)
+                val creditedQualifying = led.creditedQualifyingCount(bookId)
+                qualifies = creditedQualifying * 10 >= qualifyingTotalUnits!! * 9
+            } else {
+                finished = led.isCredited(bookId, totalUnits - 1)
+                qualifies = credited * 10 >= totalUnits * 9
+            }
+            if (finished && !led.isBonusAwarded(bookId) && qualifies) {
                 bonus = XpRank.bookBonus(led.bookXp(bookId))
                 led.markBonusAwarded(bookId)
             }
