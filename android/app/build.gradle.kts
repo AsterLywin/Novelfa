@@ -68,6 +68,9 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:core:1.6.1")
+    // Migration tests (ReaderDbMigrationTest): MigrationTestHelper reads
+    // the committed schema JSONs from androidTest assets.
+    androidTestImplementation("androidx.room:room-testing:2.6.1")
 }
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 
