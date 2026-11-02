@@ -105,6 +105,16 @@ fun ZoomablePageContainer(
     // Confirmed double-tap (same spot, within 300ms): the
     // viewer uses it to suppress the pending chrome toggle.
     onDoubleTap: () -> Unit = {},
+    // Single tap, reported here (2026-11-02): the diagnostic
+    // build proved BOTH ancestor passive listeners (page
+    // item, viewer page area) never fire on the phone — no
+    // diagnostic message at all — while THIS loop demonstrably
+    // receives pointer events (pinch zoom and pan work on the
+    // same pages). So the tap toggle must ride the loop that
+    // actually gets events, not another ancestor listener.
+    // The viewer delays the toggle 300ms and a confirmed
+    // double-tap suppresses it, exactly as before.
+    onTap: () -> Unit = {},
     content: @Composable () -> Unit
 ) {
     // Plain state, not Animatable: the gesture loop runs in a
@@ -146,7 +156,15 @@ fun ZoomablePageContainer(
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                 while (true) {
-                    val down = awaitFirstDown()
+                    // requireUnconsumed = false (2026-11-02):
+                    // the pager/list may consume the down
+                    // first, and this loop must still track
+                    // the gesture — it never consumes a tap
+                    // itself, and for moves it already checks
+                    // positionChangeConsumed, so tracking a
+                    // consumed down cannot starve a scroll or
+                    // a page turn.
+                    val down = awaitFirstDown(requireUnconsumed = false)
                     val downPos = down.position
                     var pinch = false
                     var pastSlop = false
@@ -155,10 +173,15 @@ fun ZoomablePageContainer(
                     var totalDrag = Offset.Zero
                     val slop = viewConfiguration.touchSlop
                     var gestureActive = true
+                    var upConsumed = false
                     while (gestureActive) {
                         val event = awaitPointerEvent()
                         val pressed = event.changes.filter { it.pressed }
-                        if (pressed.isEmpty()) break
+                        if (pressed.isEmpty()) {
+                            upConsumed =
+                                event.changes.any { it.isConsumed }
+                            break
+                        }
                         if (pressed.size >= 2) {
                             // Pinch: zoom around the focal point,
                             // pan with the centroid, consume all.
@@ -259,11 +282,15 @@ fun ZoomablePageContainer(
                     }
                     // A tap is a gesture that never passed slop
                     // and never pinched: it was never consumed
-                    // above. The chrome toggle for it comes
-                    // from the page item's passive listener,
-                    // not from here — only this container
-                    // knows the tap landed on THIS page, so it
-                    // owns the double-tap zoom decision below.
+                    // above. Only this container knows the
+                    // tap landed on THIS page, so it owns
+                    // both the double-tap zoom decision below
+                    // and, since 2026-11-02, the single-tap
+                    // report itself: a tap whose up was
+                    // already consumed (a bar button, a retry
+                    // button) is not a page tap and is skipped
+                    // here, which is what keeps bar taps from
+                    // toggling the chrome.
                     if (!pastSlop) {
                         val now = System.currentTimeMillis()
                         if (now - lastTapUpMs < 300 &&
@@ -300,7 +327,16 @@ fun ZoomablePageContainer(
                             // for this one (a lone second tap
                             // never suppresses anything).
                             onDoubleTap()
-                        } else {
+                        } else if (!upConsumed) {
+                            // Single page tap: report it for
+                            // the chrome toggle (the viewer
+                            // waits 300ms, so a second tap
+                            // that turns out to be a double
+                            // still suppresses it). A consumed
+                            // tap sets neither this nor the
+                            // double-tap timer: a bar tap must
+                            // not count as a page tap at all.
+                            onTap()
                             lastTapUpMs = now
                             lastTapPos = downPos
                         }

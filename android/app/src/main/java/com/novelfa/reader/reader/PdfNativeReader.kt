@@ -1707,6 +1707,10 @@ private fun NativeImageBookViewer(
         diagMessage = context.getString(R.string.diag_tap_viewer)
         handlePageTap()
     }
+    fun zoomableTap() {
+        diagMessage = context.getString(R.string.diag_tap_zoomable)
+        handlePageTap()
+    }
     // Volume-key focus: the tap surface holds focus while the
     // switch is on, so the volume keys reach it. Focus is
     // re-requested when the sheet closes (the sheet steals it
@@ -1995,6 +1999,7 @@ private fun NativeImageBookViewer(
                             manualCropRect = manualCropRects[page],
                             halfSide = halfSide,
                             onTap = { itemTap() },
+                            onZoomableTap = { zoomableTap() },
                             onDoubleTap = { tapSuppress = true },
                             bitmapCache = pageBitmapCache
                         )
@@ -2110,6 +2115,7 @@ private fun NativeImageBookViewer(
                                 manualCropRect = manualCropRects[page],
                                 horizontalStrip = true,
                                 onTap = { itemTap() },
+                                onZoomableTap = { zoomableTap() },
                                 onDoubleTap = { tapSuppress = true },
                                 bitmapCache = pageBitmapCache
                             )
@@ -2153,6 +2159,7 @@ private fun NativeImageBookViewer(
                             viewRotation = viewRotation,
                             manualCropRect = manualCropRects[page],
                             onTap = { itemTap() },
+                            onZoomableTap = { zoomableTap() },
                             onDoubleTap = { tapSuppress = true },
                             bitmapCache = pageBitmapCache
                         )
@@ -4095,6 +4102,12 @@ private fun NativePageItem(
     // second tap on its own (see the viewer note).
     onTap: () -> Unit = {},
     onDoubleTap: () -> Unit = {},
+    // Single tap as seen by the Zoomable container itself
+    // (2026-11-02): the ancestor listeners never fired on
+    // the phone, so the Zoomable loop — the one that provably
+    // gets events — reports taps too. Defaults to onTap, so
+    // existing callers keep working unchanged.
+    onZoomableTap: () -> Unit = onTap,
     // The viewer's page-return park (see
     // NativePageBitmapCache). Null = today's behaviour exactly:
     // render on compose, recycle on dispose, no parking.
@@ -4623,6 +4636,7 @@ private fun NativePageItem(
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
                     },
                     onDoubleTap = onDoubleTap,
+                    onTap = onZoomableTap,
                 ) {
                     AnimatedPageImage(
                         rotation = viewRotation.toFloat(),
@@ -4752,6 +4766,7 @@ private fun NativePageItem(
                                     .aspectRatio(ratio),
                                 onScaleChange = onPinchScale,
                                 onDoubleTap = onDoubleTap,
+                                onTap = onZoomableTap,
                             ) {
                                 Image(
                                     bitmap = bmp.asImageBitmap(),
@@ -4784,6 +4799,7 @@ private fun NativePageItem(
                     },
                     onScaleChange = onPinchScale,
                     onDoubleTap = onDoubleTap,
+                    onTap = onZoomableTap,
                 ) {
                     Image(
                         bitmap = bmp.asImageBitmap(),

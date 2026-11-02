@@ -329,6 +329,7 @@
     <string name="cbz_native_loading">Opening comic…</string>
     <string name="cbz_native_error">Couldn\'t open this comic file.</string>
     <string name="diag_tap_viewer">DIAG: viewer tap seen</string>
+    <string name="diag_tap_zoomable">DIAG: zoomable tap seen</string>
     <string name="diag_tap_item">DIAG: item tap seen</string>
     <string name="diag_tap_toggle">DIAG: chrome toggled</string>
     <string name="diag_tap_suppress">DIAG: double-tap suppressed toggle</string>
