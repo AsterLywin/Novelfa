@@ -328,11 +328,6 @@
     <string name="pdf_retry">تلاش دوباره</string>
     <string name="cbz_native_loading">در حال باز کردن کمیک…</string>
     <string name="cbz_native_error">باز کردن این فایل کمیک انجام نشد.</string>
-    <string name="diag_tap_viewer">تشخیص: لمس در سطح نمایشگر دیده شد</string>
-    <string name="diag_tap_zoomable">تشخیص: لمس در زوم دیده شد</string>
-    <string name="diag_tap_item">تشخیص: لمس در سطح صفحه دیده شد</string>
-    <string name="diag_tap_toggle">تشخیص: نوارها عوض شدند</string>
-    <string name="diag_tap_suppress">تشخیص: دابل‌تپ جلوی تغییر را گرفت</string>
     <string name="import_section_title">ایمپورت</string>
     <string name="library_section">کتابخانه</string>
     <string name="library_file_name_title">نمایش اسم فایل به‌جای عنوان کتاب</string>

@@ -1644,31 +1644,11 @@ private fun NativeImageBookViewer(
     // PhotoView trade-off).
     var pendingTapMs by remember { mutableStateOf<Long?>(null) }
     var tapSuppress by remember { mutableStateOf(false) }
-    // TEMPORARY DIAGNOSTIC (2026-11-02, remove after the
-    // tap-to-hide cause is found): the last tap event, shown
-    // in an overlay below the top bar so a phone-only tester
-    // can report it in a screenshot or video. It separates
-    // the three failure stages: no message at all = neither
-    // tap listener fired; a tap message with no toggle
-    // message = detection worked but the toggle effect never
-    // ran; a suppress message = a double-tap was (falsely)
-    // detected for a single tap. It is NOT a feature: the
-    // strings live in values/values-fa like every other UI
-    // string, and this state plus the overlay go away once
-    // the cause is known.
-    var diagMessage by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(pendingTapMs) {
         val t = pendingTapMs ?: return@LaunchedEffect
         delay(300)
         if (pendingTapMs == t) {
-            if (!tapSuppress) {
-                chromeVisible = !chromeVisible
-                diagMessage =
-                    context.getString(R.string.diag_tap_toggle)
-            } else {
-                diagMessage =
-                    context.getString(R.string.diag_tap_suppress)
-            }
+            if (!tapSuppress) chromeVisible = !chromeVisible
             tapSuppress = false
             pendingTapMs = null
         }
@@ -1683,33 +1663,22 @@ private fun NativeImageBookViewer(
     // below is defensive only: a suppress always arrives
     // with a pending toggle (same tap pair), so a fresh
     // pending toggle never carries a live suppress with it.
-    // This handler is called by the passive listener on the
-    // page item's outer Box — the ONLY tap source — never by
-    // an ancestor detector: an ancestor detector on the page
-    // item (6c4ee982) killed pinch zoom and scroll/pager
-    // turns on the phone, and the tap inside the zoom loop
-    // (c78a032) never fired because its awaitFirstDown
-    // skips downs another detector already consumed.
+    // Standard tap handling (2026-11-02): this handler is
+    // called by the page's own tap surfaces only — the
+    // Zoomable container's single-tap report for zoomable
+    // pages, and a plain clickable on the page item for all
+    // other pages. No ancestor pointerInput listener, no
+    // Scaffold content node, no diagnostic overlay: those
+    // were the temporary layers that never fired on the
+    // phone and, in the Scaffold's case, covered the page
+    // area. A second report while a toggle is pending is
+    // ignored, so a tap that reaches both surfaces is
+    // still a single toggle.
     fun handlePageTap() {
         if (pendingTapMs == null) {
             pendingTapMs = System.currentTimeMillis()
             tapSuppress = false
         }
-    }
-    // TEMPORARY DIAGNOSTIC (see diagMessage above): the two
-    // tap sources report separately, so the overlay tells
-    // which listener fired, if either did.
-    fun itemTap() {
-        diagMessage = context.getString(R.string.diag_tap_item)
-        handlePageTap()
-    }
-    fun viewerTap() {
-        diagMessage = context.getString(R.string.diag_tap_viewer)
-        handlePageTap()
-    }
-    fun zoomableTap() {
-        diagMessage = context.getString(R.string.diag_tap_zoomable)
-        handlePageTap()
     }
     // Volume-key focus: the tap surface holds focus while the
     // switch is on, so the volume keys reach it. Focus is
@@ -1811,86 +1780,21 @@ private fun NativeImageBookViewer(
     // is swallowed there instead of falling through to
     // the page underneath and toggling the chrome.
     val chromeTapSource = remember { MutableInteractionSource() }
-    // Window Y of the page area and of the two bars, for the
-    // viewer-level tap listener below: a tap is a page tap
-    // only when its window Y falls outside both bars while
-    // the bars are visible. When the bars are hidden the
-    // ranges are stale but unused (the listener checks
-    // chromeVisible first), so a tap anywhere shows them.
-    var pageBoxWindowY by remember { mutableIntStateOf(0) }
-    var topBarWindowTop by remember { mutableIntStateOf(-1) }
-    var topBarWindowBottom by remember { mutableIntStateOf(-1) }
-    var bottomBarWindowTop by remember { mutableIntStateOf(-1) }
-    var bottomBarWindowBottom by remember { mutableIntStateOf(-1) }
     Box(modifier = Modifier.fillMaxSize()) {
-        // The page area, ALWAYS full-screen. The bars below are
-        // an overlay on top of this Box (not Scaffold insets),
-        // so hiding them never resizes or moves this Box: the
-        // page stays exactly where it was, and hiding only
-        // uncovers the strip of page that was under the bars.
-        // Tap-to-hide, SECOND source, viewer-level (2026-11-02):
-        // the page item's own passive listener (see
-        // NativePageItem) failed on the phone in EVERY mode —
-        // paged, vertical strip and dual-page alike — so the
-        // failure is in the shared path, not in any one
-        // container, and a mode-specific fix cannot cure it.
-        // This listener sits on the full-screen page area
-        // itself, outside HorizontalPager / LazyColumn /
-        // LazyRow, so it is mode-agnostic by construction.
-        // It is passive like the item listener (takes every
-        // down, consumes nothing), so it can neither starve
-        // nor be starved by zoom, pan, scroll or page turns.
-        // It deliberately does NOT check whether the up was
-        // consumed: inside a pager/list that flag is what the
-        // item listener is suspected of tripping on. The bar
-        // guard replaces it: a tap whose window Y falls
-        // inside a visible bar is a bar tap, not a page tap,
-        // and is left to the bar's own clickable. The only
-        // accepted cost is a tap on an in-page button (the
-        // retry button on a failed page) also toggling the
-        // chrome — harmless there, and far better than a
-        // tap that never toggles anywhere. A tap reported
-        // here AND by the item listener is still one toggle:
-        // handlePageTap ignores a second report while a
-        // toggle is pending.
+        // The page area, ALWAYS full-screen. Standard
+        // overlay chrome (2026-11-02): the bars below are
+        // plain overlay Boxes in this same outer Box, top
+        // and bottom only, so hiding them never resizes or
+        // moves this Box: the page stays exactly where it
+        // was, and hiding only uncovers the strip of page
+        // that was under the bars. There is NO Scaffold and
+        // NO layout node above this Box in the middle area,
+        // so page touches reach the pager/list/Zoomable
+        // below directly. Tap-to-hide lives on the page
+        // content itself (Zoomable single tap, item
+        // clickable), never on an ancestor listener here.
         Box(
             modifier = Modifier.fillMaxSize()
-                .onGloballyPositioned {
-                    pageBoxWindowY = it.positionInWindow().y.toInt()
-                }
-                .pointerInput(Unit) {
-                    awaitPointerEventScope {
-                        while (true) {
-                            val down =
-                                awaitFirstDown(requireUnconsumed = false)
-                            val downPos = down.position
-                            val downWindowY =
-                                pageBoxWindowY + downPos.y.toInt()
-                            var isTap = true
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                val pressed =
-                                    event.changes.filter { it.pressed }
-                                if (pressed.size > 1) isTap = false
-                                if (pressed.isEmpty()) break
-                                if ((pressed[0].position - downPos)
-                                        .getDistance() >
-                                    viewConfiguration.touchSlop
-                                ) isTap = false
-                            }
-                            if (!isTap) continue
-                            val inTopBar = chromeVisible &&
-                                topBarWindowTop >= 0 &&
-                                downWindowY >= topBarWindowTop &&
-                                downWindowY < topBarWindowBottom
-                            val inBottomBar = chromeVisible &&
-                                bottomBarWindowTop >= 0 &&
-                                downWindowY >= bottomBarWindowTop &&
-                                downWindowY < bottomBarWindowBottom
-                            if (!inTopBar && !inBottomBar) viewerTap()
-                        }
-                    }
-                }
                 .focusRequester(volumeFocus)
                 .focusable()
                 .onPreviewKeyEvent { event ->
@@ -1998,8 +1902,7 @@ private fun NativeImageBookViewer(
                             viewRotation = viewRotation,
                             manualCropRect = manualCropRects[page],
                             halfSide = halfSide,
-                            onTap = { itemTap() },
-                            onZoomableTap = { zoomableTap() },
+                            onTap = { handlePageTap() },
                             onDoubleTap = { tapSuppress = true },
                             bitmapCache = pageBitmapCache
                         )
@@ -2114,8 +2017,7 @@ private fun NativeImageBookViewer(
                                 viewRotation = viewRotation,
                                 manualCropRect = manualCropRects[page],
                                 horizontalStrip = true,
-                                onTap = { itemTap() },
-                                onZoomableTap = { zoomableTap() },
+                                onTap = { handlePageTap() },
                                 onDoubleTap = { tapSuppress = true },
                                 bitmapCache = pageBitmapCache
                             )
@@ -2158,8 +2060,7 @@ private fun NativeImageBookViewer(
                             filterInvert = filterInvert,
                             viewRotation = viewRotation,
                             manualCropRect = manualCropRects[page],
-                            onTap = { itemTap() },
-                            onZoomableTap = { zoomableTap() },
+                            onTap = { handlePageTap() },
                             onDoubleTap = { tapSuppress = true },
                             bitmapCache = pageBitmapCache
                         )
@@ -2168,18 +2069,23 @@ private fun NativeImageBookViewer(
             }
             }
         }
-        Scaffold(
-            containerColor = Color.Transparent,
-            snackbarHost = { SnackbarHost(snackbar) },
-            topBar = {
+        // Standard chrome overlay (2026-11-02, no
+        // Scaffold): bars are plain overlay Boxes in
+        // this same outer Box, top and bottom only.
+        // The middle area has NO layout node above
+        // the page at all, so page touches reach the
+        // pager/list/Zoomable directly. Bar taps are
+        // swallowed by each bar's own clickable
+        // (empty onClick, no indication), so a tap
+        // on a bar never falls through to the page.
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.TopCenter
+        ) {
                 AnimatedVisibility(
                     visible = chromeVisible,
                     modifier = Modifier.fillMaxWidth()
-                        .clickable(interactionSource = chromeTapSource, indication = null) {}
-                        .onGloballyPositioned {
-                            topBarWindowTop = it.positionInWindow().y.toInt()
-                            topBarWindowBottom = topBarWindowTop + it.size.height
-                        },
+                        .clickable(interactionSource = chromeTapSource, indication = null) {},
                     enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
                     exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
                 ) {
@@ -2343,18 +2249,15 @@ private fun NativeImageBookViewer(
                         }
                     )
                 }
-            },
-            bottomBar = {
+        }
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter
+        ) {
                 AnimatedVisibility(
                     visible = chromeVisible && pageCount > 0,
                     modifier = Modifier.fillMaxWidth()
-                        .clickable(interactionSource = chromeTapSource, indication = null) {}
-                        .onGloballyPositioned {
-                            bottomBarWindowTop =
-                                it.positionInWindow().y.toInt()
-                            bottomBarWindowBottom =
-                                bottomBarWindowTop + it.size.height
-                        },
+                        .clickable(interactionSource = chromeTapSource, indication = null) {},
                     enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                     exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
                 ) {
@@ -2510,52 +2413,17 @@ private fun NativeImageBookViewer(
                         }
                     }
                 }
-            }
-        ) {
-            // NOTHING here on purpose (2026-11-02): the page
-            // is the first child of the outer Box above,
-            // drawn full-screen underneath this Scaffold.
-            // The previous version put an empty fillMaxSize
-            // Box here, and the user clarified 13:42 that
-            // swipe and scroll ALSO do not work on the page
-            // — only bar controls (slider, arrows, mode
-            // buttons) work. That is a total touch blockade
-            // on the page area, not a tap/zoom-only failure,
-            // and the page turns in the videos were via
-            // slider/arrows, not swipe. The prime suspect is
-            // this Scaffold content Box: it covers exactly
-            // the middle area on top of the page Box, so even
-            // with no pointer input of its own it can swallow
-            // the hit test for everything below it. Removing
-            // it leaves NO Scaffold layout node in the middle
-            // area at all, so touches must reach the page Box
-            // below. The Scaffold still contributes its bars
-            // (and snackbar) as an overlay, so show/hide can
-            // never resize the page, exactly as before.
         }
-        // TEMPORARY DIAGNOSTIC overlay (see diagMessage
-        // above): topmost child of the outer Box, so it is
-        // visible over page and bars alike in a screenshot
-        // or video. No pointer input of its own, so it
-        // cannot block the taps it reports on.
-        if (diagMessage != null) {
-            Box(
-                modifier = Modifier.fillMaxSize()
-                    .padding(top = 72.dp),
-                contentAlignment = Alignment.TopCenter
-            ) {
-                Text(
-                    text = diagMessage!!,
-                    modifier = Modifier
-                        .background(
-                            Color.Black.copy(alpha = 0.8f),
-                            RoundedCornerShape(8.dp)
-                        )
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            SnackbarHost(
+                snackbar,
+                modifier = Modifier.padding(
+                    bottom = if (chromeVisible) 120.dp else 16.dp
                 )
-            }
+            )
         }
     }
 
@@ -4113,12 +3981,6 @@ private fun NativePageItem(
     // second tap on its own (see the viewer note).
     onTap: () -> Unit = {},
     onDoubleTap: () -> Unit = {},
-    // Single tap as seen by the Zoomable container itself
-    // (2026-11-02): the ancestor listeners never fired on
-    // the phone, so the Zoomable loop — the one that provably
-    // gets events — reports taps too. Defaults to onTap, so
-    // existing callers keep working unchanged.
-    onZoomableTap: () -> Unit = onTap,
     // The viewer's page-return park (see
     // NativePageBitmapCache). Null = today's behaviour exactly:
     // render on compose, recycle on dispose, no parking.
@@ -4492,47 +4354,22 @@ private fun NativePageItem(
     }
 
     val density = LocalDensity.current
-    // Tap-to-hide chrome, at the page itself — but NOT as an
-    // ancestor detector on this Box. 6c4ee982 put a
-    // detectTapGestures here, wrapping the zoom/scroll owners,
-    // and on the phone that killed them: after that build a
-    // tap did not toggle the chrome, and pinch zoom and
-    // scroll/pager turns stopped working too. And c78a032's
-    // tap inside ZoomablePageContainer's loop never fired
-    // on the phone either — its awaitFirstDown skips downs
-    // another detector already consumed. So the tap lives
-    // here, as a PASSIVE listener: it takes every down
-    // (requireUnconsumed = false) and never consumes
-    // anything, so it can neither starve nor be starved
-    // by the zoom/pan/scroll/pager detectors below. It
-    // fires only for a lone pointer that lifts without
-    // passing slop, and skips ups a button inside already
-    // consumed (the retry button), so a tap on one never
-    // toggles the chrome.
+    // Standard tap surface (2026-11-02): a plain
+    // clickable on the page item itself — the standard
+    // Compose tap handler for an item inside a pager/list,
+    // no raw pointerInput loop, no consumption check.
+    // A drag cancels the click, so swipe/scroll are
+    // untouched; a tap fires onTap, which the viewer
+    // delays 300ms and a confirmed double-tap suppresses.
+    // Zoomable pages report their tap from the Zoomable
+    // loop as well; handlePageTap ignores a second report
+    // while a toggle is pending, so a tap that reaches
+    // both surfaces is still a single toggle.
     Box(
-        modifier = Modifier.pointerInput(Unit) {
-            awaitPointerEventScope {
-                while (true) {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val downPos = down.position
-                    var isTap = true
-                    var upConsumed = false
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val pressed = event.changes.filter { it.pressed }
-                        if (pressed.size > 1) isTap = false
-                        if (pressed.isEmpty()) {
-                            upConsumed = event.changes.any { it.isConsumed }
-                            break
-                        }
-                        if ((pressed[0].position - downPos).getDistance() >
-                            viewConfiguration.touchSlop
-                        ) isTap = false
-                    }
-                    if (isTap && !upConsumed) onTap()
-                }
-            }
-        }
+        modifier = Modifier.clickable(
+            indication = null,
+            interactionSource = remember { MutableInteractionSource() }
+        ) { onTap() }
     ) {
     when {
         drawable != null -> {
@@ -4647,7 +4484,7 @@ private fun NativePageItem(
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
                     },
                     onDoubleTap = onDoubleTap,
-                    onTap = onZoomableTap,
+                    onTap = onTap,
                 ) {
                     AnimatedPageImage(
                         rotation = viewRotation.toFloat(),
@@ -4777,7 +4614,7 @@ private fun NativePageItem(
                                     .aspectRatio(ratio),
                                 onScaleChange = onPinchScale,
                                 onDoubleTap = onDoubleTap,
-                                onTap = onZoomableTap,
+                                onTap = onTap,
                             ) {
                                 Image(
                                     bitmap = bmp.asImageBitmap(),
@@ -4810,7 +4647,7 @@ private fun NativePageItem(
                     },
                     onScaleChange = onPinchScale,
                     onDoubleTap = onDoubleTap,
-                    onTap = onZoomableTap,
+                    onTap = onTap,
                 ) {
                     Image(
                         bitmap = bmp.asImageBitmap(),

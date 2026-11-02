@@ -105,15 +105,12 @@ fun ZoomablePageContainer(
     // Confirmed double-tap (same spot, within 300ms): the
     // viewer uses it to suppress the pending chrome toggle.
     onDoubleTap: () -> Unit = {},
-    // Single tap, reported here (2026-11-02): the diagnostic
-    // build proved BOTH ancestor passive listeners (page
-    // item, viewer page area) never fire on the phone — no
-    // diagnostic message at all — while THIS loop demonstrably
-    // receives pointer events (pinch zoom and pan work on the
-    // same pages). So the tap toggle must ride the loop that
-    // actually gets events, not another ancestor listener.
-    // The viewer delays the toggle 300ms and a confirmed
-    // double-tap suppresses it, exactly as before.
+    // Single tap, reported here — the standard place for
+    // it in a zoomable image (PhotoView pattern): this
+    // loop already owns pinch, pan and double-tap zoom, so
+    // it owns the single tap too, instead of a separate
+    // ancestor listener. The viewer delays the toggle 300ms
+    // and a confirmed double-tap suppresses it.
     onTap: () -> Unit = {},
     content: @Composable () -> Unit
 ) {
