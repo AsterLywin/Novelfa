@@ -100,7 +100,9 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import kotlinx.coroutines.delay
@@ -1774,20 +1776,86 @@ private fun NativeImageBookViewer(
     // is swallowed there instead of falling through to
     // the page underneath and toggling the chrome.
     val chromeTapSource = remember { MutableInteractionSource() }
+    // Window Y of the page area and of the two bars, for the
+    // viewer-level tap listener below: a tap is a page tap
+    // only when its window Y falls outside both bars while
+    // the bars are visible. When the bars are hidden the
+    // ranges are stale but unused (the listener checks
+    // chromeVisible first), so a tap anywhere shows them.
+    var pageBoxWindowY by remember { mutableIntStateOf(0) }
+    var topBarWindowTop by remember { mutableIntStateOf(-1) }
+    var topBarWindowBottom by remember { mutableIntStateOf(-1) }
+    var bottomBarWindowTop by remember { mutableIntStateOf(-1) }
+    var bottomBarWindowBottom by remember { mutableIntStateOf(-1) }
     Box(modifier = Modifier.fillMaxSize()) {
         // The page area, ALWAYS full-screen. The bars below are
         // an overlay on top of this Box (not Scaffold insets),
         // so hiding them never resizes or moves this Box: the
         // page stays exactly where it was, and hiding only
         // uncovers the strip of page that was under the bars.
-        // Tap-to-hide lives inside the page's own gesture
-        // owner (see NativePageItem), not on this Box: a tap
-        // surface here, outside LazyColumn / HorizontalPager,
-        // never reliably received taps on a page. Buttons
-        // inside (retry, close) consume their own taps, so a
-        // tap on one never toggles the chrome by accident.
+        // Tap-to-hide, SECOND source, viewer-level (2026-11-02):
+        // the page item's own passive listener (see
+        // NativePageItem) failed on the phone in EVERY mode —
+        // paged, vertical strip and dual-page alike — so the
+        // failure is in the shared path, not in any one
+        // container, and a mode-specific fix cannot cure it.
+        // This listener sits on the full-screen page area
+        // itself, outside HorizontalPager / LazyColumn /
+        // LazyRow, so it is mode-agnostic by construction.
+        // It is passive like the item listener (takes every
+        // down, consumes nothing), so it can neither starve
+        // nor be starved by zoom, pan, scroll or page turns.
+        // It deliberately does NOT check whether the up was
+        // consumed: inside a pager/list that flag is what the
+        // item listener is suspected of tripping on. The bar
+        // guard replaces it: a tap whose window Y falls
+        // inside a visible bar is a bar tap, not a page tap,
+        // and is left to the bar's own clickable. The only
+        // accepted cost is a tap on an in-page button (the
+        // retry button on a failed page) also toggling the
+        // chrome — harmless there, and far better than a
+        // tap that never toggles anywhere. A tap reported
+        // here AND by the item listener is still one toggle:
+        // handlePageTap ignores a second report while a
+        // toggle is pending.
         Box(
             modifier = Modifier.fillMaxSize()
+                .onGloballyPositioned {
+                    pageBoxWindowY = it.positionInWindow().y.toInt()
+                }
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val down =
+                                awaitFirstDown(requireUnconsumed = false)
+                            val downPos = down.position
+                            val downWindowY =
+                                pageBoxWindowY + downPos.y.toInt()
+                            var isTap = true
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val pressed =
+                                    event.changes.filter { it.pressed }
+                                if (pressed.size > 1) isTap = false
+                                if (pressed.isEmpty()) break
+                                if ((pressed[0].position - downPos)
+                                        .getDistance() >
+                                    viewConfiguration.touchSlop
+                                ) isTap = false
+                            }
+                            if (!isTap) continue
+                            val inTopBar = chromeVisible &&
+                                topBarWindowTop >= 0 &&
+                                downWindowY >= topBarWindowTop &&
+                                downWindowY < topBarWindowBottom
+                            val inBottomBar = chromeVisible &&
+                                bottomBarWindowTop >= 0 &&
+                                downWindowY >= bottomBarWindowTop &&
+                                downWindowY < bottomBarWindowBottom
+                            if (!inTopBar && !inBottomBar) handlePageTap()
+                        }
+                    }
+                }
                 .focusRequester(volumeFocus)
                 .focusable()
                 .onPreviewKeyEvent { event ->
@@ -2069,7 +2137,11 @@ private fun NativeImageBookViewer(
                 AnimatedVisibility(
                     visible = chromeVisible,
                     modifier = Modifier.fillMaxWidth()
-                        .clickable(interactionSource = chromeTapSource, indication = null) {},
+                        .clickable(interactionSource = chromeTapSource, indication = null) {}
+                        .onGloballyPositioned {
+                            topBarWindowTop = it.positionInWindow().y.toInt()
+                            topBarWindowBottom = topBarWindowTop + it.size.height
+                        },
                     enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
                     exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
                 ) {
@@ -2238,7 +2310,13 @@ private fun NativeImageBookViewer(
                 AnimatedVisibility(
                     visible = chromeVisible && pageCount > 0,
                     modifier = Modifier.fillMaxWidth()
-                        .clickable(interactionSource = chromeTapSource, indication = null) {},
+                        .clickable(interactionSource = chromeTapSource, indication = null) {}
+                        .onGloballyPositioned {
+                            bottomBarWindowTop =
+                                it.positionInWindow().y.toInt()
+                            bottomBarWindowBottom =
+                                bottomBarWindowTop + it.size.height
+                        },
                     enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                     exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
                 ) {
