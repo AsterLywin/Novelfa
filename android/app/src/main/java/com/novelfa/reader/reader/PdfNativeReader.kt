@@ -1644,11 +1644,31 @@ private fun NativeImageBookViewer(
     // PhotoView trade-off).
     var pendingTapMs by remember { mutableStateOf<Long?>(null) }
     var tapSuppress by remember { mutableStateOf(false) }
+    // TEMPORARY DIAGNOSTIC (2026-11-02, remove after the
+    // tap-to-hide cause is found): the last tap event, shown
+    // in an overlay below the top bar so a phone-only tester
+    // can report it in a screenshot or video. It separates
+    // the three failure stages: no message at all = neither
+    // tap listener fired; a tap message with no toggle
+    // message = detection worked but the toggle effect never
+    // ran; a suppress message = a double-tap was (falsely)
+    // detected for a single tap. It is NOT a feature: the
+    // strings live in values/values-fa like every other UI
+    // string, and this state plus the overlay go away once
+    // the cause is known.
+    var diagMessage by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(pendingTapMs) {
         val t = pendingTapMs ?: return@LaunchedEffect
         delay(300)
         if (pendingTapMs == t) {
-            if (!tapSuppress) chromeVisible = !chromeVisible
+            if (!tapSuppress) {
+                chromeVisible = !chromeVisible
+                diagMessage =
+                    context.getString(R.string.diag_tap_toggle)
+            } else {
+                diagMessage =
+                    context.getString(R.string.diag_tap_suppress)
+            }
             tapSuppress = false
             pendingTapMs = null
         }
@@ -1675,6 +1695,17 @@ private fun NativeImageBookViewer(
             pendingTapMs = System.currentTimeMillis()
             tapSuppress = false
         }
+    }
+    // TEMPORARY DIAGNOSTIC (see diagMessage above): the two
+    // tap sources report separately, so the overlay tells
+    // which listener fired, if either did.
+    fun itemTap() {
+        diagMessage = context.getString(R.string.diag_tap_item)
+        handlePageTap()
+    }
+    fun viewerTap() {
+        diagMessage = context.getString(R.string.diag_tap_viewer)
+        handlePageTap()
     }
     // Volume-key focus: the tap surface holds focus while the
     // switch is on, so the volume keys reach it. Focus is
@@ -1852,7 +1883,7 @@ private fun NativeImageBookViewer(
                                 bottomBarWindowTop >= 0 &&
                                 downWindowY >= bottomBarWindowTop &&
                                 downWindowY < bottomBarWindowBottom
-                            if (!inTopBar && !inBottomBar) handlePageTap()
+                            if (!inTopBar && !inBottomBar) viewerTap()
                         }
                     }
                 }
@@ -1963,7 +1994,7 @@ private fun NativeImageBookViewer(
                             viewRotation = viewRotation,
                             manualCropRect = manualCropRects[page],
                             halfSide = halfSide,
-                            onTap = { handlePageTap() },
+                            onTap = { itemTap() },
                             onDoubleTap = { tapSuppress = true },
                             bitmapCache = pageBitmapCache
                         )
@@ -2078,7 +2109,7 @@ private fun NativeImageBookViewer(
                                 viewRotation = viewRotation,
                                 manualCropRect = manualCropRects[page],
                                 horizontalStrip = true,
-                                onTap = { handlePageTap() },
+                                onTap = { itemTap() },
                                 onDoubleTap = { tapSuppress = true },
                                 bitmapCache = pageBitmapCache
                             )
@@ -2121,7 +2152,7 @@ private fun NativeImageBookViewer(
                             filterInvert = filterInvert,
                             viewRotation = viewRotation,
                             manualCropRect = manualCropRects[page],
-                            onTap = { handlePageTap() },
+                            onTap = { itemTap() },
                             onDoubleTap = { tapSuppress = true },
                             bitmapCache = pageBitmapCache
                         )
@@ -2483,6 +2514,30 @@ private fun NativeImageBookViewer(
             // (containerColor above), so the page shows
             // through everywhere except under the bars.
             Box(modifier = Modifier.fillMaxSize())
+        }
+        // TEMPORARY DIAGNOSTIC overlay (see diagMessage
+        // above): topmost child of the outer Box, so it is
+        // visible over page and bars alike in a screenshot
+        // or video. No pointer input of its own, so it
+        // cannot block the taps it reports on.
+        if (diagMessage != null) {
+            Box(
+                modifier = Modifier.fillMaxSize()
+                    .padding(top = 72.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                Text(
+                    text = diagMessage!!,
+                    modifier = Modifier
+                        .background(
+                            Color.Black.copy(alpha = 0.8f),
+                            RoundedCornerShape(8.dp)
+                        )
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
 
