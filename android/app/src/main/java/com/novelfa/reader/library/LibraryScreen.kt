@@ -571,6 +571,15 @@ fun LibraryScreen(
     var deleteConfirm by remember { mutableStateOf(false) }
     // Avatar: blank path = default Novelfa icon (like the desktop client).
     val avatarPath by prefs.avatarPath.collectAsState(initial = "")
+    // Avatar version stamp: every pick (and every backup restore)
+    // overwrites the SAME file (avatars/avatar.jpg), so the path string
+    // never changes on a re-pick. Without a stamp, the header would
+    // not recompose and Coil — which keys its cache by path — would
+    // keep serving the previous bitmap, so a newly picked photo never
+    // appeared. The file's mtime + length change on every rewrite, so
+    // they are the version (consumed by ProfileHeader).
+    val avatarSignature = avatarPath.takeIf { it.isNotBlank() }?.let { File(it) }
+        ?.takeIf { it.isFile }?.let { "${it.lastModified()}-${it.length()}" } ?: ""
     var avatarOpen by remember { mutableStateOf(false) }
     val galleryPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -819,6 +828,7 @@ fun LibraryScreen(
                     rankStarFill = rankStarFill,
                     bookCount = visible.size,
                     avatarPath = avatarPath,
+                    avatarSignature = avatarSignature,
                     onAvatarClick = { avatarOpen = true },
                     onRename = { renameOpen = true },
                     onRankClick = { showRanks = true },
@@ -910,6 +920,7 @@ fun LibraryScreen(
                     rankStarFill = rankStarFill,
                     bookCount = visible.size,
                     avatarPath = avatarPath,
+                    avatarSignature = avatarSignature,
                     onAvatarClick = { avatarOpen = true },
                     onRename = { renameOpen = true },
                     onRankClick = { showRanks = true },

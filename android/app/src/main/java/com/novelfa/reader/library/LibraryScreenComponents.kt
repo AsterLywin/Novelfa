@@ -82,6 +82,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.novelfa.reader.R
 import com.novelfa.reader.domain.Book
 import com.novelfa.reader.domain.isCompleted
@@ -108,6 +109,7 @@ internal fun LazyGridScope.libraryHeaderSpan(
     rankStarFill: Float,
     bookCount: Int,
     avatarPath: String,
+    avatarSignature: String,
     onAvatarClick: () -> Unit,
     onRename: () -> Unit,
     onRankClick: () -> Unit,
@@ -135,6 +137,7 @@ internal fun LazyGridScope.libraryHeaderSpan(
             rankStarFill = rankStarFill,
             bookCount = bookCount,
             avatarPath = avatarPath,
+            avatarSignature = avatarSignature,
             onAvatarClick = onAvatarClick,
             onRename = onRename,
             onRankClick = onRankClick
@@ -178,6 +181,7 @@ internal fun LazyListScope.libraryHeaderList(
     rankStarFill: Float,
     bookCount: Int,
     avatarPath: String,
+    avatarSignature: String,
     onAvatarClick: () -> Unit,
     onRename: () -> Unit,
     onRankClick: () -> Unit,
@@ -205,6 +209,7 @@ internal fun LazyListScope.libraryHeaderList(
             rankStarFill = rankStarFill,
             bookCount = bookCount,
             avatarPath = avatarPath,
+            avatarSignature = avatarSignature,
             onAvatarClick = onAvatarClick,
             onRename = onRename,
             onRankClick = onRankClick
@@ -481,6 +486,7 @@ private fun ProfileHeader(
     rankStarFill: Float,
     bookCount: Int,
     avatarPath: String,
+    avatarSignature: String,
     onAvatarClick: () -> Unit,
     onRename: () -> Unit,
     onRankClick: () -> Unit
@@ -502,7 +508,18 @@ private fun ProfileHeader(
                 val avatarFile = avatarPath.takeIf { it.isNotBlank() }?.let { File(it) }
                 if (avatarFile != null && avatarFile.isFile) {
                     AsyncImage(
-                        model = avatarFile,
+                        // Cache-busting request: the avatar file is
+                        // overwritten in place on every pick, so a
+                        // path-keyed request would keep showing the
+                        // previous photo. The signature (mtime+length)
+                        // changes on every rewrite, forcing a fresh
+                        // load; it also recomposes this header, since
+                        // the path string alone never changes.
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(avatarFile)
+                            .memoryCacheKey("avatar-$avatarSignature")
+                            .diskCacheKey("avatar-$avatarSignature")
+                            .build(),
                         // An undecodable file used to render a blank
                         // circle; fall back to the default logo instead.
                         error = painterResource(id = R.drawable.app_logo),
