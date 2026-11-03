@@ -227,6 +227,46 @@ class BackupService(
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
+    /**
+     * Phase 2 (ADR-4 / DB-01): everything identifying private
+     * content for backup filtering. Hashes: current private books'
+     * recorded content hashes AND live file hashes when the file
+     * is directly readable (a book whose row hash is still null
+     * can still carry content-keyed ledger entries from reader
+     * credits), plus the confidential deleted-private hash list.
+     * EPUB identifiers: for records of a file whose bytes changed
+     * since the record was captured (the hash no longer matches,
+     * but the publication is the same). Best-effort: an
+     * unreadable file simply contributes nothing, and a failure
+     * here must never fail the backup itself.
+     */
+    private suspend fun privateContentKeys(): PrivateContentKeys {
+        val hashes = mutableSetOf<String>()
+        val epubIds = mutableSetOf<String>()
+        val books = try {
+            dao.allBooks().first()
+        } catch (e: Exception) {
+            emptyList()
+        }
+        for (book in books) {
+            if (!book.isPrivate) continue
+            book.contentHash?.takeIf { it.isNotBlank() }?.let { hashes += it }
+            val f = File(book.filePath)
+            if (f.isFile) {
+                runCatching { sha256Of(f) }.getOrNull()?.let { hashes += it }
+                runCatching { readEpubIdentifier(f) }.getOrNull()?.let { epubIds += it }
+            }
+        }
+        runCatching { prefs.privateContentHashesNow() }.getOrNull()?.let { hashes += it }
+        return PrivateContentKeys(hashes, epubIds)
+    }
+
+    /** Private-content keys for backup filtering (see [privateContentKeys]). */
+    private data class PrivateContentKeys(
+        val hashes: Set<String>,
+        val epubIds: Set<String>
+    )
+
     suspend fun exportBackup(out: OutputStream) = withContext(Dispatchers.IO) {
         // --- collect payload ---
         val bundled = bundledFontNames()
@@ -281,7 +321,7 @@ class BackupService(
         // merged with orphan records kept on-device for books that are
         // not currently in the library. Private books are excluded on
         // purpose: the backup file is not encrypted.
-        val recordStore = ReadingRecordStore(context)
+        val recordStore = ReadingRecordStore.getInstance(context)
         val libraryRecords = try {
             dao.allBooks().first()
                 .filter { !it.isPrivate }
@@ -293,7 +333,18 @@ class BackupService(
         } catch (e: Exception) {
             emptyList()
         }
-        val allRecords = ReadingRecord.mergeAll(recordStore.all(), libraryRecords)
+        // Phase 2 (ADR-4 / DB-01): orphan records are filtered
+        // against private content BEFORE merging — the old code
+        // merged the store unfiltered, so a record restored from
+        // an old backup (or captured while the book was public
+        // and privatized later) leaked its title into every
+        // later backup. Library records are already non-private
+        // by the filter above.
+        val privateKeys = privateContentKeys()
+        val safeOrphans = filterPrivateRecords(
+            recordStore.all(), privateKeys.hashes, privateKeys.epubIds
+        )
+        val allRecords = ReadingRecord.mergeAll(safeOrphans, libraryRecords)
             .sortedWith(compareBy({ it.title.lowercase() }, { it.sha256 }))
         var recordsPayload: Payload? = null
         var recordsBytes = 0L
@@ -328,7 +379,10 @@ class BackupService(
         // (UUID entries are device-local by definition and are left
         // out). Additive like totalXp: old readers ignore the field,
         // and computeIntegrity does not cover it.
-        val xpLedger = XpStore(rankPrefs).contentLedgerSerialized()
+        // Phase 2 (ADR-4 / DB-01): private books' ledger entries
+        // are excluded — including entries of private books that
+        // were deleted since (via the confidential hash list).
+        val xpLedger = XpStore(rankPrefs).contentLedgerSerialized(privateKeys.hashes)
         val profileName = prefs.profileName.first()
 
         val avatarPayload = payloads.firstOrNull()
@@ -828,10 +882,17 @@ class BackupService(
             // so restoring a backup can never re-earn them. Total XP
             // itself is never summed from the ledger — it stays the
             // max of the two totals, as before.
+            // Phase 2 (ADR-4 / DB-01): the private-content keys are
+            // computed once here and reused by the records merge
+            // below, so both the ledger and the records of a
+            // private book are refused on the same restore.
+            val privateKeys = privateContentKeys()
             if (preview.totalXp >= 0) {
                 val xpStore = XpStore(rankPrefs)
                 if (preview.totalXp > xpStore.totalXp) xpStore.totalXp = preview.totalXp
-                if (preview.xpLedger.isNotBlank()) xpStore.mergeContentLedger(preview.xpLedger)
+                if (preview.xpLedger.isNotBlank()) {
+                    xpStore.mergeContentLedger(preview.xpLedger, privateKeys.hashes)
+                }
             }
             prefs.raiseFinishedBooksRestored(finishedTotal)
 
@@ -839,8 +900,16 @@ class BackupService(
             // Merge into the on-device store first (orphans included),
             // then apply whatever matches a book already in the library.
             // Private books are never touched.
-            val recordStore = ReadingRecordStore(context)
-            recordStore.mergeAll(preview.records)
+            // Phase 2 (ADR-4 / DB-01): a restored backup must never
+            // plant a private book's record into the store — the old
+            // code merged unfiltered, and the next export then
+            // re-exported it (the DB-01 leak in reverse). Filtered
+            // against current private books AND the confidential
+            // deleted-private hash list.
+            val recordStore = ReadingRecordStore.getInstance(context)
+            recordStore.mergeAll(
+                filterPrivateRecords(preview.records, privateKeys.hashes, privateKeys.epubIds)
+            )
             var recordsApplied = 0
             val matchedKeys = mutableSetOf<String>()
             if (preview.records.isNotEmpty()) {

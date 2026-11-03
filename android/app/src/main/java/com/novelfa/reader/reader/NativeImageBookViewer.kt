@@ -104,6 +104,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookRepository
+import com.novelfa.reader.data.InPlaceSource
 import com.novelfa.reader.domain.Book
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.ReaderExtrasStore
@@ -114,6 +115,8 @@ import com.novelfa.reader.data.PrefsStoreRankPrefs
 import com.novelfa.reader.domain.XpContentKeyResolver
 import com.novelfa.reader.domain.XpSessionTracker
 import com.novelfa.reader.domain.XpStore
+import android.content.Context
+import android.net.Uri
 import java.io.File
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -128,6 +131,38 @@ import kotlinx.coroutines.withContext
  * is 1x); changing zoom re-renders visible pages at the new width,
  * it never scales a stale bitmap up, so zoom stays sharp.
  */
+/**
+ * Phase 2 (F1): SHA-256 of the bytes behind a book's source Uri —
+ * the direct routes' hash source, where no File exists at all.
+ * `content://` is streamed once (no working copy is materialized
+ * for this); `file://` is hashed as a plain file. Null on any
+ * failure; hashing must never fail a credit.
+ */
+private fun hashFromSourceUri(context: Context, sourceUri: String?): String? {
+    if (sourceUri.isNullOrBlank()) return null
+    return try {
+        when (InPlaceSource.sourceScheme(sourceUri)) {
+            "content" -> context.contentResolver.openInputStream(Uri.parse(sourceUri))
+                ?.use { input ->
+                    val digest = java.security.MessageDigest.getInstance("SHA-256")
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        digest.update(buf, 0, n)
+                    }
+                    digest.digest().joinToString("") { "%02x".format(it) }
+                }
+            "file" -> Uri.parse(sourceUri).path
+                ?.let { File(it) }?.takeIf { it.isFile }
+                ?.let { sha256OfFile(it) }
+            else -> null
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun NativeImageBookViewer(
@@ -142,7 +177,12 @@ internal fun NativeImageBookViewer(
     // otherwise the ZIP strings (Archive password + OK).
     // Default false, so the CBZ and image-ZIP routes — which
     // do not pass it — keep exactly their old dialog.
-    isPdf: Boolean = false
+    isPdf: Boolean = false,
+    // Phase 2 (F1): the file the route resolved for this book's
+    // source (PdfReaderRoute's resolvedFile). Null on the direct
+    // routes, where no File exists by design — the credit path
+    // then falls back to the row's hash and the source Uri.
+    resolvedFile: File? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -387,12 +427,43 @@ internal fun NativeImageBookViewer(
             rankPrefs.awaitLoaded()
             val hash = if (!xpResolver.resolved) {
                 withContext(Dispatchers.IO) {
-                    runCatching { sha256OfFile(File(book.filePath)) }.getOrNull()
+                    // Phase 2 (F1): hash the file the source
+                    // ACTUALLY reads — the route's resolved file
+                    // first — never blindly the row's filePath,
+                    // which for in-place `content://` books is a
+                    // not-yet-materialized working-copy path (or
+                    // a stale extension after the strong-sniff
+                    // rename) and used to hash to nothing, leaving
+                    // the credit on a UUID key forever. Fallbacks,
+                    // in order: the row's recorded hash (already
+                    // a true digest when present), the source
+                    // Uri's bytes (direct routes have no File),
+                    // and finally the row's path (copy books:
+                    // the stored file itself).
+                    if (resolvedFile != null && resolvedFile.isFile) {
+                        runCatching { sha256OfFile(resolvedFile) }.getOrNull()
+                    } else if (!book.contentHash.isNullOrBlank()) {
+                        book.contentHash
+                    } else {
+                        hashFromSourceUri(context, book.sourceUri)
+                            ?: runCatching { sha256OfFile(File(book.filePath)) }.getOrNull()
+                    }
                 }
             } else {
                 null
             }
-            val key = xpResolver.resolve(book.id, hash)
+            // Phase 2 (F2): record the fresh hash through the
+            // single rule (first knowledge / unchanged / real
+            // change with progress reset) before resolving the
+            // credit key, and pass the row's stored hash as the
+            // same-content proof for the UUID→content transfer —
+            // a changed content must never inherit the old
+            // content's UUID entry. A note failure must not
+            // lose the credit itself.
+            if (hash != null) {
+                runCatching { repo.noteContentHash(book.id, hash) }
+            }
+            val key = xpResolver.resolve(book.id, hash, book.contentHash)
             val words = source?.pageWords(page) ?: 0
             XpStore(rankPrefs).creditUnit(key, page, words, pageCount, book.isPrivate)
         }

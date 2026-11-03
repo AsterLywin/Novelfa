@@ -149,6 +149,14 @@ object RankHook {
             val hash = withContext(Dispatchers.IO) {
                 runCatching { sha256OfFile(file) }.getOrNull()
             } ?: continue
+            // Phase 2 (ADR-3 / F2): the UUID→content transfer is
+            // allowed only on same-content proof — the row's
+            // stored hash is null or equals the fresh hash. A
+            // stored DIFFERENT hash means the content changed
+            // since the row was recorded, so the UUID entry
+            // belongs to the old content and must NOT move to
+            // the new content's key.
+            if (book.contentHash != null && book.contentHash != hash) continue
             val contentKey = XpLedger.contentKeyFor(hash)
             if (contentKey != book.id) store.transferLedger(book.id, contentKey)
         }

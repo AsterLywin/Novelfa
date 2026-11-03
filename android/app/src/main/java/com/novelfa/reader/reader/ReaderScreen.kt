@@ -560,7 +560,17 @@ fun ReaderScreen(
                             } else {
                                 null
                             }
-                            val key = xpResolver.resolve(bookId, hash)
+                            // Phase 2 (F2): same rule as the
+                            // native viewer — record the fresh
+                            // hash (first knowledge / unchanged /
+                            // real change with progress reset)
+                            // and pass the row's stored hash as
+                            // the same-content proof for the
+                            // UUID→content transfer.
+                            if (hash != null) {
+                                runCatching { repo.noteContentHash(bookId, hash) }
+                            }
+                            val key = xpResolver.resolve(bookId, hash, book.contentHash)
                             XpStore(xpPrefs).creditUnit(
                                 key, unit, words, parsed.chapters.size, false,
                                 qualifyingTotalUnits = qualifyingTotal,

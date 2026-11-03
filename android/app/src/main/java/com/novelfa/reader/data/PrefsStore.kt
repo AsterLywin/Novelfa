@@ -163,6 +163,11 @@ class PrefsStore(private val context: Context) {
         // Upstream CollectionRegistry parity: manually-created collection
         // names (including empty ones, which have no books to anchor them).
         val MANUAL_COLLECTIONS = stringSetPreferencesKey("manualCollections")
+        // Phase 2 (ADR-4 / DB-01): content hashes of private books
+        // that were deleted. Local only, never exported; see
+        // [privateContentHashesNow].
+        val PRIVATE_CONTENT_HASHES = stringSetPreferencesKey("privateContentHashes")
+        private val SHA256_HEX = Regex("[0-9a-f]{64}")
     }
 
     val theme: Flow<String> = context.dataStore.data.map { it[THEME] ?: "dark" }
@@ -463,6 +468,51 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setReaderTheme(bookId: String, themeId: String) {
         context.dataStore.edit { it[stringPreferencesKey("readerTheme_$bookId")] = themeId }
+    }
+
+    /**
+     * Phase 2 (DB-03): actually REMOVE the per-book reader theme
+     * key (the old remove path only blanked it, leaving one
+     * orphaned key per deleted book). Idempotent.
+     */
+    suspend fun removeReaderTheme(bookId: String) {
+        context.dataStore.edit { it.remove(stringPreferencesKey("readerTheme_$bookId")) }
+    }
+
+    /**
+     * Phase 2 (ADR-4 / DB-01): the confidential hash list — the
+     * SHA-256 content hashes of private books that were DELETED.
+     * Local only, by design: it is never read by backup export
+     * (it is only read to EXCLUDE ledger entries and records),
+     * it stores no title, file name or path, and it survives
+     * ordinary book deletion — deleting it would re-expose the
+     * deleted private book's ledger in later backups. Only
+     * lowercase 64-hex hashes are ever stored; anything else is
+     * ignored, so a corrupt value can never poison the filter.
+     */
+    suspend fun privateContentHashesNow(): Set<String> =
+        context.dataStore.data.map {
+            (it[PRIVATE_CONTENT_HASHES] ?: emptySet())
+                .filter { h -> SHA256_HEX.matches(h) }.toSet()
+        }.first()
+
+    suspend fun addPrivateContentHash(hash: String) {
+        val clean = hash.lowercase()
+        if (!SHA256_HEX.matches(clean)) return
+        context.dataStore.edit { prefs ->
+            val current = (prefs[PRIVATE_CONTENT_HASHES] ?: emptySet())
+                .filter { SHA256_HEX.matches(it) }.toMutableSet()
+            if (current.add(clean)) prefs[PRIVATE_CONTENT_HASHES] = current
+        }
+    }
+
+    suspend fun removePrivateContentHash(hash: String) {
+        val clean = hash.lowercase()
+        context.dataStore.edit { prefs ->
+            val current = (prefs[PRIVATE_CONTENT_HASHES] ?: emptySet())
+                .filter { SHA256_HEX.matches(it) }.toMutableSet()
+            if (current.remove(clean)) prefs[PRIVATE_CONTENT_HASHES] = current
+        }
     }
 
     // Task 7 additive generic string access (used by RankService wiring).

@@ -319,13 +319,73 @@ fun readEpubIdentifier(epubFile: File): String? = try {
 }
 
 /**
+ * Phase 2 (ADR-4 / DB-01): drop every record that identifies a
+ * private book — by content hash or by EPUB identifier — from a
+ * record set about to be exported or merged from a backup. The
+ * caller supplies the private hashes (current private books'
+ * content hashes + the confidential deleted-private hash list)
+ * and the private EPUB identifiers; matching is by either key,
+ * mirroring [ReadingRecord.sameBookAs]. Pure, unit-testable.
+ */
+fun filterPrivateRecords(
+    records: List<ReadingRecord>,
+    privateHashes: Set<String>,
+    privateEpubIds: Set<String>
+): List<ReadingRecord> {
+    if (privateHashes.isEmpty() && privateEpubIds.isEmpty()) return records
+    return records.filter { rec ->
+        (rec.sha256.isBlank() || rec.sha256 !in privateHashes) &&
+            (rec.epubId.isBlank() || rec.epubId !in privateEpubIds)
+    }
+}
+
+/**
  * On-device store of reading records for books NOT currently in the
  * library (orphans from restores and deletions). Library books' records
  * are always rebuilt from the DB at export time; the store only carries
  * records across the gaps. Backed by one small JSON file in filesDir.
+ *
+ * Phase 2 (DB-02): this store is a process-wide singleton — every
+ * caller MUST use [getInstance]. Two instances used to mean two
+ * in-memory caches over one file, so a write through one instance
+ * was invisible to (and then overwritten by) the other. Writes are
+ * atomic (temp file + rename in the same directory), and a file
+ * that is not even valid JSON is quarantined to
+ * `reading_records.json.corrupt` instead of silently discarding
+ * every record it held.
  */
 class ReadingRecordStore(context: Context) {
+    companion object {
+        private const val TAG = "ReadingRecords"
+        @Volatile
+        private var instance: ReadingRecordStore? = null
+
+        /**
+         * The single process-wide store. The application context is
+         * held (never an Activity) so the singleton cannot leak one.
+         */
+        fun getInstance(context: Context): ReadingRecordStore {
+            return instance ?: synchronized(this) {
+                instance ?: ReadingRecordStore(context.applicationContext)
+                    .also { instance = it }
+            }
+        }
+
+        /**
+         * Test-only: drop the singleton so the next [getInstance]
+         * re-reads from disk. Instrumented tests call this in
+         * cleanup because the singleton's cache would otherwise
+         * survive file deletion between tests. Never called in
+         * production code.
+         */
+        fun resetInstanceForTests() {
+            synchronized(this) { instance = null }
+        }
+    }
+
     private val file = File(context.filesDir, "reading_records.json")
+    private val tmpFile = File(context.filesDir, "reading_records.json.tmp")
+    private val corruptFile = File(context.filesDir, "reading_records.json.corrupt")
     private val lock = Any()
     private var cache: MutableList<ReadingRecord>? = null
 
@@ -333,8 +393,34 @@ class ReadingRecordStore(context: Context) {
         cache?.let { return it }
         val list = if (file.isFile) {
             try {
-                ReadingRecord.listFromJson(file.readBytes()).toMutableList()
+                val bytes = file.readBytes()
+                // A file that is not even valid JSON is corruption,
+                // not an empty store: quarantine it (keeping the
+                // evidence) instead of silently dropping every
+                // record it held. A valid envelope with no books
+                // is still just an empty store.
+                val validJson = try {
+                    JSONObject(String(bytes, Charsets.UTF_8))
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+                if (!validJson && bytes.isNotEmpty()) {
+                    android.util.Log.w(
+                        TAG,
+                        "reading_records.json is not valid JSON; " +
+                            "quarantining to ${corruptFile.name} and starting empty"
+                    )
+                    runCatching {
+                        if (corruptFile.exists()) corruptFile.delete()
+                        file.renameTo(corruptFile)
+                    }
+                    mutableListOf()
+                } else {
+                    ReadingRecord.listFromJson(bytes).toMutableList()
+                }
             } catch (e: Exception) {
+                android.util.Log.w(TAG, "Failed to read reading_records.json", e)
                 mutableListOf()
             }
         } else {
@@ -346,9 +432,19 @@ class ReadingRecordStore(context: Context) {
 
     private fun persist() {
         try {
-            file.writeBytes(ReadingRecord.listToJson(cache.orEmpty()))
+            // Atomic publish: a crash mid-write leaves either the
+            // old file or the new one, never a torn half-file.
+            tmpFile.writeBytes(ReadingRecord.listToJson(cache.orEmpty()))
+            if (!tmpFile.renameTo(file)) {
+                // Same-directory rename should not fail; fall
+                // back to a direct write rather than losing the
+                // update, and drop the temp file.
+                runCatching { tmpFile.delete() }
+                file.writeBytes(ReadingRecord.listToJson(cache.orEmpty()))
+            }
         } catch (e: Exception) {
             // A failed store write only loses orphan records — never fatal.
+            android.util.Log.w(TAG, "Failed to persist reading records", e)
         }
     }
 
@@ -387,6 +483,29 @@ class ReadingRecordStore(context: Context) {
         synchronized(lock) {
             cache = ReadingRecord.mergeAll(loaded(), incoming).toMutableList()
             persist()
+        }
+    }
+
+    /**
+     * Phase 2 (ADR-4 / DB-01): remove every record identifying a
+     * book by any of [hashes] or [epubIds] — the purge that runs
+     * when a book is privatized or a private book is deleted, so
+     * no orphan of it can leak into a later backup. Returns true
+     * when at least one record was removed. Idempotent: removing
+     * nothing is a silent no-op.
+     */
+    fun removeMatching(hashes: Set<String>, epubIds: Set<String>): Boolean {
+        if (hashes.isEmpty() && epubIds.isEmpty()) return false
+        synchronized(lock) {
+            val list = loaded()
+            val before = list.size
+            list.removeAll { rec ->
+                (rec.sha256.isNotBlank() && rec.sha256 in hashes) ||
+                    (rec.epubId.isNotBlank() && rec.epubId in epubIds)
+            }
+            if (list.size == before) return false
+            persist()
+            return true
         }
     }
 }

@@ -2,6 +2,8 @@ package com.novelfa.reader.data
 
 import android.content.Context
 import com.novelfa.reader.domain.Book
+import com.novelfa.reader.domain.ContentHashChange
+import com.novelfa.reader.domain.contentHashChange
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -47,14 +49,46 @@ class RoomBookRepository(
 
     override suspend fun resolveBookFile(context: Context, book: Book): File =
         InPlaceSource.resolve(context, book.toEntity()) { hash ->
-            // Persist the deferred content hash (import-speed step 2):
-            // this open digested it for free. Only when the row has
-            // none yet — a stored hash is never overwritten.
-            val cur = dao.getById(book.id)
-            if (cur != null && cur.contentHash == null) {
-                dao.update(cur.copy(contentHash = hash))
-            }
+            // A hash discovered while resolving (working-copy
+            // build or sidecar hit) is recorded through the
+            // single F2 rule: first knowledge persists, a real
+            // change persists AND resets progress, unchanged is
+            // a no-op. Never the old null-only persist, which
+            // left a stale hash on the row after an edit.
+            noteContentHash(book.id, hash)
         }
+
+    override suspend fun noteContentHash(
+        id: String,
+        freshHash: String
+    ): ContentHashChange {
+        val cur = dao.getById(id) ?: return ContentHashChange.NO_BOOK
+        return when (contentHashChange(cur.contentHash, freshHash)) {
+            ContentHashChange.FIRST_KNOWN -> {
+                dao.update(cur.copy(contentHash = freshHash))
+                ContentHashChange.FIRST_KNOWN
+            }
+            ContentHashChange.UNCHANGED -> ContentHashChange.UNCHANGED
+            ContentHashChange.CHANGED -> {
+                // New content identity: the old progress belongs
+                // to the old content and must not survive onto
+                // the new one (F2: new content is never mistaken
+                // as completed). The ledger is untouched — keyed
+                // by content hash, the old entry stays under the
+                // old key and the new content starts from zero.
+                dao.update(
+                    cur.copy(
+                        contentHash = freshHash,
+                        lastChapterIndex = 0,
+                        lastOpenedDate = null,
+                        lastAnchor = null
+                    )
+                )
+                ContentHashChange.CHANGED
+            }
+            ContentHashChange.NO_BOOK -> ContentHashChange.NO_BOOK
+        }
+    }
 
     override suspend fun backfillCover(context: Context, book: Book, resolvedFile: File) {
         CoverBackfill.backfill(context, dao, book.toEntity(), resolvedFile)

@@ -545,19 +545,35 @@ class LibraryViewModel(
     suspend fun resetProgress(book: Book) = collections.resetProgress(book.id)
 
     suspend fun removeBook(book: Book) {
-        // Keep the reading record so re-importing this file later
-        // restores its place; capture must run before the file goes.
-        importer?.captureReadingRecord(book.id)
+        // Phase 2 (DB-01): a private book's data must never
+        // survive its deletion into a later backup. Purge its
+        // orphan records and remember its content hashes in the
+        // confidential private list BEFORE the row goes (both
+        // need the row/file to compute their keys). A public
+        // book keeps the old behaviour: capture its record so
+        // re-importing the file later restores its place.
+        if (book.isPrivate) {
+            importer?.purgeReadingRecord(book.id)
+            importer?.privateContentHashes(book.id)?.forEach { hash ->
+                runCatching { prefs?.addPrivateContentHash(hash) }
+            }
+        } else {
+            // Keep the reading record so re-importing this file later
+            // restores its place; capture must run before the file goes.
+            importer?.captureReadingRecord(book.id)
+        }
         collections.removeBook(book.id)
         // The persistable permission of a `content://` in-place
         // book dies with the book (see InPlaceSource); the file
         // itself is never touched — that is CollectionManager's
         // guard, not this call.
         importer?.releaseInPlacePermission(book.sourceUri)
-        // Per-book reader theme lived in prefs under readerTheme_<id> and
-        // used to survive deletion forever (one orphaned key per book).
-        // Blank = default theme, so clearing is just resetting it.
-        runCatching { prefs?.setReaderTheme(book.id, "") }
+        // Phase 2 (DB-03): per-book reader state dies with the
+        // book, public or private — extras (bookmarks, scroll,
+        // highlights, zoom, crops) and the per-book reader theme
+        // key, actually removed, not just blanked.
+        importer?.clearBookExtras(book.id)
+        runCatching { prefs?.removeReaderTheme(book.id) }
     }
 
     /**
@@ -572,16 +588,30 @@ class LibraryViewModel(
 
     /**
      * Deletes every private book (row, EPUB file, cover, chapter cache)
-     * through the normal remove path. Reading records are kept, like any
-     * other removal, so re-importing a file later restores its place.
-     * Used by the forgot-PIN recovery: without the PIN the protected
-     * content cannot be kept, so it is destroyed instead of bypassed.
+     * through the normal remove path. Phase 2 (DB-01): unlike a
+     * public removal, a private book's reading records are PURGED
+     * (not kept) and its content hashes join the confidential
+     * private list, so nothing identifiable survives into a later
+     * backup. Used by the forgot-PIN recovery: without the PIN the
+     * protected content cannot be kept, so it is destroyed instead
+     * of bypassed.
      */
     suspend fun deleteAllPrivateBooks() {
         repo.books().first().filter { it.isPrivate }.forEach { removeBook(it) }
     }
 
-    suspend fun togglePrivate(book: Book) = collections.togglePrivate(book.id)
+    /**
+     * Phase 2 (DB-01): privatizing a book purges its orphan
+     * records — a record captured while the book was public
+     * must not survive into a backup after the book went
+     * private. The purge runs after the flip (the row still
+     * exists, so its keys can be computed).
+     */
+    suspend fun togglePrivate(book: Book) {
+        val wasPrivate = repo.book(book.id)?.isPrivate ?: book.isPrivate
+        collections.togglePrivate(book.id)
+        if (!wasPrivate) importer?.purgeReadingRecord(book.id)
+    }
 
     suspend fun removeFromCollection(book: Book) =
         collections.removeFromCollection(book.id)

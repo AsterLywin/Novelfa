@@ -202,4 +202,26 @@ class ReaderExtrasStore(private val context: Context) {
             prefs[scrollOffsetKey(bookId)] = offsetPx.coerceAtLeast(0)
         }
     }
+
+    /**
+     * Phase 2 (DB-03): delete EVERY per-book entry for [bookId] in
+     * one edit — bookmarks, scroll offset, highlights, zoom and
+     * crop rects — plus a sweep for any other key ending in this
+     * id, so "no key with this id remains" holds even if a new
+     * per-book key is added later without updating this function.
+     * Idempotent: clearing a book that has no keys is a no-op.
+     * Called from book removal for public AND private books.
+     */
+    suspend fun clearBook(bookId: String) {
+        context.readerExtrasDataStore.edit { prefs ->
+            prefs.remove(bookmarksKey(bookId))
+            prefs.remove(scrollOffsetKey(bookId))
+            prefs.remove(highlightsKey(bookId))
+            prefs.remove(zoomKey(bookId))
+            prefs.remove(cropRectsKey(bookId))
+            prefs.asMap().keys
+                .filter { it.name.endsWith("_$bookId") }
+                .forEach { prefs.remove(it) }
+        }
+    }
 }

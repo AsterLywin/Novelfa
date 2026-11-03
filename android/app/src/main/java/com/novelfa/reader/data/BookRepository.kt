@@ -2,6 +2,7 @@ package com.novelfa.reader.data
 
 import android.content.Context
 import com.novelfa.reader.domain.Book
+import com.novelfa.reader.domain.ContentHashChange
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 
@@ -60,12 +61,26 @@ interface BookRepository {
      * Resolve a book to a [File] the engines can open: the stored file
      * for copy books, the user's real file (or a transient working
      * copy) for in-place books. A content hash discovered while
-     * resolving an in-place `content://` book is persisted to the row
-     * when the row has none yet — exactly what the reader used to do
-     * inline in its own resolve callback. Throws [java.io.IOException]
-     * when an in-place source is missing, as [InPlaceSource] does.
+     * resolving an in-place `content://` book is recorded through
+     * [noteContentHash] — first knowledge persists it, a real
+     * content change persists it AND resets progress (ADR-3/F2).
+     * Throws [java.io.IOException] when an in-place source is
+     * missing, as [InPlaceSource] does.
      */
     suspend fun resolveBookFile(context: Context, book: Book): File
+
+    /**
+     * Phase 2 (ADR-3 / F2): record a freshly computed content hash
+     * for a book. The decision follows
+     * [com.novelfa.reader.domain.contentHashChange] exactly:
+     * FIRST_KNOWN persists the hash; UNCHANGED is a no-op; CHANGED
+     * (a real content change) persists the new hash and resets
+     * progress to chapter 0 with no open date and no anchor, while
+     * the old content's ledger entry stays untouched under the
+     * old key — it is never transferred to the new content.
+     * Returns NO_BOOK when the row does not exist.
+     */
+    suspend fun noteContentHash(id: String, freshHash: String): ContentHashChange
 
     /**
      * First-open cover backfill for `content://` in-place books (see

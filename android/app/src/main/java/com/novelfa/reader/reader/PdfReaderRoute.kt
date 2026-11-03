@@ -302,7 +302,8 @@ fun PdfReaderRoute(
                 sourceFactory = { pw -> PdfiumNativeSource(bookFile, context, pw) },
                 loadingRes = R.string.pdf_native_loading,
                 errorRes = R.string.pdf_native_error,
-                isPdf = true
+                isPdf = true,
+                resolvedFile = bookFile
             )
         }
         BookFormat.detect(resolvedFile!!) == BookFormat.CBZ -> {
@@ -313,7 +314,8 @@ fun PdfReaderRoute(
                 onClose = onClose,
                 sourceFactory = { pw -> CbzNativeSource(bookFile, pw) },
                 loadingRes = R.string.cbz_native_loading,
-                errorRes = R.string.cbz_native_error
+                errorRes = R.string.cbz_native_error,
+                resolvedFile = bookFile
             )
         }
         BookFormat.detect(resolvedFile!!) == BookFormat.ZIP -> {
@@ -384,7 +386,8 @@ private fun ZipReaderRoute(
                 onClose = onClose,
                 sourceFactory = { pw -> CbzNativeSource(resolvedFile, pw) },
                 loadingRes = R.string.cbz_native_loading,
-                errorRes = R.string.cbz_native_error
+                errorRes = R.string.cbz_native_error,
+                resolvedFile = resolvedFile
             )
         }
         else -> {

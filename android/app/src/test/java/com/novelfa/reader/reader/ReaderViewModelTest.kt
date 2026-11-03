@@ -4,6 +4,8 @@ import android.content.Context
 import com.novelfa.reader.data.BookRepository
 import com.novelfa.reader.data.SeekableZip
 import com.novelfa.reader.domain.Book
+import com.novelfa.reader.domain.ContentHashChange
+import com.novelfa.reader.domain.contentHashChange
 import com.novelfa.reader.domain.isCompleted
 import java.io.File
 import com.novelfa.reader.model.Chapter
@@ -56,6 +58,29 @@ private class FakeReaderRepo(initial: List<Book>) : BookRepository {
 
     override suspend fun resolveBookFile(context: Context, book: Book): File =
         File(book.filePath)
+
+    override suspend fun noteContentHash(id: String, freshHash: String): ContentHashChange {
+        val cur = data.value.firstOrNull { it.id == id } ?: return ContentHashChange.NO_BOOK
+        return when (contentHashChange(cur.contentHash, freshHash)) {
+            ContentHashChange.FIRST_KNOWN -> {
+                update(cur.copy(contentHash = freshHash))
+                ContentHashChange.FIRST_KNOWN
+            }
+            ContentHashChange.UNCHANGED -> ContentHashChange.UNCHANGED
+            ContentHashChange.CHANGED -> {
+                update(
+                    cur.copy(
+                        contentHash = freshHash,
+                        lastChapterIndex = 0,
+                        lastOpenedDate = null,
+                        lastAnchor = null
+                    )
+                )
+                ContentHashChange.CHANGED
+            }
+            ContentHashChange.NO_BOOK -> ContentHashChange.NO_BOOK
+        }
+    }
 
     override suspend fun backfillCover(context: Context, book: Book, resolvedFile: File) {}
 

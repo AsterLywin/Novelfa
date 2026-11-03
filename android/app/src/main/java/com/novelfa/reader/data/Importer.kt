@@ -9,6 +9,8 @@ import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.util.Log
 import com.novelfa.reader.R
+import com.novelfa.reader.domain.ContentHashChange
+import com.novelfa.reader.domain.contentHashChange
 import com.novelfa.reader.model.ParsedBook
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CacheStamp
@@ -120,7 +122,7 @@ class Importer(
     private val prefs: PrefsStore? = null
 ) {
 
-    private val recordStore by lazy { ReadingRecordStore(context) }
+    private val recordStore by lazy { ReadingRecordStore.getInstance(context) }
 
     /**
      * Background scope for deferred generated covers (fast import only):
@@ -255,6 +257,68 @@ class Importer(
         recordStore.upsert(
             readingRecordFor(book, sha256OfFile(file), readEpubIdentifier(file))
         )
+    }
+
+    /**
+     * Phase 2 (ADR-4 / DB-01): the keys identifying one book's
+     * content for privacy filtering — its recorded content hash,
+     * the live file's hash when the file is readable, and its EPUB
+     * identifier when one can be read. A record captured from an
+     * older version of the file still matches by EPUB identifier;
+     * a changed non-EPUB file leaves an unmatchable orphan, which
+     * is a documented limitation (its hash is simply unknown).
+     */
+    private fun contentKeysFor(book: BookEntity): BookContentKeys {
+        val hashes = mutableSetOf<String>()
+        book.contentHash?.takeIf { it.isNotBlank() }?.let { hashes += it }
+        val epubIds = mutableSetOf<String>()
+        val file = File(book.filePath)
+        if (file.isFile) {
+            runCatching { sha256OfFile(file) }.getOrNull()?.let { hashes += it }
+            runCatching { readEpubIdentifier(file) }.getOrNull()?.let { epubIds += it }
+        }
+        return BookContentKeys(hashes, epubIds)
+    }
+
+    /** Content keys of one book, for privacy filtering (see [contentKeysFor]). */
+    private data class BookContentKeys(
+        val hashes: Set<String>,
+        val epubIds: Set<String>
+    )
+
+    /**
+     * Phase 2 (ADR-4 / DB-01): purge every orphan record identifying
+     * this book — run when a book is privatized and when a private
+     * book is deleted, so no record of it can leak into a later
+     * backup. The row must still exist (this runs before removal).
+     * Idempotent: purging nothing is a silent no-op.
+     */
+    suspend fun purgeReadingRecord(bookId: String) = withContext(Dispatchers.IO) {
+        val book = db.bookDao().getById(bookId) ?: return@withContext
+        val keys = contentKeysFor(book)
+        if (keys.hashes.isEmpty() && keys.epubIds.isEmpty()) return@withContext
+        recordStore.removeMatching(keys.hashes, keys.epubIds)
+    }
+
+    /**
+     * Phase 2 (ADR-4 / DB-01): the content hashes to remember in
+     * the confidential private list when a private book is
+     * deleted (see PrefsStore.privateContentHashesNow). The row
+     * must still exist (this runs before removal).
+     */
+    suspend fun privateContentHashes(bookId: String): Set<String> = withContext(Dispatchers.IO) {
+        val book = db.bookDao().getById(bookId) ?: return@withContext emptySet()
+        contentKeysFor(book).hashes
+    }
+
+    /**
+     * Phase 2 (DB-03): clear one book's reader-extras keys
+     * (see ReaderExtrasStore.clearBook). A failure here must not
+     * fail the book's removal, but it must not be silent either.
+     */
+    suspend fun clearBookExtras(bookId: String) = withContext(Dispatchers.IO) {
+        runCatching { ReaderExtrasStore(context).clearBook(bookId) }
+            .onFailure { Log.w("NovelfaImporter", "clearBookExtras failed for $bookId", it) }
     }
 
     /**
@@ -980,12 +1044,15 @@ class Importer(
         )
         if (fastImport) {
             // Deferred content hash (step 2): one streaming pass,
-            // off the dialog's critical path. The row update is
-            // guarded (only when still unknown) so a first open
-            // that already digested during its working-copy
-            // build cannot be clobbered, and the restore below
-            // mirrors applyReadingRecord, minus the import-hash
-            // map — which this path never fills any more.
+            // off the dialog's critical path. The row update
+            // follows the single F2 rule (see contentHashChange):
+            // first knowledge persists, a real change persists
+            // AND resets progress — so a first open that already
+            // digested during its working-copy build reports the
+            // same hash (UNCHANGED, no clobber), and the restore
+            // below mirrors applyReadingRecord, minus the
+            // import-hash map — which this path never fills
+            // any more.
             backgroundScope.launch {
                 runCatching {
                     val digest = MessageDigest.getInstance("SHA-256")
@@ -1002,8 +1069,25 @@ class Importer(
                     } ?: return@runCatching
                     val h = digest.digest().joinToString("") { "%02x".format(it) }
                     val current = db.bookDao().getById(id) ?: return@runCatching
-                    if (current.contentHash == null) {
-                        db.bookDao().update(current.copy(contentHash = h))
+                    // Phase 2 (ADR-3 / F2): the single content-hash
+                    // rule — first knowledge persists, a real change
+                    // persists AND resets progress (the row cannot
+                    // keep a stale hash after an edit). The old
+                    // null-only guard left exactly that staleness.
+                    when (contentHashChange(current.contentHash, h)) {
+                        ContentHashChange.FIRST_KNOWN ->
+                            db.bookDao().update(current.copy(contentHash = h))
+                        ContentHashChange.CHANGED ->
+                            db.bookDao().update(
+                                current.copy(
+                                    contentHash = h,
+                                    lastChapterIndex = 0,
+                                    lastOpenedDate = null,
+                                    lastAnchor = null
+                                )
+                            )
+                        ContentHashChange.UNCHANGED,
+                        ContentHashChange.NO_BOOK -> Unit
                     }
                     restoreRecordForHash(id, h)
                 }

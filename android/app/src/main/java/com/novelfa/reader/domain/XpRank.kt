@@ -350,21 +350,42 @@ class XpLedger {
      * device-local and are ignored, because a UUID from another
      * device never matches a book on this device. Content keys
      * (file SHA-256) are the same on every device for the same file.
+     *
+     * Phase 2 (ADR-4 / DB-01): entries whose content hash is in
+     * [excludedContentHashes] are skipped entirely, including
+     * their bonus flag — a restored backup must never resurrect
+     * a private book's ledger, not even through the apply path.
      */
-    fun mergeContentFrom(other: XpLedger) {
+    fun mergeContentFrom(
+        other: XpLedger,
+        excludedContentHashes: Set<String> = emptySet()
+    ) {
         for ((key, entry) in other.books) {
             if (!isContentKey(key)) continue
+            if (excludedContentHashes.isNotEmpty() &&
+                key.drop(1) in excludedContentHashes
+            ) continue
             val target = books.getOrPut(key) { BookLedger() }
             mergeEntryInto(target, entry)
             if (key in other.bonusAwarded) bonusAwarded += key
         }
     }
 
-    /** Serialize only the portable (content-keyed) entries, for backup. */
-    fun serializeContentOnly(): String {
+    /**
+     * Serialize only the portable (content-keyed) entries, for backup.
+     * Phase 2 (ADR-4 / DB-01): entries whose content hash is in
+     * [excludedContentHashes] are left out, including their bonus
+     * flag — the export of a private book's ledger is banned even
+     * after the book itself was deleted (the caller supplies the
+     * confidential deleted-private hash list for that case).
+     */
+    fun serializeContentOnly(excludedContentHashes: Set<String> = emptySet()): String {
         val filtered = XpLedger()
         for ((key, entry) in books) {
             if (!isContentKey(key)) continue
+            if (excludedContentHashes.isNotEmpty() &&
+                key.drop(1) in excludedContentHashes
+            ) continue
             filtered.books[key] = BookLedger(
                 entry.upTo, entry.extras.toMutableSet(), entry.bookXp,
                 entry.smallCredited.toMutableSet()
@@ -557,17 +578,18 @@ class XpStore(private val prefs: RankPrefs) {
         }
 
     /** Merge a backup's content-keyed ledger into this device's ledger. */
-    fun mergeContentLedger(serialized: String) {
+    fun mergeContentLedger(serialized: String, excludedContentHashes: Set<String> = emptySet()) {
         if (serialized.isBlank()) return
         synchronized(ledgerLock) {
             val led = ledger
-            led.mergeContentFrom(XpLedger.parse(serialized))
+            led.mergeContentFrom(XpLedger.parse(serialized), excludedContentHashes)
             ledger = led
         }
     }
 
     /** Portable (content-keyed) ledger only, for backup export. */
-    fun contentLedgerSerialized(): String = ledger.serializeContentOnly()
+    fun contentLedgerSerialized(excludedContentHashes: Set<String> = emptySet()): String =
+        ledger.serializeContentOnly(excludedContentHashes)
 
     /** XP at the last celebration shown on the home screen (see spec §6). */
     var celebratedXp: Int
@@ -649,6 +671,16 @@ class XpStore(private val prefs: RankPrefs) {
  * the book keeps its UUID key (old behaviour, never a failure).
  * One instance per reader session: its cached key must never leak
  * across books.
+ *
+ * Phase 2 (ADR-3 / F2): the transfer is allowed ONLY when the
+ * caller proves the UUID entry belongs to the same content as the
+ * fresh hash — i.e. [storedHash] is null (no content was ever
+ * recorded for this row) or equals [hash]. When the row carries a
+ * DIFFERENT stored hash, the content really changed: the UUID
+ * entry stays where it is (it belongs to the old content) and
+ * the new content starts from zero under its own key. Callers
+ * that do not know the stored hash pass null and keep the old
+ * behaviour; both readers pass the row's stored hash.
  */
 class XpContentKeyResolver(private val store: XpStore) {
     var key: String? = null
@@ -656,11 +688,18 @@ class XpContentKeyResolver(private val store: XpStore) {
     var resolved: Boolean = false
         private set
 
-    /** Returns the credit key for [bookId]; [hash] is used only on first call. */
-    fun resolve(bookId: String, hash: String?): String {
+    /**
+     * Returns the credit key for [bookId]; [hash] is used only on
+     * first call. [storedHash] is the row's recorded content hash
+     * (null when unknown); the UUID→content transfer runs only
+     * when it is null or equals [hash] (same-content proof).
+     */
+    fun resolve(bookId: String, hash: String?, storedHash: String? = null): String {
         if (!resolved) {
             val contentKey = hash?.let { XpLedger.contentKeyFor(it) }
-            if (contentKey != null && contentKey != bookId) {
+            if (contentKey != null && contentKey != bookId &&
+                (storedHash.isNullOrBlank() || storedHash == hash)
+            ) {
                 store.transferLedger(bookId, contentKey)
             }
             key = contentKey ?: bookId
