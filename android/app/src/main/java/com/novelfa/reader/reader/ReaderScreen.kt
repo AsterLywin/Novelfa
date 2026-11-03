@@ -69,6 +69,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
@@ -1521,20 +1522,50 @@ fun ReaderScreen(
                         // Previous/Next section buttons are replaced by
                         // those gestures here. Vertical mode keeps them.
                         if (modeNow != ReadingMode.PAGED_HORIZONTAL) {
+                        // Flexible width, never fixed: this Row used to
+                        // measure both section buttons at full
+                        // intrinsic width with no weight, so on a
+                        // narrow screen — or with the longer English
+                        // labels ("Previous section" / "Next section"
+                        // vs "بخش قبلی" / "بخش بعدی") — the row
+                        // overflowed past its end edge and pushed −A,
+                        // the size box, +A and spacing off-screen
+                        // (right edge in LTR, left edge in RTL). With
+                        // weight(1f, fill = false) the buttons take
+                        // only the space left after the fixed font
+                        // controls (a Row measures fixed children
+                        // first), and their text ellipsizes instead
+                        // of pushing anything out — on wide screens
+                        // they still keep natural size and even
+                        // spacing.
                         TextButton(
+                            modifier = Modifier.weight(1f, fill = false),
                             onClick = {
                                 val vv = vm ?: return@TextButton
                                 jumpChapter(vv, -1)
                             },
                             enabled = v != null && v.index > 0
-                        ) { Text(stringResource(R.string.previous_chapter)) }
+                        ) {
+                            Text(
+                                stringResource(R.string.previous_chapter),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         TextButton(
+                            modifier = Modifier.weight(1f, fill = false),
                             onClick = {
                                 val vv = vm ?: return@TextButton
                                 jumpChapter(vv, 1)
                             },
                             enabled = v != null && v.index < v.chapters.size - 1
-                        ) { Text(stringResource(R.string.next_chapter)) }
+                        ) {
+                            Text(
+                                stringResource(R.string.next_chapter),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         }
                         TextButton(
                             onClick = {
