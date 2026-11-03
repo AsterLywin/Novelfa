@@ -21,53 +21,74 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 
 /**
- * ComicScreen-style zoom + pan for one page in vertical mode.
+ * ComicScreen-style zoom + pan for one page — with one page box
+ * as the whole world. This container is the per-page viewport:
  *
- * ComicScreen's vertical strip shows each page fit to the strip
- * width, one below the other, with no sideways scroll — and each
- * page is a PhotoView: pinch to zoom, drag to pan while zoomed,
- * and when the pan hits its edge the strip scrolls again. This
- * container is that behaviour, reimplemented for Compose:
- *
+ * - Layout and transform are separate. The page's layout size is
+ *   its own fit size (width- or height-driven, from that page's
+ *   own aspect) and NEVER changes with zoom. Zoom is a GPU
+ *   transform of the decoded content inside that box only, and
+ *   the layer is clipped to the box (graphicsLayer clip = true),
+ *   so a zoomed page can never paint over its neighbours, and
+ *   its touch area is exactly its visible area. The old version
+ *   had no clip: a zoomed page drew beyond its box and its
+ *   overflow belonged, for touch, to the neighbouring items.
+ * - The zoom is per page box, never shared. Each container owns
+ *   its own PageZoomState (scale + pan), keyed by sessionKey +
+ *   zoomPageId, so zooming one page leaves every other page
+ *   exactly as it was — including pages of different sizes in
+ *   the same strip, where one shared multiplier was always
+ *   wrong for at least one of them. There is no global zoom
+ *   anymore: the 32bb0313 decision (one scale for the whole
+ *   book, kept across page turns) was reversed by the
+ *   2026-11-03 zoom-engine order, which requires per-page
+ *   independence in strips and a hard reset on page change in
+ *   the pager. A strip item's state dies with its composition
+ *   (Lazy disposal), so unloaded pages never hold state.
+ * - Paged reset. The viewer passes the displayed pager item as
+ *   activeSlotKey and each box its own slotKey. When they differ
+ *   the box is no longer displayed, so it resets to 1x with zero
+ *   pan and reports 1x (so the item's sharp re-render drops back
+ *   to 1x too). The reset is tied to the real page change, not
+ *   to scroll offsets: a partial swipe that settles back resets
+ *   nothing. In strips both keys are null and no auto-reset
+ *   happens — vertical keeps its per-page independence instead.
+ * - Gesture arbitration, paged vs strip. At 1x a drag is never
+ *   consumed, so the pager turns / the list scrolls as before.
+ *   While zoomed, a drag pans. In strips (edgeHandoff = true)
+ *   a drag at the pan edge is handed back, so the list scrolls
+ *   from there — PhotoView's edge handover. In the pager
+ *   (edgeHandoff = false) a drag at the pan edge is CONSUMED,
+ *   so the pager can never turn the page from a pan: while
+ *   zoomed the user pans only, and must zoom back out (pinch
+ *   to 1x, or double-tap) before a swipe turns the page. That
+ *   lock is what stops the next page from entering a zoomed
+ *   page's view. No userScrollEnabled switch is involved: the
+ *   container's consumption is the only gate, as before.
  * - Pinch (two fingers) zooms 1x..4x around the pinch focal
  *   point and pans with the centroid, consuming the whole
- *   gesture so the list never scrolls mid-pinch.
+ *   gesture so the list/pager never moves mid-pinch. The focal
+ *   math lives in PageZoomState.focalPan and is unit-tested.
  * - One-finger drag pans ONLY while zoomed (scale > 1). At
  *   scale 1 the drag is never consumed, so the list scrolls
  *   vertically as before — and since there is no horizontal
  *   scroll anymore, a sideways drag at scale 1 simply does
  *   nothing, which is the requested "no left-right scroll".
- * - Edge handoff: while zoomed, a drag that cannot move the
- *   image any further in that direction is NOT consumed, so
- *   the list takes over and scrolls from there — the same
- *   hand-over PhotoView does at its bounds.
+ * - Double-tap zoom: a double-tap toggles 1x <-> 2x, zooming
+ *   around the tap point — the tapped detail lands under the
+ *   finger — and it animates there over ~120ms (ComicScreen's
+ *   transition duration) instead of snapping.
  * - Taps are never consumed here; the chrome toggle for them
  *   comes from the page item's passive listener (see
  *   NativePageItem), which reports without consuming, so no
  *   detector starves another (the 6c4ee982 regression was an
  *   ancestor detector that consumed; the c78a032 tap inside
  *   this loop never fired on the phone).
- * - Double-tap zoom (ComicScreen's double-tap modes, simplified
- *   to one): a double-tap toggles 1x <-> 2x, zooming around the
- *   tap point — the tapped detail lands under the finger — and
- *   it animates there over ~120ms (ComicScreen's transition
- *   duration) instead of snapping. The trade-off, stated
- *   plainly: the viewer delays its chrome toggle by 300ms to
- *   tell a single tap from the first tap of a double-tap (the
- *   same window PhotoView apps use), so every chrome toggle
+ * - The viewer delays its chrome toggle by 300ms to tell a
+ *   single tap from the first tap of a double-tap (the same
+ *   window PhotoView apps use), so every chrome toggle
  *   now takes 300ms. Without that delay a double-tap would
  *   toggle the chrome twice (a flicker).
- * - Global zoom: the scale is shared by every page in the
- *   book (see zoomScale), not kept per page — a zoom on one
- *   page applies to all pages, and turning the page no longer
- *   snaps back to 1x.
- *
- * Limits, stated plainly: the touch area is the page's layout
- * box — a zoomed image draws beyond it (graphicsLayer does not
- * resize layout), and touches on that overflow belong to the
- * neighbouring items/list, not to this page. The box is the
- * full strip width and the page's full height, so in practice
- * the zoomed page stays touchable over most of the screen.
  *
  * Performance, and why the old version felt slow on a phone:
  * two separate costs stacked. (1) Scale/offset used to be
@@ -88,7 +109,6 @@ import androidx.compose.ui.unit.IntSize
  * moment, fast throughout), and the sharper re-render lands
  * once, after the gesture, if the settled scale needs it.
  */
-private const val MAX_ZOOM = 4f
 
 /**
  * One double-tap zoom animation: from the scale/offset the
@@ -108,16 +128,25 @@ private data class ZoomAnimTarget(
 @Composable
 fun ZoomablePageContainer(
     modifier: Modifier,
-    // The viewer's global zoom (1..4), shared by every page
-    // in this book: when one page is pinched or double-tapped
-    // to a settled scale, the viewer writes it here, and
-    // every page — the current one, its neighbours, and any
-    // page composed later — shows that same scale. Before
-    // this, each page kept its own scale, so turning the
-    // page snapped back to 1x and zoom felt per-page only.
-    // The sync below is guarded by equality, so a page
-    // reporting its own settled scale does not reset itself.
-    zoomScale: Float = 1f,
+    // Session key (the book id): the zoom state is remembered
+    // under it, so swapping the reader's content in the same
+    // composition drops every page's old zoom instead of
+    // handing a new book the previous book's scale and pan.
+    sessionKey: Any? = null,
+    // Paged reset keys (see the header note): this box's pager
+    // item index, and the currently displayed pager item index.
+    // Both null in strips, where no auto-reset applies.
+    slotKey: Int? = null,
+    activeSlotKey: Int? = null,
+    // Session-scoped page-box label for the state (see
+    // PageZoomState): "pager-3-half-0", "strip-12". Never
+    // persisted anywhere.
+    zoomPageId: String = "",
+    // Edge handover: true in strips (a drag at the pan edge
+    // scrolls the list), false in the pager (a drag at the
+    // pan edge is consumed, so the pager never turns from
+    // a pan while zoomed).
+    edgeHandoff: Boolean = true,
     // No tap reporting here anymore: the page item's outer
     // Box reports taps with a passive listener (see
     // NativePageItem), which can neither starve nor be
@@ -127,14 +156,15 @@ fun ZoomablePageContainer(
     // viewer drops the pending chrome toggle for exactly
     // that case, never for a second tap on its own.
     // Reports the SETTLED scale (1..4) — once per gesture, when
-    // the fingers lift, plus once per double-tap. The caller
-    // uses it to re-render the page sharper once the settled
-    // scale passes a threshold (ComicScreen's tile refinement,
-    // coarse-grained: a full-page re-render at 2x display
-    // width instead of per-tile re-decodes — same visible
-    // result, far less machinery). It deliberately does NOT
-    // fire per pinch move: a mid-gesture re-render stalls the
-    // gesture itself (see the performance note above).
+    // the fingers lift, plus once per double-tap, plus once on
+    // a paged reset back to 1x. The caller uses it to re-render
+    // the page sharper once the settled scale passes a
+    // threshold (ComicScreen's tile refinement, coarse-grained:
+    // a full-page re-render at 2x display width instead of
+    // per-tile re-decodes — same visible result, far less
+    // machinery). It deliberately does NOT fire per pinch move:
+    // a mid-gesture re-render stalls the gesture itself (see
+    // the performance note above).
     onScaleChange: (Float) -> Unit = {},
     // Confirmed double-tap (same spot, within 300ms): the
     // viewer uses it to suppress the pending chrome toggle.
@@ -155,45 +185,67 @@ fun ZoomablePageContainer(
     // animation below is the exception, and it lives in a
     // composable LaunchedEffect (where Animatable IS allowed),
     // driven by zoomAnimTarget state the loop only sets.
-    // Initial scale is the viewer's global zoom, so a page
-    // composed after a zoom (a turned-to page, a strip page
-    // below) starts at that zoom instead of snapping to 1x.
-    var scale by remember { mutableFloatStateOf(zoomScale) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
+    // One state per page box: nothing here is shared with any
+    // other page, and the remember keys (session + page box)
+    // drop the state when the content or the box changes.
+    var zoomState by remember(sessionKey, zoomPageId) {
+        mutableStateOf(PageZoomState(pageId = zoomPageId))
+    }
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
-    var zoomAnimTarget by remember { mutableStateOf<ZoomAnimTarget?>(null) }
+    var zoomAnimTarget by remember(sessionKey, zoomPageId) {
+        mutableStateOf<ZoomAnimTarget?>(null)
+    }
     // Last tap-up, for double-tap detection: a second tap-up
     // within 300ms and near the first is a double-tap, not two
     // single taps. Reset to 0 after a double-tap, so a third
     // quick tap starts fresh (a triple-tap is not a gesture).
-    var lastTapUpMs by remember { mutableStateOf(0L) }
-    var lastTapPos by remember { mutableStateOf(Offset.Zero) }
+    var lastTapUpMs by remember(sessionKey, zoomPageId) { mutableStateOf(0L) }
+    var lastTapPos by remember(sessionKey, zoomPageId) {
+        mutableStateOf(Offset.Zero)
+    }
     // Scale last reported to onScaleChange, so a gesture that
     // ends at the same scale it started at reports nothing.
-    var lastReportedScale by remember { mutableFloatStateOf(zoomScale) }
-
-    fun clampOffset(o: Offset, s: Float): Offset {
-        val maxX = ((boxSize.width * s - boxSize.width) / 2f).coerceAtLeast(0f)
-        val maxY = ((boxSize.height * s - boxSize.height) / 2f).coerceAtLeast(0f)
-        return Offset(o.x.coerceIn(-maxX, maxX), o.y.coerceIn(-maxY, maxY))
+    var lastReportedScale by remember(sessionKey, zoomPageId) {
+        mutableFloatStateOf(1f)
     }
 
-    // Global-zoom sync: when the viewer writes a new global
-    // zoom (another page settled there), this page follows.
-    // Guarded by equality, so a page reporting its own
-    // settled scale does not reset its own offset mid-gesture.
-    // A zoom back to 1x resets the pan offset: at 1x the
-    // clamp is zero anyway, so a stale offset would only
-    // shift the page for one frame.
-    LaunchedEffect(zoomScale) {
-        if (scale != zoomScale) {
-            scale = zoomScale
-            offset = if (zoomScale <= 1f) {
-                Offset.Zero
-            } else {
-                clampOffset(offset, zoomScale)
+    fun clampCurrent(oX: Float, oY: Float, s: Float): Pair<Float, Float> =
+        clampPan(oX, oY, s, boxSize.width.toFloat(), boxSize.height.toFloat())
+
+    // Paged reset: when the displayed pager item moves away
+    // from this box's item, this box is no longer displayed,
+    // so its zoom and pan return to the fit-size identity and
+    // the settled scale is reported once as 1x. Guarded, so a
+    // box that was never zoomed reports nothing, and a
+    // double-tap animation still running on the outgoing box
+    // is cancelled instead of overwriting the reset after it.
+    // A partial swipe that settles back never changes
+    // activeSlotKey, so it resets nothing.
+    LaunchedEffect(activeSlotKey) {
+        if (shouldResetZoom(slotKey, activeSlotKey) &&
+            (zoomState.isZoomed || zoomState.offsetX != 0f || zoomState.offsetY != 0f)
+        ) {
+            zoomAnimTarget = null
+            zoomState = zoomState.reset()
+            if (lastReportedScale != 1f) {
+                lastReportedScale = 1f
+                onScaleChange(1f)
             }
-            lastReportedScale = zoomScale
+        }
+    }
+
+    // Viewport change while zoomed (rotation, window resize):
+    // the box changed size, so the old pan may now exceed the
+    // new clamp. Re-clamp instead of jumping: at 1x the clamp
+    // is zero anyway, so an unzoomed page is untouched, and
+    // the first layout (box Zero -> real) is a no-op because
+    // the offset starts at zero.
+    LaunchedEffect(boxSize) {
+        if (boxSize.width > 0 && boxSize.height > 0) {
+            val (x, y) = clampCurrent(zoomState.offsetX, zoomState.offsetY, zoomState.scale)
+            if (x != zoomState.offsetX || y != zoomState.offsetY) {
+                zoomState = zoomState.copy(offsetX = x, offsetY = y)
+            }
         }
     }
 
@@ -224,13 +276,13 @@ fun ZoomablePageContainer(
             targetValue = target.toScale,
             animationSpec = tween(durationMillis = 120)
         ) { value, _ ->
-            scale = value
-            offset = clampOffset(
-                (target.tapPos - center) *
-                    (1f - value / target.fromScale) +
-                    target.fromOffset * (value / target.fromScale),
-                value
+            val (x, y) = doubleTapAnimOffset(
+                target.fromScale, target.fromOffset.x, target.fromOffset.y,
+                value, target.tapPos.x, target.tapPos.y,
+                center.x, center.y,
+                boxSize.width.toFloat(), boxSize.height.toFloat()
             )
+            zoomState = zoomState.copy(scale = value, offsetX = x, offsetY = y)
         }
         lastReportedScale = target.toScale
         onScaleChange(target.toScale)
@@ -243,11 +295,15 @@ fun ZoomablePageContainer(
             // Block form, not parameters: state read here
             // updates the layer transform without recomposing
             // the Image below (see the performance note above).
+            // clip = true is the per-page viewport: the zoomed
+            // content is cut at this box's own bounds and can
+            // never paint over a neighbouring page.
             .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                translationX = offset.x
-                translationY = offset.y
+                clip = true
+                scaleX = zoomState.scale
+                scaleY = zoomState.scale
+                translationX = zoomState.offsetX
+                translationY = zoomState.offsetY
             }
             .pointerInput(Unit) {
                 awaitPointerEventScope {
@@ -292,10 +348,9 @@ fun ZoomablePageContainer(
                                 prevCentroid = centroid
                                 prevDistance = distance
                             } else if (prevDistance > 0f && distance > 0f) {
-                                val oldScale = scale
+                                val oldScale = zoomState.scale
                                 val newScale =
-                                    (oldScale * (distance / prevDistance))
-                                        .coerceIn(1f, MAX_ZOOM)
+                                    coerceZoomScale(oldScale * (distance / prevDistance))
                                 val center = Offset(
                                     boxSize.width / 2f,
                                     boxSize.height / 2f
@@ -304,15 +359,18 @@ fun ZoomablePageContainer(
                                 // zoom around the new centroid:
                                 // the content point under the
                                 // fingers stays under them.
-                                var newOffset =
-                                    offset + (centroid - prevCentroid)
-                                newOffset =
-                                    (centroid - center) *
-                                        (1f - newScale / oldScale) +
-                                        newOffset * (newScale / oldScale)
-                                newOffset = clampOffset(newOffset, newScale)
-                                scale = newScale
-                                offset = newOffset
+                                // (Pure math: PageZoomState.focalPan.)
+                                val (nx, ny) = focalPan(
+                                    oldScale, zoomState.offsetX, zoomState.offsetY,
+                                    centroid.x - prevCentroid.x,
+                                    centroid.y - prevCentroid.y,
+                                    newScale, centroid.x, centroid.y,
+                                    center.x, center.y,
+                                    boxSize.width.toFloat(), boxSize.height.toFloat()
+                                )
+                                zoomState = zoomState.copy(
+                                    scale = newScale, offsetX = nx, offsetY = ny
+                                )
                                 // No onScaleChange here: the
                                 // settled scale is reported once
                                 // at gesture end below, so a
@@ -352,20 +410,33 @@ fun ZoomablePageContainer(
                                 // fight it.
                                 continue
                             }
-                            if (scale > 1f) {
-                                val newOffset =
-                                    clampOffset(offset + delta, scale)
-                                if (newOffset != offset) {
-                                    offset = newOffset
+                            if (zoomState.scale > 1f) {
+                                val (nx, ny) = clampCurrent(
+                                    zoomState.offsetX + delta.x,
+                                    zoomState.offsetY + delta.y,
+                                    zoomState.scale
+                                )
+                                if (nx != zoomState.offsetX || ny != zoomState.offsetY) {
+                                    zoomState = zoomState.copy(offsetX = nx, offsetY = ny)
+                                    change.consume()
+                                } else if (!edgeHandoff) {
+                                    // Paged, at the pan edge: consume
+                                    // anyway, so the drag can never
+                                    // reach the pager and turn the
+                                    // page from a pan. Strips keep
+                                    // the old behaviour below: the
+                                    // unconsumed drag scrolls the
+                                    // list from the edge.
                                     change.consume()
                                 }
-                                // Else at the pan edge in this
-                                // direction: not consumed, so the
-                                // list scrolls from here.
+                                // Else (strips) at the pan edge in
+                                // this direction: not consumed, so
+                                // the list scrolls from here.
                             }
-                            // At scale 1: never consume. The list
-                            // scrolls vertically; sideways drags
-                            // do nothing (no horizontal scroll).
+                            // At scale 1: never consume. The pager
+                            // turns / the list scrolls vertically;
+                            // sideways drags do nothing (no
+                            // horizontal scroll).
                         }
                     }
                     // The gesture ended (no pointers pressed).
@@ -374,9 +445,9 @@ fun ZoomablePageContainer(
                     // caller's re-render runs after the gesture,
                     // never during it. A tap has not moved the
                     // scale, so this reports nothing for taps.
-                    if (scale != lastReportedScale) {
-                        lastReportedScale = scale
-                        onScaleChange(scale)
+                    if (zoomState.scale != lastReportedScale) {
+                        lastReportedScale = zoomState.scale
+                        onScaleChange(zoomState.scale)
                     }
                     // A tap is a gesture that never passed slop
                     // and never pinched: it was never consumed
@@ -404,9 +475,9 @@ fun ZoomablePageContainer(
                             // kicks in once, after the zoom.
                             lastTapUpMs = 0L
                             zoomAnimTarget = ZoomAnimTarget(
-                                fromScale = scale,
-                                fromOffset = offset,
-                                toScale = if (scale > 1.05f) 1f else 2f,
+                                fromScale = zoomState.scale,
+                                fromOffset = Offset(zoomState.offsetX, zoomState.offsetY),
+                                toScale = doubleTapTargetScale(zoomState.scale),
                                 tapPos = downPos
                             )
                             // Confirmed double-tap: the viewer

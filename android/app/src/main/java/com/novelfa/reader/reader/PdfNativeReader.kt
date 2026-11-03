@@ -58,9 +58,11 @@ import kotlinx.coroutines.Dispatchers
  *   text. In vertical mode the strip is ComicScreen's: every page
  *   fills the strip width, one below the other, no horizontal
  *   scroll — zoom and pan live on the page itself (pinch, see
- *   ZoomablePageContainer). In paged mode horizontal drag is the
- *   page turn, so zoom there only sharpens the render (the same
- *   trade-off ReadEra documents for its horizontal mode).
+ *   ZoomablePageContainer), one independent zoom per page box.
+ *   In paged mode horizontal drag is the page turn at 1x; while
+ *   a page is zoomed the drag pans that page only and the pager
+ *   is locked, and the zoom resets when the displayed page
+ *   changes.
  * - A page that fails to render fails alone (placeholder + retry),
  *   it never kills the book.
  * - Progress reuses the existing book row: lastChapterIndex

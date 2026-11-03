@@ -820,18 +820,22 @@ internal fun NativeImageBookViewer(
             jumpTo(currentPage)
         }
     }
-    // Global finger zoom (pinch / double-tap), shared by every
-    // page in this book — NOT the sheet zoom steps above, which
-    // are per-book render widths and already apply to all
-    // pages. A pinch or double-tap on one page settles to a
-    // scale, the viewer writes it here, and every Zoomable
-    // page follows it (see ZoomablePageContainer.zoomScale),
-    // so turning the page no longer snaps back to 1x.
-    // Session-only, like ComicScreen's PhotoView zoom: it is
-    // deliberately NOT saved per book — a saved 2x would
-    // reopen every page zoomed, which is not what a reader
-    // expects from a fresh open. Reset per book.
-    var globalZoom by remember(book.id) { mutableFloatStateOf(1f) }
+    // Finger zoom (pinch / double-tap) is per page box, NOT a
+    // viewer-level scale — NOT the sheet zoom steps above,
+    // which are per-book render widths and already apply to
+    // all pages. Each Zoomable page box owns its own
+    // PageZoomState (see ZoomablePageContainer): zooming one
+    // page never moves another, and in the pager the zoom
+    // resets when the displayed page changes. Session-only,
+    // like ComicScreen's PhotoView zoom: it is deliberately
+    // NOT saved per book — a saved 2x would reopen every page
+    // zoomed, which is not what a reader expects from a fresh
+    // open. The viewer only passes identity keys (the book id
+    // as sessionKey, the pager item as slotKey/activeSlotKey)
+    // down to the items; it holds no zoom scale itself. The
+    // old globalZoom state was removed by the 2026-11-03
+    // zoom-engine redesign, which reversed the 32bb0313
+    // shared-scale decision.
 
     // ComicScreen-style chrome. The old bars were always visible
     // and crowded: five text buttons up top, two more below, on a
@@ -1143,8 +1147,10 @@ internal fun NativeImageBookViewer(
                             halfSide = halfSide,
                             onTap = { handlePageTap() },
                             onDoubleTap = { tapSuppress = true },
-                            globalZoom = globalZoom,
-                            onZoomSettled = { globalZoom = it },
+                            sessionKey = book.id,
+                            slotKey = pagerIdx,
+                            activeSlotKey = pagerState.currentPage,
+                            zoomPageId = "pager-$pagerIdx-page-$page-half-$halfSide",
                             bitmapCache = pageBitmapCache
                         )
                     }
@@ -1260,8 +1266,8 @@ internal fun NativeImageBookViewer(
                                 horizontalStrip = true,
                                 onTap = { handlePageTap() },
                                 onDoubleTap = { tapSuppress = true },
-                                globalZoom = globalZoom,
-                                onZoomSettled = { globalZoom = it },
+                                sessionKey = book.id,
+                                zoomPageId = "strip-$page",
                                 bitmapCache = pageBitmapCache
                             )
                         }
@@ -1305,8 +1311,8 @@ internal fun NativeImageBookViewer(
                             manualCropRect = manualCropRects[page],
                             onTap = { handlePageTap() },
                             onDoubleTap = { tapSuppress = true },
-                            globalZoom = globalZoom,
-                            onZoomSettled = { globalZoom = it },
+                            sessionKey = book.id,
+                            zoomPageId = "strip-$page",
                             bitmapCache = pageBitmapCache
                         )
                     }

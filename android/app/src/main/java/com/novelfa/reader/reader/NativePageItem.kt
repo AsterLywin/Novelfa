@@ -658,9 +658,11 @@ internal class NativePageBitmapCache(
  * In vertical mode the strip is ComicScreen's: every page fills
  * the strip width, one below the other, no horizontal scroll —
  * zoom and pan live on the page itself (pinch, see
- * ZoomablePageContainer). In paged mode horizontal drag is the
- * page turn, so the page is fit to the screen width and zoom
- * only sharpens it.
+ * ZoomablePageContainer), one independent zoom per page box.
+ * In paged mode horizontal drag is the page turn at 1x; while
+ * a page is zoomed the drag pans that page only and the pager
+ * is locked, and the zoom resets when the displayed page
+ * changes (see ZoomablePageContainer).
  */
 @Composable
 internal fun NativePageItem(
@@ -718,13 +720,19 @@ internal fun NativePageItem(
     // second tap on its own (see the viewer note).
     onTap: () -> Unit = {},
     onDoubleTap: () -> Unit = {},
-    // Global finger zoom (see the viewer note): the scale
-    // every page in this book currently shows, and the
-    // callback a settled pinch/double-tap on THIS page
-    // reports through, so the viewer can write it back for
-    // all pages. Defaults keep old callers compiling.
-    globalZoom: Float = 1f,
-    onZoomSettled: (Float) -> Unit = {},
+    // Per-page-box finger zoom (see ZoomablePageContainer):
+    // each page box owns its own zoom state — nothing is shared
+    // between pages, and nothing is reported back to the viewer
+    // as a global scale. The viewer passes the identity keys
+    // below: sessionKey drops the state when the reader's
+    // content changes, slotKey/activeSlotKey drive the paged
+    // reset (both null in strips, where no auto-reset applies),
+    // zoomPageId labels the box inside this session. Defaults
+    // keep old callers compiling.
+    sessionKey: Any? = null,
+    slotKey: Int? = null,
+    activeSlotKey: Int? = null,
+    zoomPageId: String = "",
     // The viewer's page-return park (see
     // NativePageBitmapCache). Null = today's behaviour exactly:
     // render on compose, recycle on dispose, no parking.
@@ -783,16 +791,16 @@ internal fun NativePageItem(
     // Threshold-guarded: the container reports only the
     // settled scale (once per gesture), and only a threshold
     // crossing re-renders — so a re-render never runs
-    // mid-pinch and stalls the gesture. Every settled scale
-    // is also reported to the viewer as the new global zoom,
-    // so all pages follow it (see globalZoom above).
+    // mid-pinch and stalls the gesture. The settled scale
+    // stays inside THIS item: there is no global zoom to
+    // report to anymore, so zooming one page never moves
+    // another page's render.
     val onPinchScale: (Float) -> Unit = { s ->
         if (s > 1.75f && renderScale != 2) {
             renderScale = 2
         } else if (s < 1.25f && renderScale != 1) {
             renderScale = 1
         }
-        onZoomSettled(s)
     }
     // Known page ratio (width / height) from the source's
     // bounds-only size — ComicScreen's dimension prefetch:
@@ -1274,12 +1282,12 @@ internal fun NativePageItem(
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
                     },
                     // Animated pages have no bitmap re-render
-                    // to trigger, so the settled scale goes
-                    // straight to the global zoom, not through
-                    // onPinchScale (which would re-run the
-                    // pipeline effect for no bitmap).
-                    zoomScale = globalZoom,
-                    onScaleChange = onZoomSettled,
+                    // to trigger, so the settled scale is
+                    // reported nowhere: the zoom lives and dies
+                    // inside this box (see ZoomablePageContainer).
+                    sessionKey = sessionKey,
+                    zoomPageId = zoomPageId,
+                    onScaleChange = {},
                     onDoubleTap = onDoubleTap,
                     onTap = onTap,
                 ) {
@@ -1386,12 +1394,15 @@ internal fun NativePageItem(
                         // paged page could only zoom through
                         // the sheet stepper in original mode,
                         // and width mode ignored zoom entirely.
-                        // The container's edge handoff IS the
-                        // zoom lock: at 1x a drag is never
-                        // consumed, so the pager turns; while
-                        // zoomed a drag pans, and at the pan
-                        // edge the pager takes over again — the
-                        // page never fights the page turn. The
+                        // The pager lock is the container's
+                        // edgeHandoff = false: at 1x a drag is
+                        // never consumed, so the pager turns;
+                        // while zoomed every drag pans this
+                        // page — even at the pan edge — so the
+                        // pager can never turn from a pan, and
+                        // the zoom resets when the displayed
+                        // page changes (see
+                        // ZoomablePageContainer). The
                         // Column's vertical scroll is the tall
                         // page's own scroll (ComicScreen wraps
                         // an over-tall page in its own vertical
@@ -1440,7 +1451,17 @@ internal fun NativePageItem(
                                         modifier = Modifier
                                             .fillMaxWidth(shrink)
                                             .aspectRatio(ratio),
-                                        zoomScale = globalZoom,
+                                        sessionKey = sessionKey,
+                                        slotKey = slotKey,
+                                        activeSlotKey = activeSlotKey,
+                                        zoomPageId = zoomPageId,
+                                        // Paged: no edge handover —
+                                        // while zoomed every drag
+                                        // pans this page, and the
+                                        // pager never turns from
+                                        // a pan (see
+                                        // ZoomablePageContainer).
+                                        edgeHandoff = false,
                                         onScaleChange = onPinchScale,
                                         onDoubleTap = onDoubleTap,
                                         onTap = onTap,
@@ -1476,7 +1497,12 @@ internal fun NativePageItem(
                     } else {
                         Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
                     },
-                    zoomScale = globalZoom,
+                    sessionKey = sessionKey,
+                    zoomPageId = zoomPageId,
+                    // Strips: the edge handover stays — a drag
+                    // at the pan edge scrolls the list, and no
+                    // auto-reset applies (slot keys are null).
+                    edgeHandoff = true,
                     onScaleChange = onPinchScale,
                     onDoubleTap = onDoubleTap,
                     onTap = onTap,
