@@ -284,4 +284,55 @@ class PageZoomStateTest {
         assertFalse(shouldResetZoom(slotKey = 3, activeSlotKey = null))
         assertFalse(shouldResetZoom(slotKey = null, activeSlotKey = null))
     }
+
+    @Test
+    fun pinchScaleHoldsBelowTheSpanFloor() {
+        // The trembling fix: fingers nearly touching (both
+        // spans under 20px) must not move the scale at all,
+        // however wild the ratio between them is — 8px -> 12px
+        // would otherwise be a 1.5x jump in one frame.
+        assertEquals(2f, pinchScale(2f, 8f, 12f), delta)
+        assertEquals(2f, pinchScale(2f, 12f, 8f), delta)
+        // Either side below the floor holds, even if the
+        // other side is a normal span.
+        assertEquals(2f, pinchScale(2f, 19f, 100f), delta)
+        assertEquals(2f, pinchScale(2f, 100f, 19f), delta)
+        // Degenerate spans hold too, never NaN or infinity.
+        assertEquals(2f, pinchScale(2f, 0f, 100f), delta)
+        assertEquals(2f, pinchScale(2f, 100f, 0f), delta)
+        assertEquals(2f, pinchScale(2f, Float.NaN, 100f), delta)
+    }
+
+    @Test
+    fun pinchScaleAppliesTheRatioAtAndAboveTheFloor() {
+        // At exactly the floor the ratio is already a signal.
+        assertEquals(3f, pinchScale(2f, 20f, 30f), delta)
+        assertEquals(1.5f, pinchScale(2f, 100f, 75f), delta)
+        // Normal pinch spans are untouched by the floor.
+        assertEquals(3f, pinchScale(2f, 100f, 150f), delta)
+        assertEquals(2f, pinchScale(2f, 200f, 200f), delta)
+    }
+
+    @Test
+    fun pinchScaleStaysInsideTheCaps() {
+        assertEquals(4f, pinchScale(3f, 100f, 200f), delta)
+        assertEquals(1f, pinchScale(1.2f, 200f, 100f), delta)
+    }
+
+    @Test
+    fun focalPanWithHeldScaleIsAPurePan() {
+        // The loop's below-floor path: newScale == oldScale, so
+        // the centroid move must pass through unchanged (here
+        // (10, 20) + (5, -3) = (15, 17)) and the image must
+        // keep tracking the fingers instead of freezing.
+        val (x, y) = focalPan(
+            oldScale = 2f, oldOffsetX = 10f, oldOffsetY = 20f,
+            centroidDeltaX = 5f, centroidDeltaY = -3f,
+            newScale = 2f, focalX = 500f, focalY = 500f,
+            centerX = 500f, centerY = 500f,
+            boxWidth = 1000f, boxHeight = 1000f
+        )
+        assertEquals(15f, x, delta)
+        assertEquals(17f, y, delta)
+    }
 }

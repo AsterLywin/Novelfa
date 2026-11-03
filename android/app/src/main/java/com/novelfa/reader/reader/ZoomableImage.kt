@@ -349,8 +349,16 @@ fun ZoomablePageContainer(
                                 prevDistance = distance
                             } else if (prevDistance > 0f && distance > 0f) {
                                 val oldScale = zoomState.scale
+                                // Span-floor guard (see pinchScale):
+                                // near-touching fingers give a noise
+                                // ratio, not a zoom signal — without
+                                // it the scale spikes frame to frame
+                                // while the fingers hover close
+                                // together, which is the trembling
+                                // users see on pinch-in starts and
+                                // pinch-out ends.
                                 val newScale =
-                                    coerceZoomScale(oldScale * (distance / prevDistance))
+                                    pinchScale(oldScale, prevDistance, distance)
                                 val center = Offset(
                                     boxSize.width / 2f,
                                     boxSize.height / 2f

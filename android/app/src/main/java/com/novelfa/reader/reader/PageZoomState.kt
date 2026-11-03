@@ -53,6 +53,36 @@ fun coerceZoomScale(scale: Float): Float =
     if (scale.isFinite()) scale.coerceIn(MIN_PAGE_ZOOM, MAX_PAGE_ZOOM) else MIN_PAGE_ZOOM
 
 /**
+ * Pinch-span noise floor, in pixels: below it the finger
+ * distance carries no usable zoom signal. A pinch is a ratio
+ * (new span / old span), so when the span is a few pixels a
+ * 1-2px touch wobble is a 20-50% scale jump per frame — the
+ * image trembles while the fingers hover nearly touching
+ * (pinch-in starts and pinch-out ends, where the span is
+ * small by nature). At or above the floor the ratio is a real
+ * signal and the scale follows it exactly; below it the scale
+ * is held and the gesture pans only (focalPan with an
+ * unchanged scale is a pure centroid pan), so close-finger
+ * dragging still tracks the fingers. Normal pinches run at
+ * 50-400px spans and never notice the floor.
+ */
+const val MIN_PINCH_SPAN_PX = 20f
+
+/**
+ * One pinch frame's scale: the span ratio, unless either span
+ * is below [MIN_PINCH_SPAN_PX] (or non-positive / non-finite),
+ * in which case the scale is held. The result is always
+ * coerced into [MIN_PAGE_ZOOM, MAX_PAGE_ZOOM].
+ */
+fun pinchScale(oldScale: Float, prevSpan: Float, span: Float): Float {
+    val old = coerceZoomScale(oldScale)
+    if (!prevSpan.isFinite() || !span.isFinite() ||
+        prevSpan < MIN_PINCH_SPAN_PX || span < MIN_PINCH_SPAN_PX
+    ) return old
+    return coerceZoomScale(old * (span / prevSpan))
+}
+
+/**
  * Pan clamp for a box of [boxWidth] x [boxHeight] pixels at [scale].
  * The content is centred, so each direction can move at most half
  * the overflow: (box * scale - box) / 2. At 1x the clamp is zero,
