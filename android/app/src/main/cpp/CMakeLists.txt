@@ -13,10 +13,13 @@
 # 1.4.2 is the latest stable. A newer aom against this libavif
 # is untested and must not be picked up silently.
 #
-# ABIs: Gradle's externalNativeBuild builds this per ABI in
-# defaultConfig.ndk.abiFilters (arm64-v8a + armeabi-v7a). The
-# JNI lib is shared; aom + libavif are static inside it (PIC
-# on, so the static archives link into the .so cleanly).
+# ABIs: arm64-v8a + armeabi-v7a. Gradle does NOT build this
+# file — the app packages prebuilt .so files from
+# src/main/jniLibs/<abi>/, and this file is the manual rebuild
+# recipe (NDK 28.2.13676358, android-29, Release; on the VM
+# with FETCHCONTENT_SOURCE_DIR_* pointing at local copies).
+# The JNI lib is shared; aom + libavif are static inside it
+# (PIC on, so the static archives link into the .so cleanly).
 #
 # If the native lib is missing at runtime (old 32-bit-only
 # device outside the ABI filter, or a build without NDK), the
@@ -45,6 +48,24 @@ set(ENABLE_TESTDATA OFF CACHE BOOL "" FORCE)
 set(ENABLE_TESTS OFF CACHE BOOL "" FORCE)
 set(ENABLE_TOOLS OFF CACHE BOOL "" FORCE)
 set(CONFIG_PIC ON CACHE BOOL "" FORCE)
+# Decoder-only: force aom's encoder OFF. Novelfa only decodes
+# AVIF (the JNI side calls avifDecoder* and nothing else), and
+# libavif's AVIF_CODEC_AOM_ENCODE=OFF does NOT turn aom's
+# encoder off: with AVIF_CODEC_AOM=SYSTEM, libavif never
+# configures aom, so aom builds with its own default
+# CONFIG_AV1_ENCODER=1 and the encoder lands in the static
+# archive. On arm64 the linker happened to drop it, but on
+# armeabi-v7a the rtcd setup references every C fallback, so
+# --gc-sections keeps ~3.5MB of encoder/DSP code that decoding
+# never calls (the 6.6MB vs 2.6MB gap, Nov 2026).
+# aom only honors this from the cmake command line
+# (set_aom_config_var overwrites a plain cache value with its
+# default), so this sets the cache entry with the exact
+# helpstring CMake assigns to command-line -D variables — the
+# only form aom's macro preserves. Verified: with this line,
+# aom_config.h reports CONFIG_AV1_ENCODER 0 and the encoder
+# objects are absent from libaom.a.
+set(CONFIG_AV1_ENCODER 0 CACHE STRING "No help, variable specified on the command line." FORCE)
 FetchContent_MakeAvailable(aom)
 
 # aom's own CMakeLists only exports its include dirs for the
