@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -92,6 +93,29 @@ fun ImportProgressDialog(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
+                    // Mixed-type batches used to show only the name,
+                    // so "book.zip" next to "book.epub" read as the
+                    // same import twice. The format label (from the
+                    // name only — the importer still validates the
+                    // content) names what each file actually is.
+                    val formatRes = when (importFormatOfFileName(fileName)) {
+                        ImportFileFormat.EPUB -> R.string.import_format_epub
+                        ImportFileFormat.PDF -> R.string.import_format_pdf
+                        ImportFileFormat.TXT -> R.string.import_format_txt
+                        ImportFileFormat.MARKDOWN -> R.string.import_format_markdown
+                        ImportFileFormat.WORD -> R.string.import_format_word
+                        ImportFileFormat.CBZ -> R.string.import_format_cbz
+                        ImportFileFormat.ZIP -> R.string.import_format_zip
+                        ImportFileFormat.UNKNOWN -> null
+                    }
+                    if (formatRes != null) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(formatRes),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 if (fileTotal > 1) {
                     Spacer(Modifier.height(4.dp))
@@ -134,4 +158,50 @@ fun ImportProgressDialog(
             }
         }
     }
+}
+
+/**
+ * The ONE duplicate-overwrite confirmation dialog, shared by the
+ * library and the collections screens: the library screen used to
+ * carry its own copy and the collections screen had none at all, so
+ * the same duplicate asked in one tab and silently skipped in the
+ * other. The dialog only asks; each caller runs its own overwrite
+ * flow (the library's snackbar summary, the collections' toast plus
+ * assigning the overwritten books to the target collection).
+ */
+@Composable
+fun DuplicateOverwriteDialog(
+    /** Display names of the skipped duplicates (first 5 shown). */
+    names: List<String>,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.duplicate_file_title)) },
+        text = {
+            Column {
+                Text(stringResource(R.string.duplicate_file_message))
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    names.take(5).joinToString("\n"),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (names.size > 5) {
+                    Text(
+                        "… +${names.size - 5}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text(stringResource(R.string.yes_overwrite)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.no)) }
+        }
+    )
 }

@@ -257,6 +257,15 @@ class LibraryViewModel(
         val duplicateUris: List<Uri> = emptyList(),
         /** Display names of the duplicates (for the confirmation dialog). */
         val duplicateNames: List<String> = emptyList(),
+        /**
+         * Library id of the book each duplicate matches, parallel to
+         * [duplicateUris] (null for a repeat inside the batch, which
+         * matches no pre-existing book). The overwrite path removes
+         * THIS book: matching by name alone would miss a duplicate
+         * that was renamed (same content, new name) and import a
+         * second copy instead of overwriting.
+         */
+        val duplicateBookIds: List<String?> = emptyList(),
         /** Lowercased original file names of the newly added books. */
         val addedNames: List<String> = emptyList(),
         /** Added books whose reading progress was restored from a record. */
@@ -303,6 +312,7 @@ class LibraryViewModel(
         var restored = 0
         val duplicateUris = mutableListOf<Uri>()
         val duplicateNames = mutableListOf<String>()
+        val duplicateBookIds = mutableListOf<String?>()
         val addedNames = mutableListOf<String>()
         val failedDetails = mutableListOf<FailedImport>()
         // Lazily hashed once per URI, only when a candidate exists:
@@ -363,20 +373,24 @@ class LibraryViewModel(
                             // Repeated inside this batch: the first pick already
                             // imported it; the name rule is enough here.
                             duplicates++
-                            duplicateUris.add(uri)
-                            duplicateNames.add(displayName)
+                            // Recorded once per URI: the same URI picked
+                            // twice would otherwise arm the dialog twice
+                            // and overwrite itself twice.
+                            if (uri !in duplicateUris) {
+                                duplicateUris.add(uri)
+                                duplicateNames.add(displayName)
+                                // No pre-existing book: the first pick
+                                // is the match, found by name on overwrite.
+                                duplicateBookIds.add(null)
+                            }
                             skip = true
                         } else {
                             var duplicate: Book? = null
-                            var undecided = false
                             if (key != null && key in known) {
                                 when (isSameContent(uri, knownByName.getValue(key))) {
                                     true -> duplicate = knownByName.getValue(key)
                                     false -> duplicate = null
-                                    null -> {
-                                        duplicate = knownByName.getValue(key)
-                                        undecided = true
-                                    }
+                                    null -> duplicate = knownByName.getValue(key)
                                 }
                             } else {
                                 // No name match: nominate by declared size, then hash.
@@ -398,13 +412,21 @@ class LibraryViewModel(
                             }
                             if (duplicate != null) {
                                 duplicates++
-                                // An undecided (unhashable) name collision keeps the
-                                // old overwrite-confirmation path (uri + name both
-                                // recorded); a proven same-content duplicate is
-                                // skipped silently and needs neither.
-                                if (undecided) {
+                                // EVERY skipped duplicate is recorded for
+                                // the overwrite-confirmation dialog — proven
+                                // same-content matches included. The old code
+                                // recorded only undecided (unhashable)
+                                // collisions, so re-importing a book already
+                                // in the library skipped it silently and the
+                                // dialog's arming condition (duplicates > 0
+                                // AND duplicateUris non-empty) never fired:
+                                // the dialog never appeared.
+                                if (uri !in duplicateUris) {
                                     duplicateUris.add(uri)
-                                    if (displayName != null) duplicateNames.add(displayName)
+                                    duplicateNames.add(
+                                        displayName ?: uri.lastPathSegment ?: uri.toString()
+                                    )
+                                    duplicateBookIds.add(duplicate.id)
                                 }
                                 skip = true
                             }
@@ -468,13 +490,17 @@ class LibraryViewModel(
         }
         return ImportSummary(
             added, duplicates, failed, duplicateUris, duplicateNames,
-            addedNames, restored, failedDetails
+            duplicateBookIds, addedNames, restored, failedDetails
         )
     }
 
     /**
      * Overwrites existing books with the given URIs: removes the old book
-     * (by original file name match) then imports the new file.
+     * then imports the new file. [existingIds] is parallel to [uris]
+     * (see [ImportSummary.duplicateBookIds]): a non-null id removes
+     * THAT book, which is the only correct match for a duplicate found
+     * by content under a new name; a null id falls back to the old
+     * same-name match (in-batch repeats and undecided collisions).
      * Deliberately SEQUENTIAL, unlike importMultiple's step-4
      * parallelism: remove-then-import for the same name from two
      * coroutines would race (both remove, both import, or one
@@ -482,6 +508,7 @@ class LibraryViewModel(
      */
     suspend fun overwriteDuplicates(
         uris: List<Uri>,
+        existingIds: List<String?> = emptyList(),
         passwordProvider: PdfPasswordProvider? = null,
         onStage: ((String?) -> Unit)? = null,
         onFile: ((Int, String?) -> Unit)? = null
@@ -490,24 +517,30 @@ class LibraryViewModel(
         var added = 0
         var failed = 0
         var restored = 0
+        val addedNames = mutableListOf<String>()
         val failedDetails = mutableListOf<FailedImport>()
         for ((index, uri) in uris.withIndex()) {
             val displayName = imp.displayNameOf(uri)
             onFile?.invoke(index + 1, displayName)
             val key = displayName?.lowercase()
             try {
-                // Remove the existing book with the same file name.
-                if (key != null) {
-                    val existing = repo.books().first()
+                // Remove the matched book: by id when the duplicate
+                // screen identified one, else by same file name.
+                val existingId = existingIds.getOrNull(index)
+                val existing = if (existingId != null) {
+                    repo.books().first().firstOrNull { it.id == existingId }
+                } else if (key != null) {
+                    repo.books().first()
                         .firstOrNull { it.originalFileName?.lowercase() == key }
-                    if (existing != null) {
-                        removeBook(existing)
-                    }
+                } else null
+                if (existing != null) {
+                    removeBook(existing)
                 }
                 val newId = imp.importBook(
                     uri, passwordProvider = passwordProvider, onStage = onStage
                 )
                 added++
+                if (key != null) addedNames.add(key)
                 if (imp.applyReadingRecord(newId)) restored++
             } catch (e: CancellationException) {
                 throw e
@@ -521,7 +554,8 @@ class LibraryViewModel(
             }
         }
         return ImportSummary(
-            added, 0, failed, progressRestored = restored, failedDetails = failedDetails
+            added, 0, failed, progressRestored = restored,
+            failedDetails = failedDetails, addedNames = addedNames
         )
     }
 

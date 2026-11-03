@@ -311,6 +311,9 @@ fun LibraryScreen(
     var importFileIndex by remember { mutableStateOf(0) }
     var importFileTotal by remember { mutableStateOf(1) }
     var pendingDuplicateNames by remember { mutableStateOf<List<String>>(emptyList()) }
+    // Library id of the book each pending duplicate matches, parallel
+    // to pendingDuplicates (see ImportSummary.duplicateBookIds).
+    var pendingDuplicateBookIds by remember { mutableStateOf<List<String?>>(emptyList()) }
     // Encrypted-PDF password prompt (also covers the ACTION_VIEW path,
     // which funnels through importUris below).
     val pdfPasswordPrompt = rememberPdfPasswordPrompt()
@@ -357,6 +360,7 @@ fun LibraryScreen(
             if (summary.duplicates > 0 && summary.duplicateUris.isNotEmpty()) {
                 pendingDuplicates = summary.duplicateUris
                 pendingDuplicateNames = summary.duplicateNames
+                pendingDuplicateBookIds = summary.duplicateBookIds
                 // Still show the summary for added/failed
                 val parts = mutableListOf<String>()
                 if (summary.added > 0) parts.add(addedFmt.format(summary.added))
@@ -386,7 +390,7 @@ fun LibraryScreen(
             // the app: show a generic message with the diagnostic detail.
             val detail = (e.javaClass.simpleName ?: "no-cause") + ": " + (e.message ?: "")
             snackbarMessage =
-                context.getString(R.string.import_error_not_valid_epub) + "\n" + detail
+                context.getString(R.string.import_error_generic) + "\n" + detail
         } finally {
             importJob = null
             importStage = null
@@ -1381,94 +1385,72 @@ fun LibraryScreen(
         )
     }
 
-    // Duplicate import: the overwrite confirmation that importUris() arms.
-    // (This render was missing, so no dialog ever appeared.)
+    // Duplicate import: the overwrite confirmation that importUris() arms
+    // (shared dialog — the collections screen uses the same one).
     if (pendingDuplicates.isNotEmpty()) {
-        AlertDialog(
-            onDismissRequest = {
+        DuplicateOverwriteDialog(
+            names = pendingDuplicateNames,
+            onDismiss = {
                 pendingDuplicates = emptyList()
                 pendingDuplicateNames = emptyList()
+                pendingDuplicateBookIds = emptyList()
             },
-            title = { Text(stringResource(R.string.duplicate_file_title)) },
-            text = {
-                Column {
-                    Text(stringResource(R.string.duplicate_file_message))
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        pendingDuplicateNames.take(5).joinToString("\n"),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (pendingDuplicateNames.size > 5) {
-                        Text(
-                            "… +${pendingDuplicateNames.size - 5}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+            onConfirm = {
+                val uris = pendingDuplicates
+                val existingIds = pendingDuplicateBookIds
+                pendingDuplicates = emptyList()
+                pendingDuplicateNames = emptyList()
+                pendingDuplicateBookIds = emptyList()
+                // Overwrites run through the same shared dialog
+                // as a fresh import (this path used to run with
+                // no progress UI and no Cancel at all), and its
+                // summary is shown after the dialog closes, for
+                // the same snackbar-delay reason as importUris.
+                scope.launch {
+                    isImporting = true
+                    importStage = null
+                    importFileName = null
+                    importFileIndex = 0
+                    importFileTotal = uris.size
+                    importJob = currentCoroutineContext()[Job]
+                    var message: String? = null
+                    try {
+                        val summary = viewModel.overwriteDuplicates(
+                            uris,
+                            existingIds = existingIds,
+                            passwordProvider = pdfPasswordPrompt.provider,
+                            onStage = { importStage = it },
+                            onFile = { index, name ->
+                                importFileIndex = index
+                                importFileName = name
+                            }
                         )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val uris = pendingDuplicates
-                    pendingDuplicates = emptyList()
-                    pendingDuplicateNames = emptyList()
-                    // Overwrites run through the same shared dialog
-                    // as a fresh import (this path used to run with
-                    // no progress UI and no Cancel at all), and its
-                    // summary is shown after the dialog closes, for
-                    // the same snackbar-delay reason as importUris.
-                    scope.launch {
-                        isImporting = true
+                        val parts = mutableListOf<String>()
+                        if (summary.added > 0) parts.add(addedFmt.format(summary.added))
+                        if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
+                        if (summary.failed > 0) {
+                            val base = failedFmt.format(summary.failed)
+                            val sep2 = if (isEnglishUi) ", " else "، "
+                            val shown = summary.failedDetails.take(3)
+                                .joinToString(sep2) { "${it.name}: ${it.reason}" }
+                            parts.add(if (summary.failedDetails.isEmpty()) base else "$base ($shown)")
+                        }
+                        if (parts.isNotEmpty()) {
+                            message = parts.joinToString(if (isEnglishUi) ", " else "، ")
+                        }
+                    } catch (e: CancellationException) {
+                        // Cancelled overwrite: no message, no book.
+                        throw e
+                    } finally {
+                        importJob = null
                         importStage = null
                         importFileName = null
                         importFileIndex = 0
-                        importFileTotal = uris.size
-                        importJob = currentCoroutineContext()[Job]
-                        var message: String? = null
-                        try {
-                            val summary = viewModel.overwriteDuplicates(
-                                uris,
-                                passwordProvider = pdfPasswordPrompt.provider,
-                                onStage = { importStage = it },
-                                onFile = { index, name ->
-                                    importFileIndex = index
-                                    importFileName = name
-                                }
-                            )
-                            val parts = mutableListOf<String>()
-                            if (summary.added > 0) parts.add(addedFmt.format(summary.added))
-                            if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
-                            if (summary.failed > 0) {
-                                val base = failedFmt.format(summary.failed)
-                                val sep2 = if (isEnglishUi) ", " else "، "
-                                val shown = summary.failedDetails.take(3)
-                                    .joinToString(sep2) { "${it.name}: ${it.reason}" }
-                                parts.add(if (summary.failedDetails.isEmpty()) base else "$base ($shown)")
-                            }
-                            if (parts.isNotEmpty()) {
-                                message = parts.joinToString(if (isEnglishUi) ", " else "، ")
-                            }
-                        } catch (e: CancellationException) {
-                            // Cancelled overwrite: no message, no book.
-                            throw e
-                        } finally {
-                            importJob = null
-                            importStage = null
-                            importFileName = null
-                            importFileIndex = 0
-                            isImporting = false
-                            pdfPasswordPrompt.dismissPending()
-                        }
-                        message?.let { snackbar.showSnackbar(it) }
+                        isImporting = false
+                        pdfPasswordPrompt.dismissPending()
                     }
-                }) { Text(stringResource(R.string.yes_overwrite)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    pendingDuplicates = emptyList()
-                    pendingDuplicateNames = emptyList()
-                }) { Text(stringResource(R.string.no)) }
+                    message?.let { snackbar.showSnackbar(it) }
+                }
             }
         )
     }

@@ -44,14 +44,17 @@ import com.novelfa.reader.theme.AppIcon
 import com.novelfa.reader.theme.AppIconKind
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.net.Uri
 import android.widget.Toast
 import com.novelfa.reader.R
+import com.novelfa.reader.data.ImportException
 import com.novelfa.reader.data.SUPPORTED_BOOK_MIME_TYPES
 import com.novelfa.reader.domain.Book
 import com.novelfa.reader.settings.CollectionException
 import com.novelfa.reader.domain.isCompleted
 import com.novelfa.reader.domain.isInProgress
 import com.novelfa.reader.domain.progressPercent
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -103,6 +106,15 @@ fun CollectionsScreen(
     var importFileName by remember { mutableStateOf<String?>(null) }
     var importFileIndex by remember { mutableStateOf(0) }
     var importFileTotal by remember { mutableStateOf(1) }
+    // Duplicate-overwrite confirmation (shared dialog with the library
+    // screen): this screen used to toast "N duplicates skipped" and
+    // never ask, so a duplicate picked here could never be overwritten.
+    var pendingDuplicates by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var pendingDuplicateNames by remember { mutableStateOf<List<String>>(emptyList()) }
+    var pendingDuplicateBookIds by remember { mutableStateOf<List<String?>>(emptyList()) }
+    // Collection the pending duplicates were picked for: the overwrite
+    // must land them in the same collection.
+    var pendingDuplicateTarget by remember { mutableStateOf<String?>(null) }
     val pdfPasswordPrompt = rememberPdfPasswordPrompt()
     val importPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -118,42 +130,74 @@ fun CollectionsScreen(
             scope.launch {
                 importJob = currentCoroutineContext()[kotlinx.coroutines.Job]
                 try {
-                val summary = viewModel.importMultiple(
-                    uris,
-                    passwordProvider = pdfPasswordPrompt.provider,
-                    onStage = { importStage = it },
-                    onFile = { index, name ->
-                        importFileIndex = index
-                        importFileName = name
+                    val summary = viewModel.importMultiple(
+                        uris,
+                        passwordProvider = pdfPasswordPrompt.provider,
+                        onStage = { importStage = it },
+                        onFile = { index, name ->
+                            importFileIndex = index
+                            importFileName = name
+                        }
+                    )
+                    if (summary.addedNames.isNotEmpty()) {
+                        val all = viewModel.books.first()
+                        for (key in summary.addedNames) {
+                            all.firstOrNull { it.originalFileName?.lowercase() == key }
+                                ?.let { viewModel.setCollection(it, target) }
+                        }
                     }
-                )
-                if (summary.addedNames.isNotEmpty()) {
-                    val all = viewModel.books.first()
-                    for (key in summary.addedNames) {
-                        all.firstOrNull { it.originalFileName?.lowercase() == key }
-                            ?.let { viewModel.setCollection(it, target) }
+                    // Duplicates ask first (shared dialog below) instead
+                    // of silently skipping: the toast then covers only
+                    // the added/restored/failed part, like the library tab.
+                    val showDuplicateDialog =
+                        summary.duplicates > 0 && summary.duplicateUris.isNotEmpty()
+                    if (showDuplicateDialog) {
+                        pendingDuplicates = summary.duplicateUris
+                        pendingDuplicateNames = summary.duplicateNames
+                        pendingDuplicateBookIds = summary.duplicateBookIds
+                        pendingDuplicateTarget = target
                     }
-                }
-                val parts = mutableListOf<String>()
-                if (summary.added > 0) parts.add(addedFmt.format(summary.added))
-                if (summary.duplicates > 0) parts.add(dupFmt.format(summary.duplicates))
-                if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
-                if (summary.failed > 0) {
-                    val base = failedFmt.format(summary.failed)
-                    val sepC = if (java.util.Locale.getDefault().language.startsWith("en")) ", " else "، "
-                    val shown = summary.failedDetails.take(3)
-                        .joinToString(sepC) { "${it.name}: ${it.reason}" }
-                    parts.add(if (summary.failedDetails.isEmpty()) base else "$base ($shown)")
-                }
-                if (parts.isNotEmpty()) {
+                    val parts = mutableListOf<String>()
+                    if (summary.added > 0) parts.add(addedFmt.format(summary.added))
+                    if (summary.duplicates > 0 && !showDuplicateDialog) {
+                        parts.add(dupFmt.format(summary.duplicates))
+                    }
+                    if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
+                    if (summary.failed > 0) {
+                        val base = failedFmt.format(summary.failed)
+                        val sepC = if (java.util.Locale.getDefault().language.startsWith("en")) ", " else "، "
+                        val shown = summary.failedDetails.take(3)
+                            .joinToString(sepC) { "${it.name}: ${it.reason}" }
+                        parts.add(if (summary.failedDetails.isEmpty()) base else "$base ($shown)")
+                    }
+                    if (parts.isNotEmpty()) {
+                        Toast.makeText(
+                            context,
+                            parts.joinToString(
+                                if (java.util.Locale.getDefault().language.startsWith("en")) ", " else "، "
+                            ),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ImportException) {
+                    // Single-file imports rethrow: without this catch
+                    // the failure escaped the launch and crashed the
+                    // app (the library tab already caught it).
+                    val cause = e.cause
+                    val detail = (cause?.javaClass?.simpleName ?: "no-cause") +
+                        ": " + (cause?.message ?: e.message)
+                    Toast.makeText(
+                        context, e.messageFa + "\n" + detail, Toast.LENGTH_LONG
+                    ).show()
+                } catch (e: Exception) {
+                    val detail = (e.javaClass.simpleName ?: "no-cause") + ": " + (e.message ?: "")
                     Toast.makeText(
                         context,
-                        parts.joinToString(
-                            if (java.util.Locale.getDefault().language.startsWith("en")) ", " else "، "
-                        ),
+                        context.getString(R.string.import_error_generic) + "\n" + detail,
                         Toast.LENGTH_LONG
                     ).show()
-                }
                 } finally {
                     importJob = null
                     importStage = null
@@ -177,6 +221,85 @@ fun CollectionsScreen(
     }
 
     PdfPasswordDialog(pdfPasswordPrompt)
+
+    // Duplicate import: the overwrite confirmation (shared dialog with
+    // the library screen). Overwritten books join the same collection
+    // the duplicates were picked for, like a fresh import would.
+    if (pendingDuplicates.isNotEmpty()) {
+        DuplicateOverwriteDialog(
+            names = pendingDuplicateNames,
+            onDismiss = {
+                pendingDuplicates = emptyList()
+                pendingDuplicateNames = emptyList()
+                pendingDuplicateBookIds = emptyList()
+                pendingDuplicateTarget = null
+            },
+            onConfirm = {
+                val uris = pendingDuplicates
+                val existingIds = pendingDuplicateBookIds
+                val target = pendingDuplicateTarget
+                pendingDuplicates = emptyList()
+                pendingDuplicateNames = emptyList()
+                pendingDuplicateBookIds = emptyList()
+                pendingDuplicateTarget = null
+                scope.launch {
+                    isImporting = true
+                    importStage = null
+                    importFileName = null
+                    importFileIndex = 0
+                    importFileTotal = uris.size
+                    importJob = currentCoroutineContext()[kotlinx.coroutines.Job]
+                    try {
+                        val summary = viewModel.overwriteDuplicates(
+                            uris,
+                            existingIds = existingIds,
+                            passwordProvider = pdfPasswordPrompt.provider,
+                            onStage = { importStage = it },
+                            onFile = { index, name ->
+                                importFileIndex = index
+                                importFileName = name
+                            }
+                        )
+                        if (target != null && summary.addedNames.isNotEmpty()) {
+                            val all = viewModel.books.first()
+                            for (key in summary.addedNames) {
+                                all.firstOrNull { it.originalFileName?.lowercase() == key }
+                                    ?.let { viewModel.setCollection(it, target) }
+                            }
+                        }
+                        val parts = mutableListOf<String>()
+                        if (summary.added > 0) parts.add(addedFmt.format(summary.added))
+                        if (summary.progressRestored > 0) parts.add(restoredFmt.format(summary.progressRestored))
+                        if (summary.failed > 0) {
+                            val base = failedFmt.format(summary.failed)
+                            val sepC = if (java.util.Locale.getDefault().language.startsWith("en")) ", " else "، "
+                            val shown = summary.failedDetails.take(3)
+                                .joinToString(sepC) { "${it.name}: ${it.reason}" }
+                            parts.add(if (summary.failedDetails.isEmpty()) base else "$base ($shown)")
+                        }
+                        if (parts.isNotEmpty()) {
+                            Toast.makeText(
+                                context,
+                                parts.joinToString(
+                                    if (java.util.Locale.getDefault().language.startsWith("en")) ", " else "، "
+                                ),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } finally {
+                        importJob = null
+                        importStage = null
+                        importFileName = null
+                        importFileIndex = 0
+                        isImporting = false
+                        pdfPasswordPrompt.dismissPending()
+                    }
+                }
+            }
+        )
+    }
 
     // Top safe area: the header must not collide with the status bar.
     Column(modifier = Modifier.statusBarsPadding()) {
