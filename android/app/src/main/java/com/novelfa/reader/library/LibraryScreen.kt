@@ -594,9 +594,15 @@ fun LibraryScreen(
                         // undecodable file then showed a blank circle.
                         val resolver = context.contentResolver
                         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                        resolver.openInputStream(uri)?.use {
-                            BitmapFactory.decodeStream(it, null, bounds)
-                        } ?: throw IOException("cannot open image")
+                        // NOTE: decodeStream returns null in bounds-only
+                        // mode, so its result must NOT feed a ?: — the
+                        // old code threw "cannot open image" on every
+                        // pick, valid image or not. Only a null stream
+                        // throws here; an undecodable file is caught by
+                        // the bounds check below.
+                        val boundsStream = resolver.openInputStream(uri)
+                            ?: throw IOException("cannot open image")
+                        boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
                         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
                             throw IOException("not an image")
                         }
