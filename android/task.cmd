@@ -57,7 +57,7 @@ echo.
 echo %C_CYAN% Novelfa Android - choose a build variant%C_RESET%
 echo.
 echo    [1] Debug    fast build, debug-signed  -^> app-debug.apk
-echo    [2] Release  R8/minified final build  -^> app-release-unsigned.apk + app-release.aab
+echo    [2] Release  R8/minified final build  -^> app-release.apk + app-release.aab
 echo    [3] Both
 echo.
 choice /C 123 /N /M "  Select 1, 2 or 3: "
@@ -86,7 +86,14 @@ echo %C_CYAN%=== :app:assembleRelease ===%C_RESET%
 call "%SCRIPT_DIR%gradlew.bat" :app:assembleRelease --console=plain
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :fail
-call :verify "app\build\outputs\apk\release\app-release-unsigned.apk" "release APK"
+rem Signed when a keystore is configured (app-release.apk),
+rem unsigned otherwise (app-release-unsigned.apk): accept either,
+rem or a signed build would falsely report FAILED.
+if exist "app\build\outputs\apk\release\app-release.apk" (
+    call :verify "app\build\outputs\apk\release\app-release.apk" "release APK"
+) else (
+    call :verify "app\build\outputs\apk\release\app-release-unsigned.apk" "release APK"
+)
 if errorlevel 1 goto :fail
 echo.
 echo %C_CYAN%=== :app:bundleRelease ===%C_RESET%
@@ -156,6 +163,9 @@ echo %C_CYAN%Outputs:%C_RESET%
 if exist "app\build\outputs\apk\debug\app-debug.apk" (
     for %%F in ("app\build\outputs\apk\debug\app-debug.apk") do echo   debug    %%~nxF  %%~zF bytes
 )
+if exist "app\build\outputs\apk\release\app-release.apk" (
+    for %%F in ("app\build\outputs\apk\release\app-release.apk") do echo   release  %%~nxF  %%~zF bytes
+)
 if exist "app\build\outputs\apk\release\app-release-unsigned.apk" (
     for %%F in ("app\build\outputs\apk\release\app-release-unsigned.apk") do echo   release  %%~nxF  %%~zF bytes
 )
@@ -163,7 +173,7 @@ if exist "app\build\outputs\bundle\release\app-release.aab" (
     for %%F in ("app\build\outputs\bundle\release\app-release.aab") do echo   bundle   %%~nxF  %%~zF bytes
 )
 echo.
-echo %C_YELLOW%NOTE:%C_RESET% release artifacts are UNSIGNED unless a keystore is configured
+echo %C_YELLOW%NOTE:%C_RESET% release APK is signed when a keystore is configured, unsigned otherwise
 echo       (see docs/PLAY-RELEASE.md). Never upload an unsigned APK to Play.
 goto :eof
 
