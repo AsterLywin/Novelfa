@@ -119,7 +119,7 @@
     <string name="about_body">کتاب‌خوان فارسی، کاملاً آفلاین و بدون هیچ دسترسی. هیچ داده‌ای جمع یا ارسال نمی‌شود.</string>
     <string name="app_version">نسخه %1$s</string>
     <string name="empty_library">اینجا هنوز کتابی نیست</string>
-    <string name="empty_library_hint">دکمه + رو بزن و یه EPUB اضافه کن</string>
+    <string name="empty_library_hint">دکمه + رو بزن و یه کتاب اضافه کن</string>
     <string name="empty_tab_reading">هنوز کتابی رو شروع نکردی</string>
     <string name="empty_tab_completed">هنوز هیچ کتابی رو تموم نکردی</string>
     <string name="empty_tab_recent">به‌تازگی کتابی باز نکردی</string>
@@ -186,7 +186,7 @@
     <string name="delete">حذف</string>
     <string name="start_over_button">از اول</string>
     <string name="reset_progress_message">پیشرفت صفر میشه و از بخش ۱ شروع می‌کنی.</string>
-    <string name="remove_book_confirm_message">\u00ab%1$s\u00bb از کتابخانه حذف بشه؟\nفایل EPUB و جلد هم پاک می‌شن.</string>
+    <string name="remove_book_confirm_message">\u00ab%1$s\u00bb از کتابخانه حذف بشه؟\nفایل کتاب و جلد هم پاک می‌شن.</string>
     <string name="collection_name_blank">اسم مجموعه نمی‌تونه خالی باشه.</string>
     <string name="collection_name_too_long">اسم مجموعه حداکثر ۶۰ کاراکتره.</string>
     <string name="font_size">اندازه‌ی فونت</string>
@@ -276,9 +276,9 @@
     <string name="guide_prev">قبلی</string>
     <string name="guide_start">شروع</string>
     <string name="guide_welcome_title">به ناولفا خوش آمدی</string>
-    <string name="guide_welcome_body">کتاب‌خوان EPUB فارسی؛ کتاب‌هایت، پیشرفتت و تم‌های شخصیتت همه اینجاست.</string>
+    <string name="guide_welcome_body">کتاب‌خوان فارسی؛ کتاب‌هایت، پیشرفتت و تم‌های شخصیتت همه اینجاست.</string>
     <string name="guide_add_title">کتاب اضافه کن</string>
-    <string name="guide_add_body">دکمه‌ی + را بزن و یک فایل EPUB انتخاب کن تا به کتابخانه‌ات اضافه شود.</string>
+    <string name="guide_add_body">دکمه‌ی + را بزن و یک فایل کتاب انتخاب کن تا به کتابخانه‌ات اضافه شود.</string>
     <string name="guide_modes_title">دو حالت مطالعه</string>
     <string name="guide_modes_body">حالت عمودی پیوسته برای اسکرول، یا حالت افقی صفحه‌ای: در حالت افقی با کشیدن صفحه یا ضربه به کناره‌های آن ورق بزن.</string>
     <string name="guide_ranks_title">بخوان و رنک بگیر</string>

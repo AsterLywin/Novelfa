@@ -119,7 +119,7 @@
     <string name="about_body">Persian reader, fully offline with zero permissions. No data is collected or sent.</string>
     <string name="app_version">Version %1$s</string>
     <string name="empty_library">No books here yet</string>
-    <string name="empty_library_hint">Tap + to add an EPUB</string>
+    <string name="empty_library_hint">Tap + to add a book</string>
     <string name="empty_tab_reading">You haven\'t started any book yet</string>
     <string name="empty_tab_completed">You haven\'t finished any book yet</string>
     <string name="empty_tab_recent">No recently opened books</string>
@@ -186,7 +186,7 @@
     <string name="delete">Delete</string>
     <string name="start_over_button">Start over</string>
     <string name="reset_progress_message">Progress will reset to zero and you\'ll start from chapter 1.</string>
-    <string name="remove_book_confirm_message">\u00ab%1$s\u00bb will be removed from the library?\nThe EPUB file and cover will be deleted too.</string>
+    <string name="remove_book_confirm_message">\u00ab%1$s\u00bb will be removed from the library?\nThe book file and cover will be deleted too.</string>
     <string name="collection_name_blank">Collection name can\'t be empty.</string>
     <string name="collection_name_too_long">Collection name is at most 60 characters.</string>
     <string name="font_size">Font size</string>
@@ -276,9 +276,9 @@
     <string name="guide_prev">Previous</string>
     <string name="guide_start">Get started</string>
     <string name="guide_welcome_title">Welcome to Novelfa</string>
-    <string name="guide_welcome_body">A Persian EPUB reader: your books, your progress, and your character themes, all here.</string>
+    <string name="guide_welcome_body">A Persian book reader: your books, your progress, and your character themes, all here.</string>
     <string name="guide_add_title">Add a book</string>
-    <string name="guide_add_body">Tap + and pick an EPUB file to add it to your library.</string>
+    <string name="guide_add_body">Tap + and pick a book file to add it to your library.</string>
     <string name="guide_modes_title">Two reading modes</string>
     <string name="guide_modes_body">Continuous vertical scrolling, or paged horizontal: swipe, or tap the page edges, to turn pages.</string>
     <string name="guide_ranks_title">Read and rank up</string>
