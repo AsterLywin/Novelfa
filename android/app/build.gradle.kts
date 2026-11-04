@@ -26,7 +26,10 @@ android {
     // (filtered by the ndk abiFilters in defaultConfig). The C
     // sources in src/main/cpp are the source of truth; a rebuild
     // on a machine with NDK 28.2.13676358 replaces the .so files.
-    defaultConfig { applicationId = "com.novelfa.reader"; minSdk = 29; targetSdk = 35; versionCode = 2; versionName = "1.0.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"; ndk { abiFilters += "arm64-v8a"; abiFilters += "armeabi-v7a" } }
+    // Size (2026-11-04): keep only the app's UI locales — library
+    // resources for every other locale are dropped from the APK.
+    // The unqualified values/ defaults are always kept.
+    defaultConfig { applicationId = "com.novelfa.reader"; minSdk = 29; targetSdk = 35; versionCode = 2; versionName = "1.0.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"; resourceConfigurations += "en"; resourceConfigurations += "fa"; ndk { abiFilters += "arm64-v8a"; abiFilters += "armeabi-v7a" } }
     if (releaseKeystorePath != null) {
         signingConfigs {
             create("release") {
@@ -37,7 +40,11 @@ android {
             }
         }
     }
-    buildTypes { release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"); if (releaseKeystorePath != null) { signingConfig = signingConfigs.getByName("release") } } }
+    // Size (2026-11-04): shrinkResources needs minify (on above) and
+    // drops unused library resources from the release APK. Safe here:
+    // no getIdentifier/dynamic resource lookup exists in the app, so
+    // every kept resource is referenced statically from code or XML.
+    buildTypes { release { isMinifyEnabled = true; isShrinkResources = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"); if (releaseKeystorePath != null) { signingConfig = signingConfigs.getByName("release") } } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
