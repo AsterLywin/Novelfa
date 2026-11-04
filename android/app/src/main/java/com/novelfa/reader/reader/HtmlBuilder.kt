@@ -124,7 +124,7 @@ object HtmlBuilder {
         }
         sb.append("<script>window.__rdrGen=").append(docGen).append(";</script>")
         sb.append("<script>(function(){")
-        sb.append("var lt=-1,lh=-1,lc=-1,lr=-1,lci=-1;")
+        sb.append("var lt=-1,lh=-1,lc=-1,lr=-1,lci=-1,lpt=0,lfr=-1;")
         sb.append("function r(){try{var d=document.documentElement,b=document.body;")
         sb.append("var t=Math.round(Math.max(d.scrollTop||0,b.scrollTop||0)),")
         sb.append("h=Math.max(d.scrollHeight||0,b.scrollHeight||0),")
@@ -133,13 +133,23 @@ object HtmlBuilder {
         // viewport top is the chapter being READ. Reported on change via
         // Android.onChapter — appends/prepends stitch the continuous
         // window around the reading position and must not move it.
-        sb.append("var ci=-1;try{var chs=d.querySelectorAll('.rdr-chap');")
+        sb.append("var ci=-1,co=0,chh=1;try{var chs=d.querySelectorAll('.rdr-chap');")
         sb.append("for(var k=0;k<chs.length;k++){var o=chs[k].offsetTop,hh=chs[k].offsetHeight;")
-        sb.append("if(t>=o&&t<o+hh){ci=parseInt(chs[k].getAttribute('data-idx'),10);break;}}")
+        sb.append("if(t>=o&&t<o+hh){ci=parseInt(chs[k].getAttribute('data-idx'),10);co=o;chh=hh;break;}}")
         sb.append("if(ci<0&&chs.length){var fq=chs[0],lq=chs[chs.length-1];")
-        sb.append("if(t<(fq.offsetTop||0))ci=parseInt(fq.getAttribute('data-idx'),10);")
-        sb.append("else if(t>=(lq.offsetTop||0))ci=parseInt(lq.getAttribute('data-idx'),10);}}catch(x){}")
+        sb.append("if(t<(fq.offsetTop||0)){ci=parseInt(fq.getAttribute('data-idx'),10);co=fq.offsetTop;chh=fq.offsetHeight;}")
+        sb.append("else if(t>=(lq.offsetTop||0)){ci=parseInt(lq.getAttribute('data-idx'),10);co=lq.offsetTop;chh=lq.offsetHeight;}}catch(x){}")
         sb.append("if(ci!=lci){lci=ci;if(ci>=0){try{Android.onChapter(ci,window.__rdrGen);}catch(x){}}}")
+        // In-section position: the fraction of the top chapter's height
+        // above the viewport top (see SectionPosition.kt). Reported
+        // when it moves by 1% of the chapter or 1000ms pass, so the
+        // Kotlin side can persist it without a bridge call per frame.
+        // It fires before onScroll below, so a height change and its
+        // new fraction arrive in the same order on the Kotlin side.
+        sb.append("if(ci>=0){var fr=chh>0?Math.min(0.999,Math.max(0,(t-co)/chh)):0;")
+        sb.append("var now=Date.now();")
+        sb.append("if(Math.abs(fr-lfr)>=0.01||now-lpt>1000){lpt=now;lfr=fr;")
+        sb.append("try{Android.onSectionPos(ci,fr,window.__rdrGen);}catch(x){}}}")
         sb.append("if(t!=lt||h!=lh||c!=lc){lt=t;lh=h;lc=c;")
         sb.append("try{Android.onScroll(t,h,c,window.__rdrGen);}catch(x){}}")
         sb.append("else if(h>c){lr=t/(h-c);}}catch(x){}}")
@@ -273,6 +283,23 @@ object HtmlBuilder {
         "(function(){try{var id=" + jsStringLiteral(frag) + ";" +
             "var el=document.getElementById(id)||document.querySelector('a[name=\"'+id+'\"]');" +
             "if(el){el.scrollIntoView();return 'ok';}return 'miss';}catch(e){return 'err';}})();"
+
+    /**
+     * Vertical mode: scroll to a fraction inside a chapter — the
+     * in-section restore. Finds .rdr-chap[data-idx] and sets scrollTop
+     * to its top + fraction * height, then returns that scrollTop as
+     * a number so the caller can track it ('miss'/'err' otherwise).
+     * The fraction comes from [SectionPosition] via the scroll
+     * reporter; it survives font/spacing reflows, unlike a pixel
+     * offset (see SectionPosition.kt).
+     */
+    fun sectionRestoreJs(chapterIdx: Int, fraction: Float): String {
+        val frac = "%.4f".format(Locale.US, fraction.coerceIn(0f, 0.999f))
+        return "(function(){try{var el=document.querySelector('.rdr-chap[data-idx=\"$chapterIdx\"]');" +
+            "if(!el)return 'miss';var y=el.offsetTop+el.offsetHeight*$frac;" +
+            "document.documentElement.scrollTop=y;document.body.scrollTop=y;return ''+Math.round(y);}" +
+            "catch(e){return 'err';}})();"
+    }
 
     /** Ask the pager (if present) to rebuild after a live style swap. */
     private const val REPAGINATE_JS =

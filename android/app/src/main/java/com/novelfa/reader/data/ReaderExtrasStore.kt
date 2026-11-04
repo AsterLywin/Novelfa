@@ -7,6 +7,9 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.novelfa.reader.reader.SectionPosition
+import com.novelfa.reader.reader.parseSectionPosition
+import com.novelfa.reader.reader.serializeSectionPosition
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -200,6 +203,36 @@ class ReaderExtrasStore(private val context: Context) {
     suspend fun setScrollOffset(bookId: String, offsetPx: Int) {
         context.readerExtrasDataStore.edit { prefs ->
             prefs[scrollOffsetKey(bookId)] = offsetPx.coerceAtLeast(0)
+        }
+    }
+
+    /**
+     * Exact in-section position for vertical (continuous) EPUB mode
+     * (see SectionPosition.kt): "chapter|fraction". Unlike the pixel
+     * off_ key above (native strip viewer only), a fraction survives
+     * font/spacing reflows, so it is the vertical reader's restore
+     * source of truth. Paged mode never writes it (its paged anchor
+     * owns position there). Cleared by [clearBook]'s suffix sweep
+     * like every other per-book key.
+     */
+    private fun sectionPositionKey(bookId: String) = stringPreferencesKey("sec_$bookId")
+
+    fun sectionPosition(bookId: String): Flow<SectionPosition?> =
+        context.readerExtrasDataStore.data.map {
+            parseSectionPosition(it[sectionPositionKey(bookId)])
+        }
+
+    suspend fun setSectionPosition(bookId: String, chapter: Int, fraction: Float) {
+        val pos = runCatching { SectionPosition(chapter, fraction) }.getOrNull() ?: return
+        context.readerExtrasDataStore.edit { prefs ->
+            prefs[sectionPositionKey(bookId)] = serializeSectionPosition(pos)
+        }
+    }
+
+    /** Removes only the in-section position (progress reset keeps bookmarks/highlights). */
+    suspend fun clearSectionPosition(bookId: String) {
+        context.readerExtrasDataStore.edit { prefs ->
+            prefs.remove(sectionPositionKey(bookId))
         }
     }
 

@@ -20,7 +20,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 /**
  * JS bridge for the reader documents: the scroll reporter
  * (`Android.onScroll(t,h,c,gen)`), the visible-chapter reporter
- * (`Android.onChapter(ci,gen)` — the chapter at the viewport top), and
+ * (`Android.onChapter(ci,gen)` — the chapter at the viewport top),
+ * the in-section position reporter (`Android.onSectionPos(ci,frac,gen)`
+ * — the fraction of the top chapter's height above the viewport top,
+ * see SectionPosition.kt), and
  * in-book link taps handed over by the LINK_JS interceptor in
  * [HtmlBuilder.build] (`Android.onLink(href, chapIdx)` with the raw
  * authored href and the index of the chapter containing the link).
@@ -31,6 +34,14 @@ class ScrollBridge(
     /** Image-save tap (IMAGE_JS): raw <img> src + containing chapter index. */
     private val onImageClick: (String, Int) -> Unit = { _, _ -> },
     private val onChapterVisible: (Int, Int) -> Unit = { _, _ -> },
+    /**
+     * In-section position report (see SectionPosition.kt): the chapter
+     * at the viewport top + the fraction of its height above the
+     * viewport top, throttled in JS (1% of the chapter or 1000ms).
+     * Vertical mode persists it; paged mode ignores it (its own
+     * paged anchor owns position there).
+     */
+    private val onSectionPos: (Int, Float, Int) -> Unit = { _, _, _ -> },
     /** Paged-mode tap turn at a chapter edge: +1 = last page, -1 = first page. */
     private val onPageEdge: (Int) -> Unit = {},
     /** Paged-mode turn failed: pager torn down or missing (see recoverPagerTurn). */
@@ -73,6 +84,11 @@ class ScrollBridge(
     @JavascriptInterface
     fun onChapter(ci: Long, gen: Long) {
         onChapterVisible(ci.toInt(), gen.toInt())
+    }
+
+    @JavascriptInterface
+    fun onSectionPos(ci: Long, frac: Double, gen: Long) {
+        onSectionPos(ci.toInt(), frac.toFloat(), gen.toInt())
     }
 
     @JavascriptInterface

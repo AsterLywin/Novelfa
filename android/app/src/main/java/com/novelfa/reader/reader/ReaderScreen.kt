@@ -125,6 +125,31 @@ import com.novelfa.reader.theme.characterPages
 /** Highlight colors offered for text highlights (light fills, so the mark text stays dark). */
 private val HIGHLIGHT_COLORS = listOf("#FFE45E", "#F8BBD0", "#C8E6C9", "#BBDEFB")
 
+/**
+ * Mutable machinery for the vertical in-section restore (see
+ * SectionPosition.kt). Deliberately NOT Compose state: it is mutated
+ * from WebView bridge callbacks and must not recompose the reader.
+ * All generation fields are docGen values, so a new document makes
+ * every stale entry fail its comparison on its own — no reset needed.
+ */
+private class SectionRestoreTracker {
+    /** Latest position written to the store (the restore source of truth). */
+    var saved: SectionPosition? = null
+    /** Latest position reported by the page, before the save throttle. */
+    var lastReported: SectionPosition? = null
+    var lastSaveMs: Long = 0L
+    /** Doc generation the initial restore ran for (-1 = none). */
+    var restoredGen: Int = -1
+    /** Doc generation a user scroll (scrollTop > 0) was seen in. */
+    var scrolledGen: Int = -1
+    /** Doc generation a restore scrollTop was captured for. */
+    var appliedGen: Int = -1
+    /** scrollTop the restore landed on (from the restore JS result). */
+    var appliedTop: Int? = null
+    /** Document height when the restore top was captured. */
+    var appliedHeight: Int? = null
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderScreen(
@@ -143,6 +168,8 @@ fun ReaderScreen(
     // Reader page theme is stored per book (WPF parity), unlike the global
     // app theme — an Activity context here would leak on recreation.
     val prefs = remember(context) { PrefsStore(context.applicationContext) }
+    // In-book text search + highlights (SEARCH_JS / SELECT_JS).
+    val extrasStore = remember(context) { ReaderExtrasStore(context.applicationContext) }
 
     var vm by remember { mutableStateOf<ReaderViewModel?>(null) }
     // Conversion progress for the loading UI: (pages done, pages
@@ -165,6 +192,21 @@ fun ReaderScreen(
     // dispose — a missed flush there only delays the celebration, it never
     // loses XP, because celebratedXp stays behind totalXp).
     val xpFlushScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+    // Vertical in-section restore machinery (see SectionPosition.kt):
+    // one remembered tracker (not state — bridge callbacks mutate it
+    // and must not recompose the reader).
+    val sectionTracker = remember { SectionRestoreTracker() }
+    /**
+     * Forces the latest reported in-section position to the store
+     * (vertical mode only), bypassing the 500ms save throttle — a
+     * close right after a fling used to lose the last fraction.
+     */
+    suspend fun flushSectionPosition() {
+        val v = vm ?: return
+        if (v.readingMode != ReadingMode.CONTINUOUS_VERTICAL) return
+        val pos = sectionTracker.lastReported ?: return
+        extrasStore.setSectionPosition(bookId, pos.chapter, pos.fraction)
+    }
     fun closeReader() {
         scope.launch {
             runCatching { vm?.xpFlush() }
@@ -172,6 +214,8 @@ fun ReaderScreen(
             // right after a turn used to lose the last page. Flush it
             // here, forced, so closing never loses the position.
             runCatching { vm?.flushPagedAnchor() }
+            // Same for the vertical in-section position.
+            runCatching { flushSectionPosition() }
             onClose()
         }
     }
@@ -181,6 +225,7 @@ fun ReaderScreen(
             if (v != null) xpFlushScope.launch {
                 runCatching { v.xpFlush() }
                 runCatching { v.flushPagedAnchor() }
+                runCatching { flushSectionPosition() }
             }
         }
     }
@@ -272,7 +317,6 @@ fun ReaderScreen(
     var themeOpen by remember { mutableStateOf(false) }
     var fontOpen by remember { mutableStateOf(false) }
     // In-book text search + highlights (SEARCH_JS / SELECT_JS).
-    val extrasStore = remember(context) { ReaderExtrasStore(context.applicationContext) }
     val highlights by extrasStore.highlights(bookId).collectAsState(initial = emptyList())
     var searchOpen by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -602,7 +646,19 @@ fun ReaderScreen(
             // restores it after the reload.
             v.pagedAnchor = book.lastAnchor
             v.pagedAnchorChapter = book.lastChapterIndex
-            val target = book.lastChapterIndex.coerceIn(0, parsed.chapters.size - 1)
+            // Vertical in-section restore (see SectionPosition.kt):
+            // when a saved (chapter, fraction) exists, it opens its
+            // chapter — normally the same as lastChapterIndex (the two
+            // are written by the same scroll flow), but the section
+            // position is the fresher, more precise one — and the
+            // page-finished handler scrolls to the fraction. Paged
+            // mode keeps its own chapter + anchor restore untouched.
+            val savedSection = if (v.readingMode == ReadingMode.CONTINUOUS_VERTICAL) {
+                runCatching { extrasStore.sectionPosition(bookId).first() }.getOrNull()
+            } else null
+            sectionTracker.saved = savedSection
+            val target = (savedSection?.chapter ?: book.lastChapterIndex)
+                .coerceIn(0, parsed.chapters.size - 1)
             if (!v.loadChapter(target)) {
                 throw IOException(v.lastError ?: "")
             }
@@ -952,6 +1008,28 @@ fun ReaderScreen(
         }
     }
 
+    /**
+     * Runs the in-section restore JS for [pos] and records the landed
+     * scrollTop from the JS result, so the scroll bridge can tell a
+     * restore echo from a user scroll and re-apply while images/fonts
+     * are still settling. A 'miss' (saved chapter not in this document)
+     * records nothing, so the chapter-index restore still stands.
+     * Also sets appliedHeight to null synchronously, so the next scroll
+     * report captures the new height instead of re-applying twice.
+     */
+    fun applySectionRestore(gen: Int, pos: SectionPosition) {
+        val wv = webView ?: return
+        sectionTracker.appliedHeight = null
+        wv.evaluateJavascript(HtmlBuilder.sectionRestoreJs(pos.chapter, pos.fraction)) { result ->
+            val y = result?.trim()?.trim { it == '"' }?.toIntOrNull()
+            if (y != null) {
+                sectionTracker.appliedGen = gen
+                sectionTracker.appliedTop = y
+                sectionTracker.appliedHeight = null
+            }
+        }
+    }
+
     val bridge = remember {
         ScrollBridge(
             onScroll = { t, h, c, gen ->
@@ -979,6 +1057,26 @@ fun ReaderScreen(
                 // never fire.
                 applyIncrementalJs(v, last, first)
                 rev++
+                // Vertical in-section tracking (see SectionPosition.kt):
+                // a scrollTop > 0 before any restore means the user was
+                // already scrolling this document — the page-finished
+                // restore must not yank them back. And while a restore
+                // top still stands (the user has not scrolled away from
+                // it), a height change (images/fonts settling) re-applies
+                // the saved fraction under the new metrics.
+                if (v.readingMode == ReadingMode.CONTINUOUS_VERTICAL) {
+                    if (t > 0) sectionTracker.scrolledGen = gen
+                    val saved = sectionTracker.saved
+                    if (sectionTracker.appliedGen == gen && sectionTracker.appliedTop != null) {
+                        if (sectionTracker.appliedHeight == null) {
+                            sectionTracker.appliedHeight = h
+                        } else if (kotlin.math.abs(t - sectionTracker.appliedTop!!) <= 2 &&
+                            h != sectionTracker.appliedHeight && saved != null
+                        ) {
+                            applySectionRestore(gen, saved)
+                        }
+                    }
+                }
             }
             },
             // Pager page report (see ScrollBridge): the sole source
@@ -1013,6 +1111,25 @@ fun ReaderScreen(
                     if (gen != v.docGen) return@launch
                     v.onChapterVisible(ci)
                     rev++
+                }
+            },
+            // In-section position (see SectionPosition.kt): vertical
+            // mode only, throttled like saveProgress (500ms) so a fling
+            // never costs a DataStore write per frame; the latest
+            // report is always kept for the forced flush on close.
+            onSectionPos = { ci, frac, gen ->
+                scope.launch {
+                    val v = vm ?: return@launch
+                    if (gen != v.docGen) return@launch
+                    if (v.readingMode != ReadingMode.CONTINUOUS_VERTICAL) return@launch
+                    val pos = runCatching { SectionPosition(ci, frac) }.getOrNull() ?: return@launch
+                    sectionTracker.lastReported = pos
+                    val now = System.currentTimeMillis()
+                    if (now - sectionTracker.lastSaveMs >= 500) {
+                        sectionTracker.lastSaveMs = now
+                        sectionTracker.saved = pos
+                        runCatching { extrasStore.setSectionPosition(bookId, ci, frac) }
+                    }
                 }
             },
             // Paged-mode tap turn at a chapter edge (the JS tap zones
@@ -1765,6 +1882,31 @@ fun ReaderScreen(
                             if (modeNow == ReadingMode.PAGED_HORIZONTAL) {
                                 refreshPagedIndicator()
                                 refreshPagedAnchor()
+                            }
+                            // Vertical in-section restore (see
+                            // SectionPosition.kt): on the first finish
+                            // of a fresh vertical document, scroll to
+                            // the saved chapter + fraction — unless the
+                            // user already scrolled this document (a
+                            // load is fast, but a scroll during it owns
+                            // the position). A saved chapter absent
+                            // from this document ('miss') restores
+                            // nothing; the chapter restore still stands.
+                            // Like the paged pendingAnchor above, this
+                            // assumes the finished event belongs to the
+                            // latest load (loadData cancels the previous
+                            // load); the worst case of a race is one
+                            // chapter-top landing — today's behavior,
+                            // never a wrong chapter.
+                            val vv = vm
+                            if (modeNow == ReadingMode.CONTINUOUS_VERTICAL && vv != null) {
+                                val pos = sectionTracker.saved
+                                if (pos != null && sectionTracker.restoredGen != vv.docGen &&
+                                    sectionTracker.scrolledGen != vv.docGen
+                                ) {
+                                    sectionTracker.restoredGen = vv.docGen
+                                    applySectionRestore(vv.docGen, pos)
+                                }
                             }
                         },
                         onSwipeLeft = {

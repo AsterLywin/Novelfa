@@ -321,6 +321,12 @@ class Importer(
             .onFailure { Log.w("NovelfaImporter", "clearBookExtras failed for $bookId", it) }
     }
 
+    /** Progress reset only: clears the vertical in-section position, nothing else. */
+    suspend fun clearSectionPosition(bookId: String) = withContext(Dispatchers.IO) {
+        runCatching { ReaderExtrasStore(context).clearSectionPosition(bookId) }
+            .onFailure { Log.w("NovelfaImporter", "clearSectionPosition failed for $bookId", it) }
+    }
+
     /**
      * Imports one book in any supported format (EPUB, TXT, PDF, Markdown,
      * DOCX, CBZ, ZIP). Every format is imported through its own

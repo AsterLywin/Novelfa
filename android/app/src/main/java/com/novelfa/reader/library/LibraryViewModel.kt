@@ -576,7 +576,14 @@ class LibraryViewModel(
 
     suspend fun createCollection(name: String) = collections.createCollection(name)
 
-    suspend fun resetProgress(book: Book) = collections.resetProgress(book.id)
+    suspend fun resetProgress(book: Book) {
+        collections.resetProgress(book.id)
+        // The vertical in-section position is progress too: without
+        // this, a reset book would reopen at its old (chapter,
+        // fraction) — the section position outranks lastChapterIndex
+        // on open — instead of chapter 0's top.
+        importer?.clearSectionPosition(book.id)
+    }
 
     suspend fun removeBook(book: Book) {
         // Phase 2 (DB-01): a private book's data must never
