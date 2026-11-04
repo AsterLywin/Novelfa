@@ -372,8 +372,8 @@ fun ZoomablePageContainer(
                                 // wobble is a multi-pixel offset
                                 // jump per frame. So the loop
                                 // never applies the raw ratio:
-                                // smoothPinchScale moves halfway
-                                // toward the target each frame
+                                // smoothPinchScale moves three-quarters
+                                // of the way toward the target each frame
                                 // (see PageZoomState), damping
                                 // the offset jumps by the same
                                 // factor, and the pan math runs

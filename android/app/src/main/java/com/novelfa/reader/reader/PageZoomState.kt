@@ -86,14 +86,17 @@ fun pinchScale(oldScale: Float, prevSpan: Float, span: Float): Float {
  * Pinch smoothing factor: each gesture frame moves the
  * displayed scale this fraction of the way from the previous
  * displayed scale toward the ratio-implied target (see
- * [smoothPinchScale]). Halfway per frame halves white touch
- * noise (std x0.58) while a steady pinch trails by only ~one
- * frame of motion — imperceptible at normal pinch speeds.
+ * [smoothPinchScale]). Three-quarters per frame: the 0.5 value
+ * fixed the tremor but made zoom feel very slow on device
+ * (2026-11-04 report), so the factor was raised — a steady
+ * pinch now trails by ~a third of a frame of motion, while
+ * per-frame noise is still damped (std x0.78) and the 20px
+ * span floor still kills the degenerate small-span spikes.
  */
-const val PINCH_SMOOTHING_ALPHA = 0.5f
+const val PINCH_SMOOTHING_ALPHA = 0.75f
 
 /**
- * One smoothed pinch frame: halfway from [prevSmoothed]
+ * One smoothed pinch frame: three-quarters of the way from [prevSmoothed]
  * toward [targetScale] (the [pinchScale] result for this
  * frame). Why smoothing is needed on top of the span floor:
  * the floor only kills the degenerate case (span < 20px,

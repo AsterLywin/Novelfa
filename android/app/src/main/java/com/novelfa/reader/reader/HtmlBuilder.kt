@@ -1222,6 +1222,15 @@ object HtmlBuilder {
         if (!pages.length) return;
         cur = Math.max(0, Math.min(i, pages.length - 1));
         var tx = -physLeft(cur, pages.length, stageW());
+        // Pivot the swing on the visible page, not on the strip's
+        // own origin: the strip spans the whole chapter, so its
+        // default origin sits far off-screen, and perspective then
+        // magnifies the page on the turn direction that swings
+        // toward the viewer (the backward-turn "zoom" bug).
+        // The viewport centre in strip-local coordinates is
+        // stageW()/2 - tx. Harmless for the instant branch (no
+        // rotation is applied there).
+        strip.style.transformOrigin = (stageW() / 2 - tx) + 'px 50%';
         if (turnAnim) { cancelAnimationFrame(turnAnim); turnAnim = 0; }
         if (anim === 0) {
             strip.classList.add('rdr-notrans');
