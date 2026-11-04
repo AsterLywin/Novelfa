@@ -15,7 +15,7 @@ import java.util.Locale
  * `chrome.webview.postMessage` bridge. The scroll reporter is kept, adapted
  * to `Android.onScroll(t,h,c,gen)` via a JavascriptInterface, including the
  * lr-restore `z()` used after prepend. Horizontal page turns in paged mode
- * are driven by the rdrPager script (PAGER_JS at the bottom of this file):
+ * are driven by the rdrPager script (PAGER_JS_A/B at the bottom of this file):
  * `window.rdrTurn(d)` / `window.rdrLast()`.
  */
 object HtmlBuilder {
@@ -175,7 +175,7 @@ object HtmlBuilder {
             // rdrPager: deterministic block-level pagination (see PAGER_JS).
             // Runs before <body> is parsed; its boot waits for
             // DOMContentLoaded, then for fonts/images to settle.
-            sb.append("<script>").append(PAGER_JS).append("</script>")
+            sb.append("<script>").append(PAGER_JS_A).append(PAGER_JS_B).append("</script>")
         }
         sb.append("</head><body>").append(bodyContent).append("</body></html>")
         return sb.toString()
@@ -203,9 +203,9 @@ object HtmlBuilder {
         // Windows parity: chapter fades in on load (rdrFade .3s).
         sb.append("animation:rdrFade .3s ease-out;}")
         sb.append("@keyframes rdrFade{from{opacity:.3;}to{opacity:1;}}")
-        sb.append("html.rdr-paged .rdr-chap{position:absolute;top:0;right:0;bottom:0;left:0;overflow:hidden;}")
+        sb.append("html.rdr-paged .rdr-chap{position:absolute;top:0;right:0;bottom:0;left:0;overflow:hidden;perspective:1400px;}")
         sb.append(".rdr-strip{position:absolute;top:0;bottom:0;left:0;")
-        sb.append("transition:transform .28s ease;}")
+        sb.append("transition:transform .28s ease;will-change:transform;}")
         sb.append(".rdr-strip.rdr-notrans{transition:none !important;}")
         sb.append(".rdr-page{position:absolute;top:0;height:100%;overflow:hidden;")
         sb.append("box-sizing:border-box;padding:16px ").append(sideMargin).append("px;}")
@@ -401,7 +401,7 @@ object HtmlBuilder {
      * never callable from native code (verified:
      * typeof window.rdrTurn === 'undefined').
      */
-    private const val PAGER_JS = """// rdrPager — deterministic block-level pagination for Novelfa paged mode.
+    private const val PAGER_JS_A = """// rdrPager — deterministic block-level pagination for Novelfa paged mode.
 //
 // Replaces the CSS-multicol pager. Why: multicol page geometry was DERIVED
 // from Blink's fragmentation layout (scrollWidth / scrollLeft), which is
@@ -427,7 +427,8 @@ object HtmlBuilder {
     if (!de.classList.contains('rdr-paged')) return;
 
     var EPS = 1.5;              // packing tolerance (px)
-    var ANIM_MS = 280;          // must match the .rdr-strip CSS transition
+    var TURN_MS = 320;          // rAF page-turn duration (with swing)
+    var JUMP_MS = 300;          // rAF jump-glide duration (no swing)
     var SETTLE_TIMEOUT = 2500;  // max wait for fonts/images before paginating
     // Was 3: images in one chapter often arrive staggered, and each
     // arrival schedules one debounced repagination — 3 was exhausted
@@ -1090,7 +1091,7 @@ object HtmlBuilder {
             // Keep the page the user is looking at in view as the
             // strip grows (RTL: a page's offset depends on the total
             // count, so it shifts with every appended page).
-            if (pages.length) show(cur, true);
+            if (pages.length) show(cur, 0);
         }
 
         // Has the pager built far enough that a queued text-point
@@ -1119,7 +1120,13 @@ object HtmlBuilder {
             if (scan(cur1.frags)) return true;
             return false;
         }
-
+"""
+    // NOTE: the closing quotes above stay flush-left on purpose — this
+    // raw string has no trimIndent, so indenting them would inject
+    // spaces into the script. PAGER_JS is split in two because a
+    // single const string over 65535 bytes breaks the Kotlin backend
+    // (ByteVector.putUTF8); keep each half well under that limit.
+    private const val PAGER_JS_B = """
         function maybeEarlyRestore() {
             if (pendingFrag) {
                 var pp = String(pendingFrag).split(':');
@@ -1127,7 +1134,7 @@ object HtmlBuilder {
                 if (!isNaN(pli) && !isNaN(ptok) && builtCoversFrag(pli, ptok)) {
                     pendingFrag = null;
                     earlyRestored = true;
-                    show(pageForAnchor({ li: pli, tok: ptok }), true);
+                    show(pageForAnchor({ li: pli, tok: ptok }), 0);
                 }
             } else if (pendingAnchor) {
                 if (findAnchor(pendingAnchor)) {
@@ -1202,19 +1209,56 @@ object HtmlBuilder {
         } catch (e) { }
     }
 
-    function show(i, instant) {
+    // Turn + jump animation, driven per frame (not the CSS
+    // transition): a transition can only slide the strip flat,
+    // while a turn should swing in 3D. anim: 0 = instant
+    // (restore, repagination, load), 1 = turn (swing), 2 = jump
+    // (straight glide, no swing — a far jump must not wobble).
+    // curTx tracks the strip's live position so a turn started
+    // mid-animation retargets smoothly instead of snapping back.
+    var turnAnim = 0;
+    var curTx = 0;
+    function show(i, anim) {
         if (!pages.length) return;
         cur = Math.max(0, Math.min(i, pages.length - 1));
         var tx = -physLeft(cur, pages.length, stageW());
-        if (instant) strip.classList.add('rdr-notrans');
-        strip.style.transform = 'translate3d(' + tx + 'px,0,0)';
-        if (instant) {
+        if (turnAnim) { cancelAnimationFrame(turnAnim); turnAnim = 0; }
+        if (anim === 0) {
+            strip.classList.add('rdr-notrans');
+            strip.style.transform = 'translate3d(' + tx + 'px,0,0)';
+            curTx = tx;
             // Force reflow so the no-transition jump applies before the
             // class is removed again.
             void strip.offsetWidth;
             strip.classList.remove('rdr-notrans');
         } else {
-            lockUntil = Date.now() + ANIM_MS;
+            var from = curTx;
+            var dur = anim === 1 ? TURN_MS : JUMP_MS;
+            var dir = tx >= from ? 1 : -1;
+            var t0 = performance.now();
+            lockUntil = Date.now() + dur;
+            // Transitions off during the frames, or the CSS
+            // transition would fight every frame set.
+            strip.classList.add('rdr-notrans');
+            var step = function (now) {
+                var t = Math.min(1, (now - t0) / dur);
+                var e;
+                if (anim === 1) e = 1 - Math.pow(1 - t, 3);
+                else e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+                curTx = from + (tx - from) * e;
+                var rot = anim === 1 ? Math.sin(Math.PI * t) * 12 * dir : 0;
+                strip.style.transform = 'translate3d(' + curTx + 'px,0,0)' +
+                    (rot ? ' rotateY(' + rot + 'deg)' : '');
+                if (t < 1) {
+                    turnAnim = requestAnimationFrame(step);
+                } else {
+                    turnAnim = 0;
+                    curTx = tx;
+                    strip.style.transform = 'translate3d(' + tx + 'px,0,0)';
+                    strip.classList.remove('rdr-notrans');
+                }
+            };
+            turnAnim = requestAnimationFrame(step);
         }
         report();
     }
@@ -1352,16 +1396,16 @@ object HtmlBuilder {
                     // The restore already landed on its final page
                     // during the build; just refresh the transform for
                     // the final page count, never jump back to page 0.
-                    show(cur, true);
+                    show(cur, 0);
                 } else if (pendingAnchor) {
                     var pa = pendingAnchor;
                     pendingAnchor = null;
                     pendingLast = false;
-                    if (!goToAnchorNow(pa)) show(pageForAnchor(anchor), true);
+                    if (!goToAnchorNow(pa)) show(pageForAnchor(anchor), 0);
                 } else if (pendingLast) {
                     pendingAnchor = null;
                     pendingLast = false;
-                    show(pages.length - 1, true);
+                    show(pages.length - 1, 0);
                 } else if (pendingFrag) {
                     // Queued text-point restore (native, e.g. reopen or a
                     // settings reload): an explicit link/last-page jump above
@@ -1371,10 +1415,10 @@ object HtmlBuilder {
                     pendingFrag = null;
                     var pp = String(pf).split(':');
                     var pli = parseInt(pp[0], 10), ptok = parseInt(pp[1], 10);
-                    if (!isNaN(pli) && !isNaN(ptok)) show(pageForAnchor({ li: pli, tok: ptok }), true);
-                    else show(pageForAnchor(anchor), true);
+                    if (!isNaN(pli) && !isNaN(ptok)) show(pageForAnchor({ li: pli, tok: ptok }), 0);
+                    else show(pageForAnchor(anchor), 0);
                 } else {
-                    show(pageForAnchor(anchor), true);
+                    show(pageForAnchor(anchor), 0);
                 }
             watchLateImages();
             // After the watch: backdrops must never be watched as late
@@ -1546,7 +1590,7 @@ object HtmlBuilder {
                 var nb = cur + d;
                 if (nb < 0) return 'start';
                 if (nb >= pages.length) return 'busy';
-                show(nb, false);
+                show(nb, 1);
                 return 'page';
             }
             if (!ready) return 'busy';
@@ -1554,25 +1598,25 @@ object HtmlBuilder {
             var n = cur + d;
             if (n < 0) return 'start';
             if (n >= pages.length) return 'end';
-            show(n, false);
+            show(n, 1);
             return 'page';
         } catch (e) { return 'page'; }
     };
     window.rdrLast = function () {
         try {
             if (!ready) { pendingLast = true; return 'ok'; }
-            show(pages.length - 1, true);
+            show(pages.length - 1, 0);
             return 'ok';
         } catch (e) { return 'no'; }
     };
     window.rdrGoToPage = function (i) {
         if (building) {
             if (i < 0 || i >= pages.length) return -1;
-            show(i, true);
+            show(i, 2);
             return cur;
         }
         if (!ready) return -1;
-        show(i, true);
+        show(i, 2);
         return cur;
     };
     // In-book link navigation: jump to the page containing the element
@@ -1593,7 +1637,7 @@ object HtmlBuilder {
     function goToAnchorNow(id) {
         var hit = findAnchor(id);
         if (!hit) return false;
-        show(hit.page, true);
+        show(hit.page, 2);
         // Target inside an internally-scrolling tall page: scroll the
         // wrap so the target is visible.
         var n = hit.el, wrap = null;
@@ -1657,7 +1701,7 @@ object HtmlBuilder {
             // for paginate() instead of dropping it or jumping to a
             // half-built strip.
             if (!ready || building) { pendingFrag = String(s); return true; }
-            show(pageForAnchor({ li: li, tok: tok }), true);
+            show(pageForAnchor({ li: li, tok: tok }), 0);
             return true;
         } catch (e) { return false; }
     };

@@ -91,6 +91,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
@@ -742,8 +743,12 @@ internal fun NativeImageBookViewer(
     // effectiveRtl above).
 
 
-    /** Direct jump (slider, restore, zoom): never animates through pages. */
-    fun jumpTo(page: Int) {
+    /** Direct jump (slider release, chapter, bookmark, overview,
+     * page-number dialog): animated when [animate] is set, so the
+     * jump glides instead of snapping. Restore and zoom/layout
+     * corrections keep the default instant landing: an opening
+     * book must not animate to its position. */
+    fun jumpTo(page: Int, animate: Boolean = false) {
         scope.launch {
             val target = page.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
             if (isPaged) {
@@ -755,11 +760,20 @@ internal fun NativeImageBookViewer(
                     } else {
                         target
                     }
-                runCatching { pagerState.scrollToPage(pagerTarget) }
+                runCatching {
+                    if (animate) pagerState.animateScrollToPage(pagerTarget)
+                    else pagerState.scrollToPage(pagerTarget)
+                }
             } else if (isHorizontalStrip) {
-                runCatching { rowState.scrollToItem(target) }
+                runCatching {
+                    if (animate) rowState.animateScrollToItem(target)
+                    else rowState.scrollToItem(target)
+                }
             } else {
-                runCatching { listState.scrollToItem(target) }
+                runCatching {
+                    if (animate) listState.animateScrollToItem(target)
+                    else listState.scrollToItem(target)
+                }
             }
         }
     }
@@ -1154,11 +1168,33 @@ internal fun NativeImageBookViewer(
                             bitmapCache = pageBitmapCache
                         )
                     }
+                    // Page-turn transition: a plain pager slide reads
+                    // flat, so each page tilts in 3D, shrinks slightly
+                    // and fades as it leaves — the turn reads as a page
+                    // turning, not a strip sliding. The offset is
+                    // signed, so the tilt follows the swipe direction
+                    // in both RTL and LTR layouts (reverseLayout
+                    // already mirrors it); in dual mode the whole
+                    // pair tilts as one spread.
+                    val pageOffset = (pagerState.currentPage - pagerIdx) +
+                        pagerState.currentPageOffsetFraction
+                    val turnModifier = Modifier.graphicsLayer {
+                        val abs = kotlin.math.abs(pageOffset)
+                        rotationY = pageOffset * -20f
+                        cameraDistance = 12f * density.density
+                        scaleX = 1f - 0.08f * abs
+                        scaleY = 1f - 0.08f * abs
+                        alpha = 1f - 0.15f * abs
+                    }
                     if (!useDual) {
-                        singleItem(pagerIdx)
+                        Box(turnModifier.fillMaxSize()) {
+                            singleItem(pagerIdx)
+                        }
                     } else {
                         when (val pair = pairs!![pagerIdx]) {
-                            is DualPair.Single -> singleItem(pair.firstPage)
+                            is DualPair.Single -> Box(turnModifier.fillMaxSize()) {
+                                singleItem(pair.firstPage)
+                            }
                             is DualPair.Pair -> {
                                 // The pair is laid out in the
                                 // BOOK direction, not the UI
@@ -1175,7 +1211,7 @@ internal fun NativeImageBookViewer(
                                 CompositionLocalProvider(
                                     LocalLayoutDirection provides pairDirection
                                 ) {
-                                    Row(Modifier.fillMaxSize()) {
+                                    Row(turnModifier.fillMaxSize()) {
                                         Box(Modifier.weight(1f).fillMaxHeight()) {
                                             singleItem(pair.firstPage)
                                         }
@@ -1204,7 +1240,7 @@ internal fun NativeImageBookViewer(
                                 CompositionLocalProvider(
                                     LocalLayoutDirection provides pairDirection
                                 ) {
-                                    Row(Modifier.fillMaxSize()) {
+                                    Row(turnModifier.fillMaxSize()) {
                                         Box(Modifier.weight(1f).fillMaxHeight()) {
                                             singleItem(pair.firstPage, firstSide)
                                         }
@@ -1584,7 +1620,7 @@ internal fun NativeImageBookViewer(
                                     onValueChangeFinished = {
                                         val target = sliderPreview
                                         sliderPreview = null
-                                        if (target != null) jumpTo(target)
+                                        if (target != null) jumpTo(target, animate = true)
                                     },
                                     valueRange = 0f..(pageCount - 1).coerceAtLeast(0).toFloat(),
                                     // Snapping stays (steps), but the
@@ -1700,7 +1736,7 @@ internal fun NativeImageBookViewer(
                         TextButton(
                             onClick = {
                                 showChapters = false
-                                jumpTo(chapter.firstPageIndex)
+                                jumpTo(chapter.firstPageIndex, animate = true)
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -1754,7 +1790,7 @@ internal fun NativeImageBookViewer(
                 TextButton(onClick = {
                     val n = pageText.toIntOrNull()
                     showPageJump = false
-                    if (n != null) jumpTo(n - 1)
+                    if (n != null) jumpTo(n - 1, animate = true)
                 }) {
                     Text(stringResource(R.string.page_jump_go))
                 }
@@ -1789,7 +1825,7 @@ internal fun NativeImageBookViewer(
                             TextButton(
                                 onClick = {
                                     showBookmarks = false
-                                    jumpTo(page)
+                                    jumpTo(page, animate = true)
                                 },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
@@ -1853,7 +1889,7 @@ internal fun NativeImageBookViewer(
                                 )
                                 .clickable {
                                     showOverview = false
-                                    jumpTo(page)
+                                    jumpTo(page, animate = true)
                                 }
                         ) {
                             PageThumbnail(
