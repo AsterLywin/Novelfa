@@ -96,7 +96,24 @@ fun NavGraph(
             PdfReaderRoute(
                 bookId = bookId,
                 repo = RoomBookRepository(db.bookDao()),
-                onClose = { navController.popBackStack() },
+                // A reader close must always land somewhere valid.
+                // popBackStack() silently returns false when there
+                // is nothing to pop to (e.g. the reader is the only
+                // entry), and the old code ignored that result — so
+                // closing a book that was never loaded (the
+                // multi-book archive picker: no book, no content)
+                // could strand the user on a blank screen instead
+                // of a real destination. Fall back to the library,
+                // clearing the dead reader off the stack.
+                onClose = {
+                    if (!navController.popBackStack()) {
+                        navController.navigate(Routes.LIBRARY) {
+                            popUpTo(navController.graph.startDestinationId) {
+                                inclusive = true
+                            }
+                        }
+                    }
+                },
                 support = supportTracker
             )
         }
