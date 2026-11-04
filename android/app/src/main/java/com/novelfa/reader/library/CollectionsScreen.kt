@@ -740,6 +740,7 @@ fun AssignCollectionDialog(
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
+                    label = { Text(stringResource(R.string.new_collection_name)) },
                     singleLine = true
                 )
             } else {
