@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -484,6 +485,7 @@ fun CollectionsScreen(
     assignTarget?.let { target ->
         AssignCollectionDialog(
             current = target.collectionName,
+            collections = collections,
             onDismiss = { assignTarget = null },
             onSave = { newName ->
                 scope.launch {
@@ -718,23 +720,73 @@ private fun CreateCollectionDialog(
 @Composable
 fun AssignCollectionDialog(
     current: String?,
+    collections: List<String> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (String?) -> Unit
 ) {
+    // Pick first: tap an existing collection to assign at once,
+    // or "New collection" for a typed name (the old dialog).
+    // With no collections yet there is nothing to pick, so the
+    // dialog opens straight on the name field, exactly as before.
+    // The save path is unchanged: a typed name (even blank, which
+    // unassigns, as before) goes to onSave untouched.
+    var creating by remember { mutableStateOf(collections.isEmpty()) }
     var text by remember { mutableStateOf(current ?: "") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.collection)) },
         text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                singleLine = true
-            )
+            if (creating) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true
+                )
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                    items(collections) { name ->
+                        TextButton(
+                            onClick = { onSave(name) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                name,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (name == current) {
+                                AppIcon(
+                                    AppIconKind.Check,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    size = 14.dp
+                                )
+                            }
+                        }
+                    }
+                    item {
+                        TextButton(
+                            onClick = { creating = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            AppIcon(
+                                AppIconKind.Plus,
+                                tint = LocalContentColor.current,
+                                size = 14.dp,
+                                strokeWidth = 2f
+                            )
+                            Text(
+                                stringResource(R.string.new_collection),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+            }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(text) }) {
-                Text(stringResource(R.string.save))
+            if (creating) {
+                TextButton(onClick = { onSave(text) }) {
+                    Text(stringResource(R.string.save))
+                }
             }
         },
         dismissButton = {

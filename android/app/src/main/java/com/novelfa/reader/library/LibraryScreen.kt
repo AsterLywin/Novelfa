@@ -474,6 +474,10 @@ fun LibraryScreen(
     // value, otherwise the welcome dialog opens on every cold start before
     // DataStore delivers the saved name (and never closes afterwards).
     val profileName by prefs.profileName.collectAsState(initial = null)
+    // All collection names (book-anchored + manual empty ones, distinct
+    // and sorted): the assign dialog picks from these instead of
+    // making the user type a name every time.
+    val collectionNames by viewModel.collectionNames.collectAsState(initial = emptyList())
     // UI language for hardcoded rank names (stringResource handles the rest
     // via locale; RankInfo carries its own fa/en names).
     val appLang by prefs.lang.collectAsState(initial = "fa")
@@ -1322,6 +1326,7 @@ fun LibraryScreen(
     assignFor?.let { target ->
         AssignCollectionDialog(
             current = target.collectionName,
+            collections = collectionNames,
             onDismiss = { assignFor = null },
             onSave = { newName ->
                 scope.launch {
