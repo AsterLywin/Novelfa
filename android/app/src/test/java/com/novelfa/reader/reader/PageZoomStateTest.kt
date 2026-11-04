@@ -335,4 +335,26 @@ class PageZoomStateTest {
         assertEquals(15f, x, delta)
         assertEquals(17f, y, delta)
     }
+
+    @Test
+    fun smoothPinchScaleMovesHalfwayToTarget() {
+        assertEquals(2f, smoothPinchScale(1f, 3f), delta)
+        assertEquals(2.5f, smoothPinchScale(2f, 3f), delta)
+        assertEquals(1.5f, smoothPinchScale(2f, 1f), delta)
+    }
+
+    @Test
+    fun smoothPinchScaleNeverOvershootsAndStaysInsideCaps() {
+        // Between prev and target, never past the target.
+        assertEquals(3.5f, smoothPinchScale(3f, 4f), delta)
+        // Caps: the target is coerced first, then the halfway step.
+        assertEquals(3.95f, smoothPinchScale(3.9f, 10f), delta)
+        assertEquals(1f, smoothPinchScale(1f, 0f), delta)
+    }
+
+    @Test
+    fun smoothPinchScaleHoldsOnNonFiniteTarget() {
+        assertEquals(2f, smoothPinchScale(2f, Float.NaN), delta)
+        assertEquals(2f, smoothPinchScale(2f, Float.POSITIVE_INFINITY), delta)
+    }
 }

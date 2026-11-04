@@ -83,6 +83,39 @@ fun pinchScale(oldScale: Float, prevSpan: Float, span: Float): Float {
 }
 
 /**
+ * Pinch smoothing factor: each gesture frame moves the
+ * displayed scale this fraction of the way from the previous
+ * displayed scale toward the ratio-implied target (see
+ * [smoothPinchScale]). Halfway per frame halves white touch
+ * noise (std x0.58) while a steady pinch trails by only ~one
+ * frame of motion — imperceptible at normal pinch speeds.
+ */
+const val PINCH_SMOOTHING_ALPHA = 0.5f
+
+/**
+ * One smoothed pinch frame: halfway from [prevSmoothed]
+ * toward [targetScale] (the [pinchScale] result for this
+ * frame). Why smoothing is needed on top of the span floor:
+ * the floor only kills the degenerate case (span < 20px,
+ * 20-50% jumps). At normal spans the raw ratio still carries
+ * 1-3% touch noise per frame, and [focalPan] multiplies the
+ * existing offset by new/old every frame — so at 3x zoom a
+ * 2% scale wobble is a multi-pixel offset jump per frame,
+ * which is the shimmer that survives the floor. Smoothing
+ * the scale damps the offset jumps by the same factor, since
+ * the pan math runs on the smoothed scale. The result always
+ * lies between prev and target (never overshoots) and is
+ * coerced into [MIN_PAGE_ZOOM, MAX_PAGE_ZOOM]; a non-finite
+ * target holds the previous scale.
+ */
+fun smoothPinchScale(prevSmoothed: Float, targetScale: Float): Float {
+    val prev = coerceZoomScale(prevSmoothed)
+    if (!targetScale.isFinite()) return prev
+    val target = coerceZoomScale(targetScale)
+    return coerceZoomScale(prev + PINCH_SMOOTHING_ALPHA * (target - prev))
+}
+
+/**
  * Pan clamp for a box of [boxWidth] x [boxHeight] pixels at [scale].
  * The content is centred, so each direction can move at most half
  * the overflow: (box * scale - box) / 2. At 1x the clamp is zero,

@@ -329,6 +329,12 @@ fun ZoomablePageContainer(
                     var pastSlop = false
                     var prevCentroid = Offset.Zero
                     var prevDistance = 0f
+                    // Smoothed scale the pinch loop actually
+                    // displays (see smoothPinchScale): reset
+                    // to the live scale whenever a pinch
+                    // starts, so a new gesture never jumps
+                    // from a stale smoothed value.
+                    var pinchSmoothScale = 1f
                     var totalDrag = Offset.Zero
                     val slop = viewConfiguration.touchSlop
                     var gestureActive = true
@@ -347,8 +353,9 @@ fun ZoomablePageContainer(
                                 pinch = true
                                 prevCentroid = centroid
                                 prevDistance = distance
+                                pinchSmoothScale = zoomState.scale
                             } else if (prevDistance > 0f && distance > 0f) {
-                                val oldScale = zoomState.scale
+                                val prevSmooth = pinchSmoothScale
                                 // Span-floor guard (see pinchScale):
                                 // near-touching fingers give a noise
                                 // ratio, not a zoom signal — without
@@ -356,9 +363,26 @@ fun ZoomablePageContainer(
                                 // while the fingers hover close
                                 // together, which is the trembling
                                 // users see on pinch-in starts and
-                                // pinch-out ends.
+                                // pinch-out ends. The floor alone
+                                // does not cover normal spans:
+                                // the raw ratio still carries
+                                // 1-3% touch noise per frame, and
+                                // focalPan multiplies the offset
+                                // by new/old — at 3x zoom a 2%
+                                // wobble is a multi-pixel offset
+                                // jump per frame. So the loop
+                                // never applies the raw ratio:
+                                // smoothPinchScale moves halfway
+                                // toward the target each frame
+                                // (see PageZoomState), damping
+                                // the offset jumps by the same
+                                // factor, and the pan math runs
+                                // on the smoothed scale.
+                                val targetScale =
+                                    pinchScale(prevSmooth, prevDistance, distance)
                                 val newScale =
-                                    pinchScale(oldScale, prevDistance, distance)
+                                    smoothPinchScale(prevSmooth, targetScale)
+                                pinchSmoothScale = newScale
                                 val center = Offset(
                                     boxSize.width / 2f,
                                     boxSize.height / 2f
@@ -369,7 +393,7 @@ fun ZoomablePageContainer(
                                 // fingers stays under them.
                                 // (Pure math: PageZoomState.focalPan.)
                                 val (nx, ny) = focalPan(
-                                    oldScale, zoomState.offsetX, zoomState.offsetY,
+                                    prevSmooth, zoomState.offsetX, zoomState.offsetY,
                                     centroid.x - prevCentroid.x,
                                     centroid.y - prevCentroid.y,
                                     newScale, centroid.x, centroid.y,
