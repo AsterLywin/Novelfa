@@ -2026,10 +2026,12 @@ fun ReaderScreen(
                         )
                     }
                 }
-                // In-chapter search bar (top of the reading area, so it
+                // Whole-book search bar (top of the reading area, so it
                 // works in fullscreen too once opened): query field,
-                // match count with prev/next, and whole-book chapter
-                // results below (tap one to jump there and search it).
+                // chapter results below (tap one to jump there and
+                // search it), with prev/next matches inside the
+                // jumped chapter. There is no chapter-only scope:
+                // every search covers the whole book.
                 if (searchOpen && vm != null && pageHtml.isNotEmpty()) {
                     Column(
                         modifier = Modifier
@@ -2047,10 +2049,10 @@ fun ReaderScreen(
                                 modifier = Modifier.weight(1f),
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                                 keyboardActions = KeyboardActions(
-                                    onSearch = { runInChapterSearch(searchQuery) }
+                                    onSearch = { searchWholeBook() }
                                 )
                             )
-                            IconButton(onClick = { runInChapterSearch(searchQuery) }) {
+                            IconButton(onClick = { searchWholeBook() }) {
                                 AppIcon(AppIconKind.Search, tint = LocalContentColor.current, size = 18.dp)
                             }
                             IconButton(onClick = { clearSearch(); searchOpen = false }) {
@@ -2082,12 +2084,6 @@ fun ReaderScreen(
                             ) {
                                 Text(stringResource(R.string.search_next))
                             }
-                        }
-                        TextButton(
-                            onClick = { searchWholeBook() },
-                            enabled = searchQuery.isNotBlank() && !searchBookBusy
-                        ) {
-                            Text(stringResource(R.string.search_whole_book))
                         }
                         if (searchBookShown) {
                             if (searchBookBusy) {
