@@ -190,7 +190,12 @@ class ReaderViewModel(
         return fontFaceCacheValue
     }
 
-    var index: Int = initialBook.lastChapterIndex
+    // State, not a plain var, on purpose: the sections drawer
+    // highlights `i == index` inside lazy items, and lazy items
+    // only recompose when a State they read changes — with a plain
+    // var the highlight froze on the first-opened chapter (2026-11-05:
+    // jumping to section 16 left section 1 highlighted).
+    var index by mutableIntStateOf(initialBook.lastChapterIndex)
         private set
     /**
      * Paged-mode text-point anchor ("li:tok", see rdrCurrentAnchor)
