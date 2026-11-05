@@ -372,7 +372,6 @@
     <string name="comic_zip_password">Archive password</string>
     <string name="comic_password_wrong">Wrong password — try again</string>
     <string name="comic_volume_keys">Volume keys turn pages</string>
-    <string name="mode_horizontal_continuous">Horizontal strip</string>
     <string name="search_hint">Search in the whole book…</string>
     <string name="search_count">%1$d of %2$d</string>
     <string name="search_no_match">No match</string>

@@ -372,7 +372,6 @@
     <string name="comic_zip_password">رمز فایل فشرده</string>
     <string name="comic_password_wrong">رمز اشتباه است، دوباره تلاش کنید</string>
     <string name="comic_volume_keys">دکمه‌های صدا ورق بزنند</string>
-    <string name="mode_horizontal_continuous">نوار افقی</string>
     <string name="search_hint">جستجو در کل کتاب…</string>
     <string name="search_count">%1$d از %2$d</string>
     <string name="search_no_match">یافت نشد</string>

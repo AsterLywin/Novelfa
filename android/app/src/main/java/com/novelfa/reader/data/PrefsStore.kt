@@ -126,14 +126,12 @@ class PrefsStore(private val context: Context) {
         // volume up = previous page.
         val COMIC_VOLUME_KEYS = booleanPreferencesKey("comicVolumeKeys")
         // Native comic viewer reading mode, separate from the
-        // shared readingMode: comics have THREE modes now
-        // (paged / vertical strip / horizontal strip) and the
-        // EPUB reader only understands two — sharing one key
-        // would make the EPUB reader misbehave in horizontal
-        // mode (its continuous-only features key off
-        // CONTINUOUS_VERTICAL). Null = follow the shared key,
-        // so existing users keep their mode until they change it
-        // in the comic viewer.
+        // shared readingMode: the comic viewer keeps its own
+        // choice so changing it never moves the EPUB reader.
+        // Null = follow the shared key, so existing users keep
+        // their mode until they change it in the comic viewer.
+        // A stale saved "horizontal" value (the removed strip
+        // mode) falls back to paged in ReadingMode.fromKey.
         val COMIC_READING_MODE = stringPreferencesKey("comicReadingMode")
         // Safe (fast) import: single-read copy + deferred generated
         // covers, toggled from Settings. Default ON: it only changes

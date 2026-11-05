@@ -604,7 +604,6 @@ internal class NativePageBitmapCache(
         val filterContrast: Boolean,
         val filterInvert: Boolean,
         val viewRotation: Int,
-        val horizontalStrip: Boolean,
         val manualCropRect: CropRect?
     )
 
@@ -713,11 +712,6 @@ internal fun NativePageItem(
     // direction (see the viewer). Animated pages rotate via
     // the ImageView, bitmap pages in the pipeline below.
     viewRotation: Int = 0,
-    // Horizontal strip: the page fills the strip HEIGHT (not
-    // width) and the resize target is height-based. Paged is
-    // always false with this on; it only changes the strip
-    // geometry, never the page order.
-    horizontalStrip: Boolean = false,
     // Manual crop rect, in FRACTIONS of the displayed page
     // (0..1, from the crop editor): when set it replaces the
     // auto-crop for this page — the user drew it by hand.
@@ -796,9 +790,9 @@ internal fun NativePageItem(
         page, renderWidthPx, cropMargin, cropPadH, cropPadV,
         fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx,
         halfSide, upscaleMode, filterGray, filterContrast, filterInvert,
-        viewRotation, horizontalStrip, manualCropRect
+        viewRotation, manualCropRect
     )
-    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf(bitmapCache?.take(cacheKey)) }
+    var bitmap by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) { mutableStateOf(bitmapCache?.take(cacheKey)) }
     // True only on a park hit: the first effect run for this
     // item instance must then skip the pipeline — the bitmap
     // IS the finished render. Every later run (a zoom
@@ -807,22 +801,22 @@ internal fun NativePageItem(
     // that skipped would re-show the failure. The flag is
     // keyed like the bitmap, so a parameter change gets a
     // fresh flag with its fresh bitmap state.
-    var skipFirstRender by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf(bitmap != null) }
+    var skipFirstRender by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) { mutableStateOf(bitmap != null) }
     // An animated drawable (GIF / animated WebP pages only).
     // When one is present the bitmap path is skipped entirely:
     // the drawable IS the page, frames and all — a bitmap would
     // freeze it on frame one, which is what the viewer did
     // before this change.
-    var drawable by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf<Drawable?>(null) }
-    var failed by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf(false) }
+    var drawable by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) { mutableStateOf<Drawable?>(null) }
+    var failed by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) { mutableStateOf(false) }
     // The render error itself, shown under the failure text: the
     // old code threw it away (getOrNull), so a phone-only tester
     // could only ever report "it failed" and the cause stayed
     // invisible. The message names the entry and the reason
     // (unreadable image, missing entry, unsupported compression),
     // which is what a screenshot of this screen needs to carry.
-    var failMessage by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableStateOf<String?>(null) }
-    var retry by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableIntStateOf(0) }
+    var failMessage by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) { mutableStateOf<String?>(null) }
+    var retry by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) { mutableIntStateOf(0) }
     // Zoom re-render (ComicScreen's tile refinement,
     // coarse-grained): the pipeline sizes the bitmap to the
     // display width, so a 2x pinch would otherwise just upscale
@@ -835,7 +829,7 @@ internal fun NativePageItem(
     // keys: a re-render must swap the bitmap under the live
     // zoom container (which keeps its scale), not dispose the
     // container and snap the page back to 1x mid-pinch.
-    var renderScale by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) { mutableIntStateOf(1) }
+    var renderScale by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) { mutableIntStateOf(1) }
     // Threshold-guarded: the container reports only the
     // settled scale (once per gesture), and only a threshold
     // crossing re-renders — so a re-render never runs
@@ -894,7 +888,7 @@ internal fun NativePageItem(
         }
     }
 
-    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect, renderScale) {
+    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect, renderScale) {
         // No bitmap/drawable nulling here on purpose: every key
         // above except renderScale is also a remember key, so a
         // page/parameter change already resets the states to
@@ -1032,18 +1026,6 @@ internal fun NativePageItem(
                 val displayWidthPx = (screenWidthPx * renderScale)
                     .let { if (halfSide != 0) it / 2 else it }
                 val resizeTarget: Pair<Int, Int>? = when {
-                    // Horizontal strip: the display size is the
-                    // strip HEIGHT (screen height x re-render
-                    // scale), width follows the aspect — the
-                    // mirror of the vertical strip's width-based
-                    // target below. Checked first: a strip item
-                    // is paged=false, so it would otherwise
-                    // fall into the vertical branch.
-                    horizontalStrip && screenHeightPx > 0 -> {
-                        val displayHeightPx = screenHeightPx * renderScale
-                        (displayHeightPx * current.width / current.height)
-                            .coerceAtLeast(1) to displayHeightPx
-                    }
                     !paged && displayWidthPx > 0 ->
                         displayWidthPx to
                             (displayWidthPx * current.height / current.width)
@@ -1187,7 +1169,7 @@ internal fun NativePageItem(
     // Reading state in onDispose is safe here precisely
     // because the state object, not the value, is what the
     // closure holds.
-    DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, horizontalStrip, manualCropRect) {
+    DisposableEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) {
         onDispose {
             val owned = bitmap
             if (owned != null && !owned.isRecycled) {
@@ -1210,7 +1192,7 @@ internal fun NativePageItem(
     // it from the cross size.
     fun stripCrossDp(shrink: Float): Dp = with(density) {
         stripItemCrossPx(
-            if (horizontalStrip) screenHeightPx.toFloat() else screenWidthPx.toFloat(),
+            screenWidthPx.toFloat(),
             shrink, stripScale
         ).toDp()
     }
@@ -1353,16 +1335,10 @@ internal fun NativePageItem(
                 // ZoomablePageContainer): the sheet's zoom steps
                 // no longer change this display, pinch does.
                 ZoomablePageContainer(
-                    // Horizontal strip: fill the strip height
-                    // instead of the width (see horizontalStrip).
                     // One-canvas: the size is the fit size x
                     // the shared strip scale, so the zoomed
                     // strip stays one continuous box.
-                    modifier = if (horizontalStrip) {
-                        Modifier.requiredHeight(stripCrossDp(shrink)).aspectRatio(ratio)
-                    } else {
-                        Modifier.requiredWidth(stripCrossDp(shrink)).aspectRatio(ratio)
-                    },
+                    modifier = Modifier.requiredWidth(stripCrossDp(shrink)).aspectRatio(ratio),
                     // Animated pages have no bitmap re-render
                     // to trigger, so the settled scale is
                     // reported nowhere: the zoom lives and dies
@@ -1571,16 +1547,10 @@ internal fun NativePageItem(
                 // width by the pipeline above, so fillMaxWidth
                 // draws it 1:1 (up to the padding shrink).
                 ZoomablePageContainer(
-                    // Horizontal strip: fill the strip height
-                    // instead of the width (see horizontalStrip).
                     // One-canvas: the size is the fit size x
                     // the shared strip scale, so the zoomed
                     // strip stays one continuous box.
-                    modifier = if (horizontalStrip) {
-                        Modifier.requiredHeight(stripCrossDp(shrink)).aspectRatio(ratio)
-                    } else {
-                        Modifier.requiredWidth(stripCrossDp(shrink)).aspectRatio(ratio)
-                    },
+                    modifier = Modifier.requiredWidth(stripCrossDp(shrink)).aspectRatio(ratio),
                     sessionKey = sessionKey,
                     zoomPageId = zoomPageId,
                     externalZoomState = externalZoomState,
@@ -1639,7 +1609,7 @@ internal fun NativePageItem(
                 }
             } else {
                 Column(
-                    modifier = (if (horizontalStrip) Modifier.requiredHeight(stripCrossDp(1f)).requiredWidth(200.dp * stripScale) else Modifier.requiredWidth(stripCrossDp(1f)).requiredHeight(200.dp * stripScale))
+                    modifier = Modifier.requiredWidth(stripCrossDp(1f)).requiredHeight(200.dp * stripScale)
                         .background(Color.White),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
@@ -1684,13 +1654,6 @@ internal fun NativePageItem(
             Box(
                 modifier = (if (paged) {
                     Modifier.fillMaxSize()
-                } else if (horizontalStrip) {
-                    if (effectiveRatio != null) {
-                        Modifier.requiredHeight(stripCrossDp(placeholderShrink))
-                            .aspectRatio(effectiveRatio)
-                    } else {
-                        Modifier.requiredHeight(stripCrossDp(1f)).requiredWidth(200.dp * stripScale)
-                    }
                 } else {
                     if (effectiveRatio != null) {
                         Modifier.requiredWidth(stripCrossDp(placeholderShrink))

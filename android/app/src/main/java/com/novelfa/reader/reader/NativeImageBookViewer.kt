@@ -377,13 +377,11 @@ internal fun NativeImageBookViewer(
     val savedModeKey by prefs.readingMode.collectAsState(initial = "paged")
     val comicModeKey by prefs.comicReadingMode.collectAsState(initial = null)
     // Comic mode: the comic viewer's own key, falling back to
-    // the shared key while unset (see PrefsStore: comics have
-    // three modes now, the EPUB reader understands two, and
-    // sharing one key would make the EPUB reader misbehave in
-    // horizontal-strip mode).
+    // the shared key while unset (see PrefsStore). A stale
+    // saved "horizontal" value (the removed strip mode) falls
+    // back to paged in fromKey, so no migration is needed.
     val modeNow = ReadingMode.fromKey(comicModeKey ?: savedModeKey)
     val isPaged = modeNow == ReadingMode.PAGED_HORIZONTAL
-    val isHorizontalStrip = modeNow == ReadingMode.HORIZONTAL_STRIP
     // Per-book viewer extras (bookmarks, exact strip offset),
     // kept out of Room on purpose — see ReaderExtrasStore.
     val extras = remember(context.applicationContext) {
@@ -549,7 +547,6 @@ internal fun NativeImageBookViewer(
         if (dualPage && dualPairs != null) dualPairs!!.size else pageCount
 
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
-    val rowState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
     // One-canvas strip zoom (2026-11-05): ONE shared state for
     // the whole strip — scale + shared cross-axis pan — and one
     // settled scale for every page's sharp re-render. The zoom
@@ -712,10 +709,7 @@ internal fun NativeImageBookViewer(
     // restore must not read currentPage after the flip — it would
     // read 0 and lose the place).
     var pendingModeTarget by remember { mutableStateOf<Int?>(null) }
-    // Keys include isHorizontalStrip: vertical -> horizontal
-    // keeps isPaged false, so without it the effect would not
-    // restart and the new strip would sit at page 0.
-    LaunchedEffect(pageCount, isPaged, isHorizontalStrip) {
+    LaunchedEffect(pageCount, isPaged) {
         if (pageCount <= 0) return@LaunchedEffect
         val target = pendingModeTarget?.also { pendingModeTarget = null }
             ?: if (!restoredPage) {
@@ -741,18 +735,13 @@ internal fun NativeImageBookViewer(
             } else {
                 // Exact strip offset (ComicScreen's fractional
                 // page offset): the strip lands where it was,
-                // not at the top of the page. The offset key is
-                // shared by both strips — an out-of-range pixel
-                // offset simply clamps, so a mode switch cannot
-                // break the landing.
+                // not at the top of the page. An out-of-range
+                // pixel offset simply clamps, so a mode switch
+                // cannot break the landing.
                 val offset = runCatching {
                     extras.scrollOffset(book.id).first()
                 }.getOrDefault(0)
-                if (isHorizontalStrip) {
-                    runCatching { rowState.scrollToItem(target, offset) }
-                } else {
-                    runCatching { listState.scrollToItem(target, offset) }
-                }
+                runCatching { listState.scrollToItem(target, offset) }
             }
         }
     }
@@ -789,7 +778,7 @@ internal fun NativeImageBookViewer(
     // already holds it. Accepting it would, on a dual toggle,
     // save the transient pair index as a page number before the
     // correction effect below lands the pager on the right pair.
-    LaunchedEffect(listState, rowState, pagerState, pageCount, isPaged, isHorizontalStrip, dualPage, dualPairs) {
+    LaunchedEffect(listState, pagerState, pageCount, isPaged, dualPage, dualPairs) {
         if (pageCount <= 0) return@LaunchedEffect
         var first = true
         if (isPaged) {
@@ -809,14 +798,12 @@ internal fun NativeImageBookViewer(
                 }
             }
         } else {
-            // Both strips track the same way; the active one
-            // also saves its exact scroll offset, so a close
-            // mid-page restores mid-page (see the restore
-            // effect). Offset saves ride the page-change rate
-            // — one DataStore edit per page, never per frame.
-            val active = if (isHorizontalStrip) rowState else listState
+            // The strip also saves its exact scroll offset, so
+            // a close mid-page restores mid-page (see the
+            // restore effect). Offset saves ride the page-change
+            // rate — one DataStore edit per page, never per frame.
             snapshotFlow {
-                active.firstVisibleItemIndex to active.firstVisibleItemScrollOffset
+                listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
             }.collect { (page, offset) ->
                 if (first) {
                     first = false
@@ -840,14 +827,13 @@ internal fun NativeImageBookViewer(
     // offset changes every scroll frame, so the flow emits
     // continuously while scrolling and the size read is fresh.
     var stripPosition by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(listState, rowState, isHorizontalStrip, pageCount) {
+    LaunchedEffect(listState, pageCount) {
         if (pageCount <= 0) return@LaunchedEffect
-        val active = if (isHorizontalStrip) rowState else listState
         snapshotFlow {
-            active.firstVisibleItemIndex to active.firstVisibleItemScrollOffset
+            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
         }.collect { (index, offset) ->
             val first = index.coerceIn(0, pageCount - 1)
-            val info = active.layoutInfo.visibleItemsInfo
+            val info = listState.layoutInfo.visibleItemsInfo
                 .firstOrNull { it.index == first }
             val fraction = if (info != null && info.size > 0) {
                 (offset.toFloat() / info.size).coerceIn(0f, 1f)
@@ -894,26 +880,21 @@ internal fun NativeImageBookViewer(
             }
             savePage(currentPage, force = true)
             if (!isPaged) {
-                val offset = if (isHorizontalStrip) {
-                    rowState.firstVisibleItemScrollOffset
-                } else {
-                    listState.firstVisibleItemScrollOffset
-                }
+                val offset = listState.firstVisibleItemScrollOffset
                 runCatching { extras.setScrollOffset(book.id, offset) }
             }
             onClose()
         }
     }
 
-    // Top-bar icon cycles all three modes (paged -> vertical
-    // strip -> horizontal strip -> paged); the sheet rows pick
-    // one directly through setMode below. Both write the
-    // comic viewer's own key, never the shared EPUB key.
+    // Top-bar icon cycles both modes (paged -> vertical strip
+    // -> paged); the sheet rows pick one directly through
+    // setMode below. Both write the comic viewer's own key,
+    // never the shared EPUB key.
     fun toggleMode() {
         val next = when (modeNow) {
             ReadingMode.PAGED_HORIZONTAL -> ReadingMode.CONTINUOUS_VERTICAL
-            ReadingMode.CONTINUOUS_VERTICAL -> ReadingMode.HORIZONTAL_STRIP
-            ReadingMode.HORIZONTAL_STRIP -> ReadingMode.PAGED_HORIZONTAL
+            ReadingMode.CONTINUOUS_VERTICAL -> ReadingMode.PAGED_HORIZONTAL
         }
         pendingModeTarget = currentPage
         scope.launch {
@@ -961,11 +942,6 @@ internal fun NativeImageBookViewer(
                     if (animate) pagerState.animateScrollToPage(pagerTarget)
                     else pagerState.scrollToPage(pagerTarget)
                 }
-            } else if (isHorizontalStrip) {
-                runCatching {
-                    if (animate) rowState.animateScrollToItem(target)
-                    else rowState.scrollToItem(target)
-                }
             } else {
                 runCatching {
                     if (animate) listState.animateScrollToItem(target)
@@ -993,8 +969,6 @@ internal fun NativeImageBookViewer(
                 } else {
                     runCatching { pagerState.animateScrollToPage(target) }
                 }
-            } else if (isHorizontalStrip) {
-                runCatching { rowState.scrollToItem(target) }
             } else {
                 runCatching { listState.scrollToItem(target) }
             }
@@ -1455,77 +1429,6 @@ internal fun NativeImageBookViewer(
                     }
                 }
             }
-            isHorizontalStrip -> {
-                val activeSource = source!!
-                // ComicScreen's horizontal strip: the mirror of
-                // the vertical one — each page fills the strip
-                // HEIGHT, pages sit side by side, no vertical
-                // scroll. Laid out in the book's direction (see
-                // the dual-pair provider above), so an RTL book
-                // starts on the right. Pinch zoom and pan live
-                // on the page itself, like the vertical strip.
-                CompositionLocalProvider(
-                    LocalLayoutDirection provides pairDirection
-                ) {
-                    // One host per strip (not per page): every
-                    // strip item reads the same one.
-                    val stripHost = StripZoomHost(
-                        rowState, horizontal = true,
-                        screenWidthPx.toFloat(), screenHeightPx.toFloat(),
-                        stripFitFraction
-                    )
-                    LazyRow(
-                        state = rowState,
-                        modifier = Modifier.fillMaxSize()
-                            .background(pageBg)
-                            .stripPinchDetector(
-                                stripZoomState, stripSettledZoom, rowState, horizontal = true,
-                                screenWidthPx.toFloat(), screenHeightPx.toFloat(),
-                                stripFitFraction
-                            ),
-                        verticalAlignment = Alignment.CenterVertically,
-                        // No gap: ComicScreen's strip pages touch.
-                        // The old 8.dp showed as a dark strip
-                        // between every two pages.
-                        horizontalArrangement = Arrangement.spacedBy(0.dp)
-                    ) {
-                        items(pageCount) { page ->
-                            NativePageItem(
-                                source = activeSource,
-                                page = page,
-                                renderWidthPx = renderWidthPx,
-                                paged = false,
-                                zoomFactor = zoomFactors[zoomIndex],
-                                cropMargin = cutMargin,
-                                cropPadH = cropPadH,
-                                cropPadV = cropPadV,
-                                paddingRatio = paddingRatio,
-                                pageBg = pageBg,
-                                screenWidthPx = screenWidthPx,
-                                screenHeightPx = screenHeightPx,
-                                fitMode = fitMode,
-                                sharpen = sharpen,
-                                sharpenLevel = sharpenLevel,
-                                upscaleMode = upscaleMode,
-                                filterGray = filterGray,
-                                filterContrast = filterContrast,
-                                filterInvert = filterInvert,
-                                viewRotation = viewRotation,
-                                manualCropRect = manualCropRects[page],
-                                horizontalStrip = true,
-                                onTap = { handlePageTap() },
-                                onDoubleTap = { tapSuppress = true },
-                                sessionKey = book.id,
-                                zoomPageId = "strip-$page",
-                                externalZoomState = stripZoomState,
-                                externalSettledZoom = stripSettledZoom,
-                                stripHost = stripHost,
-                                bitmapCache = pageBitmapCache
-                            )
-                        }
-                    }
-                }
-            }
             else -> {
                 val activeSource = source!!
                 // One host per strip (not per page): every
@@ -1663,11 +1566,8 @@ internal fun NativeImageBookViewer(
                             // not composable, so the label is resolved
                             // here, never hardcoded.)
                             val modeDescription = stringResource(
-                                when {
-                                    isPaged -> R.string.mode_horizontal
-                                    isHorizontalStrip -> R.string.mode_horizontal_continuous
-                                    else -> R.string.mode_vertical_continuous
-                                }
+                                if (isPaged) R.string.mode_horizontal
+                                else R.string.mode_vertical_continuous
                             )
                             IconButton(
                                 onClick = { toggleMode() },
@@ -1676,11 +1576,7 @@ internal fun NativeImageBookViewer(
                                 }
                             ) {
                                 AppIcon(
-                                    when {
-                                        isPaged -> AppIconKind.Pages
-                                        isHorizontalStrip -> AppIconKind.HorizontalScroll
-                                        else -> AppIconKind.Scroll
-                                    },
+                                    if (isPaged) AppIconKind.Pages else AppIconKind.Scroll,
                                     tint = LocalContentColor.current,
                                     size = 19.dp
                                 )
@@ -2296,14 +2192,8 @@ internal fun NativeImageBookViewer(
                     SheetChoiceRow(
                         icon = AppIconKind.Scroll,
                         label = stringResource(R.string.mode_vertical_continuous),
-                        selected = !isPaged && !isHorizontalStrip,
+                        selected = !isPaged,
                         onClick = { setMode(ReadingMode.CONTINUOUS_VERTICAL) }
-                    )
-                    SheetChoiceRow(
-                        icon = AppIconKind.HorizontalScroll,
-                        label = stringResource(R.string.mode_horizontal_continuous),
-                        selected = isHorizontalStrip,
-                        onClick = { setMode(ReadingMode.HORIZONTAL_STRIP) }
                     )
                 }
                 // Dual page (ComicScreen's 2p view): two pages
@@ -2585,7 +2475,6 @@ internal fun NativeImageBookViewer(
                             scope.launch { prefs.setComicPageMargin(v.toInt()) }
                         },
                         valueRange = 0f..40f,
-                        steps = 39,
                         enabled = paddingEnabled,
                         modifier = Modifier.weight(1f)
                     )

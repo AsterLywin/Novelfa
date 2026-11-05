@@ -43,14 +43,7 @@ import kotlinx.coroutines.Dispatchers
  */
 enum class ReadingMode(val key: String) {
     PAGED_HORIZONTAL("paged"),
-    CONTINUOUS_VERTICAL("continuous"),
-    // Comics only (the native viewer): a horizontal strip, one
-    // page after the other sideways. The EPUB reader does not
-    // understand it — its binary paged/continuous checks treat
-    // it as "not paged" — which is why the comic viewer keeps
-    // its own mode key (COMIC_READING_MODE) instead of sharing
-    // this enum's key with the EPUB reader.
-    HORIZONTAL_STRIP("horizontal");
+    CONTINUOUS_VERTICAL("continuous");
 
     companion object {
         fun fromKey(key: String?): ReadingMode =
