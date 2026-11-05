@@ -29,7 +29,7 @@ android {
     // Size (2026-11-04): keep only the app's UI locales — library
     // resources for every other locale are dropped from the APK.
     // The unqualified values/ defaults are always kept.
-    defaultConfig { applicationId = "com.novelfa.reader"; minSdk = 29; targetSdk = 35; versionCode = 8; versionName = "1.0.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"; resourceConfigurations += "en"; resourceConfigurations += "fa"; ndk { abiFilters += "arm64-v8a"; abiFilters += "armeabi-v7a" } }
+    defaultConfig { applicationId = "com.novelfa.reader"; minSdk = 29; targetSdk = 35; versionCode = 9; versionName = "1.0.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"; resourceConfigurations += "en"; resourceConfigurations += "fa"; ndk { abiFilters += "arm64-v8a"; abiFilters += "armeabi-v7a" } }
     if (releaseKeystorePath != null) {
         signingConfigs {
             create("release") {
