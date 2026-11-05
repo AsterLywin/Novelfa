@@ -5,9 +5,10 @@ package com.novelfa.reader.reader
  *
  * This is the per-page zoom model: each page (more precisely, each
  * page box — a dual-page split's two halves are two boxes of one
- * page) owns one of these in the pager; strip boxes share one of
- * these for the whole strip (see ZoomablePageContainer). The state
- * is deliberately NOT persisted: it never goes
+ * page) owns one of these in the pager; strip boxes each own one
+ * too, held in the viewer's per-page registry (see
+ * ZoomablePageContainer) — ComicScreen's method, so zooming one
+ * strip page never moves another. The state is deliberately NOT
  * into the database, DataStore, backup or reading progress.
  * [pageId] is a session-scoped label only ("pager-3-half-0",
  * "strip-12") — it identifies the box inside one reader session

@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -74,6 +75,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -199,21 +201,83 @@ private fun hashFromSourceUri(context: Context, sourceUri: String?): String? {
  * settled scale once, so every strip page crosses the sharp
  * re-render threshold together.
  */
+/**
+ * Per-page zoom state for one strip page (ComicScreen's
+ * method — see the header note in ZoomableImage): the page's
+ * own finger-zoom state plus the settled scale its sharp
+ * re-render threshold reads. One holder per page, owned by
+ * the viewer's per-book registry, so the strip detector can
+ * route a straddle pinch to the first finger's page.
+ */
+private class StripPageZoom(
+    val zoomState: MutableState<PageZoomState>,
+    val settledZoom: MutableFloatState
+)
+
+/**
+ * Strip pinch routing (ComicScreen's method): the strip-level
+ * detector owns every strip pinch — a box only ever sees one
+ * finger of a straddle pinch, so the boxes alone can never
+ * pinch across two pages — but it writes to ONE page's state,
+ * the page under the FIRST finger (ComicScreen's own routing:
+ * the touch target is the first down's view). Each page keeps
+ * its own zoom, its own focal math in its own box
+ * coordinates, and its own bounds clamp, so neighbouring
+ * pages never move and can never be pulled into each other.
+ *
+ * The target is resolved once, at pinch start, from the list
+ * layout (the visible item whose main-axis span contains the
+ * first finger) and locked for the gesture; the focal point
+ * is then the centroid in THAT page's box coordinates. On
+ * the main axis the box origin is the item's list offset; on
+ * the cross axis the boxes are centred in the viewport, so
+ * the focal term there is the finger minus the viewport
+ * centre (the box's own cross-axis size never enters it).
+ * The clamp box is the target box on the main axis and the
+ * viewport on the cross axis — the box's own display clamp
+ * re-bounds the rendered offset to the true box, so the
+ * looseness on the cross axis only ever affects the
+ * intermediate value, never what is drawn.
+ */
 private fun Modifier.stripPinchDetector(
-    zoomState: MutableState<PageZoomState>,
-    settledZoom: MutableFloatState,
+    stripZooms: MutableMap<Int, StripPageZoom>,
+    listState: LazyListState,
+    horizontal: Boolean,
     viewportWidthPx: Float,
     viewportHeightPx: Float
-): Modifier = pointerInput(zoomState, settledZoom, viewportWidthPx, viewportHeightPx) {
+): Modifier = pointerInput(stripZooms, listState, horizontal, viewportWidthPx, viewportHeightPx) {
     // awaitPointerEvent is a member of AwaitPointerEventScope,
     // not of PointerInputScope, so the loop lives inside this
     // scope (same pattern as the box loop in ZoomableImage).
     awaitPointerEventScope {
     var pinching = false
+    var target: StripPageZoom? = null
+    // The target page's box geometry, resolved at pinch
+    // start: main-axis offset and size of its list item.
+    var boxOriginMain = 0f
+    var boxSizeMain = 0f
     var prevCentroid = Offset.Zero
     var pinchStartScale = 1f
     var pinchStartSpan = 0f
     var pinchSmoothSpan = 0f
+    // The page holding a strip point, from the list layout:
+    // the visible item whose main-axis span contains it.
+    // Null when the point is on no page (past the last item,
+    // or the list has no layout yet) — then no pinch starts.
+    fun pageAt(mainPos: Float): Int? {
+        val info = listState.layoutInfo.visibleItemsInfo
+        for (item in info) {
+            val start = item.offset.toFloat()
+            val end = start + item.size.toFloat()
+            if (mainPos >= start && mainPos < end) return item.index
+        }
+        return null
+    }
+    fun boxGeometry(page: Int): Pair<Float, Float>? {
+        val item = listState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.index == page } ?: return null
+        return item.offset.toFloat() to item.size.toFloat()
+    }
     while (true) {
         val event = awaitPointerEvent(PointerEventPass.Initial)
         val pressed = event.changes.filter { it.pressed }.sortedBy { it.id.value }
@@ -223,9 +287,19 @@ private fun Modifier.stripPinchDetector(
             val centroid = (c1 + c2) / 2f
             val distance = (c1 - c2).getDistance()
             if (!pinching) {
+                // Route once, to the first finger's page, and
+                // lock it for the gesture (ComicScreen's touch
+                // target never moves mid-gesture either).
+                val mainPos = if (horizontal) c1.x else c1.y
+                val page = pageAt(mainPos) ?: continue
+                val holder = stripZooms[page] ?: continue
+                val (origin, size) = boxGeometry(page) ?: continue
+                target = holder
+                boxOriginMain = origin
+                boxSizeMain = size
                 pinching = true
                 prevCentroid = centroid
-                pinchStartScale = zoomState.value.scale
+                pinchStartScale = holder.zoomState.value.scale
                 pinchStartSpan = distance
                 pinchSmoothSpan = distance
             } else if (distance < MIN_PINCH_SPAN_PX) {
@@ -233,18 +307,43 @@ private fun Modifier.stripPinchDetector(
                 // scale and re-base the gesture reference at
                 // the floor (see the box pinch loop), so
                 // crossing it again resumes continuously.
-                pinchStartScale = zoomState.value.scale
+                val t = target ?: continue
+                pinchStartScale = t.zoomState.value.scale
                 pinchStartSpan = MIN_PINCH_SPAN_PX
                 pinchSmoothSpan = distance
                 prevCentroid = centroid
                 pressed.forEach { it.consume() }
             } else {
+                val t = target ?: continue
                 pinchSmoothSpan = smoothPinchSpan(pinchSmoothSpan, distance)
                 val newScale = pinchTargetScale(
                     pinchStartScale, pinchStartSpan, pinchSmoothSpan
                 )
-                val center = Offset(viewportWidthPx / 2f, viewportHeightPx / 2f)
-                val cur = zoomState.value
+                val cur = t.zoomState.value
+                // Focal math in the TARGET page's box
+                // coordinates. Only the (focal - centre)
+                // difference enters the formula, so on the
+                // cross axis the focal value is the finger
+                // itself and the centre is the viewport
+                // centre — their difference is exactly the
+                // finger's distance from the (centred) box
+                // centre. On the main axis both are exact
+                // box coordinates from the list layout.
+                val focal: Offset
+                val center: Offset
+                val boxW: Float
+                val boxH: Float
+                if (horizontal) {
+                    focal = Offset(centroid.x - boxOriginMain, centroid.y)
+                    center = Offset(boxSizeMain / 2f, viewportHeightPx / 2f)
+                    boxW = boxSizeMain
+                    boxH = viewportHeightPx
+                } else {
+                    focal = Offset(centroid.x, centroid.y - boxOriginMain)
+                    center = Offset(viewportWidthPx / 2f, boxSizeMain / 2f)
+                    boxW = viewportWidthPx
+                    boxH = boxSizeMain
+                }
                 // Same focal math as the box pinch: pan by the
                 // centroid move, then zoom around the new
                 // centroid, so the content point under the
@@ -252,17 +351,21 @@ private fun Modifier.stripPinchDetector(
                 val (newX, newY) = focalPan(
                     cur.scale, cur.offsetX, cur.offsetY,
                     centroid.x - prevCentroid.x, centroid.y - prevCentroid.y,
-                    newScale, centroid.x, centroid.y,
-                    center.x, center.y, viewportWidthPx, viewportHeightPx
+                    newScale, focal.x, focal.y,
+                    center.x, center.y, boxW, boxH
                 )
-                zoomState.value = cur.copy(scale = newScale, offsetX = newX, offsetY = newY)
+                t.zoomState.value = cur.copy(scale = newScale, offsetX = newX, offsetY = newY)
                 prevCentroid = centroid
                 pressed.forEach { it.consume() }
             }
         } else if (pinching) {
             pinching = false
-            val settled = zoomState.value.scale
-            if (settledZoom.floatValue != settled) settledZoom.floatValue = settled
+            val t = target
+            if (t != null) {
+                val settled = t.zoomState.value.scale
+                if (t.settledZoom.floatValue != settled) t.settledZoom.floatValue = settled
+            }
+            target = null
         }
     }
     }
@@ -471,18 +574,24 @@ internal fun NativeImageBookViewer(
 
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
     val rowState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
-    // Strip-shared finger zoom (see ZoomablePageContainer):
-    // one zoom state for the whole strip — a pinch on any
-    // strip page zooms every page together, and the pan is
-    // one shared offset, so the strip moves as a single
-    // canvas instead of each page zooming alone (2026-11-05:
-    // vertical-strip zoom was uncoordinated and pages were
-    // dragged against each other). Paged mode keeps its own
-    // per-box states and is untouched. The settled holder
-    // publishes the gesture-end scale so every visible strip
-    // page crosses the sharp re-render threshold together.
-    val stripZoomState = remember(book.id) { mutableStateOf(PageZoomState(pageId = "strip")) }
-    val stripSettledZoom = remember(book.id) { mutableFloatStateOf(1f) }
+    // Strip finger zoom, ComicScreen's method (see
+    // ZoomablePageContainer): one zoom state PER strip page,
+    // held in this per-book registry — the old single shared
+    // state (2026-11-05) made every page pivot around its own
+    // centre while the focal math ran in viewport geometry, so
+    // the pages crowded toward every boundary ("pulled into
+    // each other" on vc7). The registry lets the strip
+    // detector route a straddle pinch to the first finger's
+    // page, and each page keeps its own zoom. Paged mode keeps
+    // its own per-box states and is untouched.
+    val stripZoomRegistry = remember(book.id) { mutableStateMapOf<Int, StripPageZoom>() }
+    fun stripPageZoom(page: Int): StripPageZoom =
+        stripZoomRegistry.getOrPut(page) {
+            StripPageZoom(
+                mutableStateOf(PageZoomState(pageId = "strip-$page")),
+                mutableFloatStateOf(1f)
+            )
+        }
     val pagerState = rememberPagerState(
         initialPage = initialPage,
         pageCount = { pagerPageCount }
@@ -1387,7 +1496,7 @@ internal fun NativeImageBookViewer(
                         modifier = Modifier.fillMaxSize()
                             .background(pageBg)
                             .stripPinchDetector(
-                                stripZoomState, stripSettledZoom,
+                                stripZoomRegistry, rowState, horizontal = true,
                                 screenWidthPx.toFloat(), screenHeightPx.toFloat()
                             ),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1397,6 +1506,7 @@ internal fun NativeImageBookViewer(
                         horizontalArrangement = Arrangement.spacedBy(0.dp)
                     ) {
                         items(pageCount) { page ->
+                            val pageZoom = stripPageZoom(page)
                             NativePageItem(
                                 source = activeSource,
                                 page = page,
@@ -1424,8 +1534,8 @@ internal fun NativeImageBookViewer(
                                 onDoubleTap = { tapSuppress = true },
                                 sessionKey = book.id,
                                 zoomPageId = "strip-$page",
-                                sharedZoomState = stripZoomState,
-                                sharedSettledZoom = stripSettledZoom,
+                                externalZoomState = pageZoom.zoomState,
+                                externalSettledZoom = pageZoom.settledZoom,
                                 bitmapCache = pageBitmapCache
                             )
                         }
@@ -1439,7 +1549,7 @@ internal fun NativeImageBookViewer(
                     modifier = Modifier.fillMaxSize()
                         .background(pageBg)
                         .stripPinchDetector(
-                            stripZoomState, stripSettledZoom,
+                            stripZoomRegistry, listState, horizontal = false,
                             screenWidthPx.toFloat(), screenHeightPx.toFloat()
                         ),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -1449,6 +1559,7 @@ internal fun NativeImageBookViewer(
                     verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
                     items(pageCount) { page ->
+                        val pageZoom = stripPageZoom(page)
                         NativePageItem(
                             source = activeSource,
                             page = page,
@@ -1475,8 +1586,8 @@ internal fun NativeImageBookViewer(
                             onDoubleTap = { tapSuppress = true },
                             sessionKey = book.id,
                             zoomPageId = "strip-$page",
-                            sharedZoomState = stripZoomState,
-                            sharedSettledZoom = stripSettledZoom,
+                            externalZoomState = pageZoom.zoomState,
+                            externalSettledZoom = pageZoom.settledZoom,
                             bitmapCache = pageBitmapCache
                         )
                     }

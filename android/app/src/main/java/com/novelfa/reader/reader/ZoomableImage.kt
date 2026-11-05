@@ -34,22 +34,28 @@ import androidx.compose.ui.unit.IntSize
  *   its touch area is exactly its visible area. The old version
  *   had no clip: a zoomed page drew beyond its box and its
  *   overflow belonged, for touch, to the neighbouring items.
- * - The zoom is per page box in the pager, shared in strips.
- *   A paged container owns its own PageZoomState (scale + pan),
- *   keyed by sessionKey + zoomPageId, so zooming one page
- *   leaves every other page exactly as it was, and the zoom
- *   resets when the displayed page changes. A strip item
- *   instead uses the one shared state the viewer passes in:
- *   a pinch on any strip page zooms every page together, and
- *   the pan is one shared offset, so the strip moves as a
- *   single canvas. The 2026-11-03 order required per-page
- *   independence in strips too, but on the phone that left
- *   each strip page zooming alone, uncoordinated, and pages
- *   were dragged against each other (2026-11-05) — a vertical
- *   comic strip is one continuous scroll, so its zoom must be
- *   one zoom. There is still no global zoom for the whole
- *   book: the 32bb0313 decision (one scale kept across page
- *   turns) stays reversed.
+ * - The zoom is per page box, everywhere — ComicScreen's
+ *   method. A paged container owns its own PageZoomState
+ *   (scale + pan), keyed by sessionKey + zoomPageId, so
+ *   zooming one page leaves every other page exactly as it
+ *   was, and the zoom resets when the displayed page changes.
+ *   A strip item renders the per-page state the viewer owns
+ *   for it (passed in as externalZoomState): a pinch zooms
+ *   only the page under the fingers, around the pinch focal
+ *   point in that page's own box coordinates, and the pan is
+ *   clamped to that box — so neighbouring pages never move
+ *   and can never be pulled into each other. A single shared
+ *   state for the whole strip was tried on 2026-11-05
+ *   (cfa4beaf + 1a143f8c): it made every page pivot around
+ *   its own centre while the focal math ran in viewport
+ *   geometry, so the content on both sides of every page
+ *   boundary crowded toward that boundary — the "pulled into
+ *   each other" the phone showed on vc7. The shared zoom is
+ *   therefore gone; the strip detector now routes a straddle
+ *   pinch to the first finger's page (ComicScreen's own
+ *   routing), and each page zooms on its own. There is still
+ *   no global zoom for the whole book: the 32bb0313 decision
+ *   (one scale kept across page turns) stays reversed.
  * - Paged reset. The viewer passes the displayed pager item as
  *   activeSlotKey and each box its own slotKey. When they differ
  *   the box is no longer displayed, so it resets to 1x with zero
@@ -57,7 +63,7 @@ import androidx.compose.ui.unit.IntSize
  *   to 1x too). The reset is tied to the real page change, not
  *   to scroll offsets: a partial swipe that settles back resets
  *   nothing. In strips both keys are null and no auto-reset
- *   happens — the strip keeps its shared zoom instead.
+ *   happens — the strip keeps each page's own zoom instead.
  * - Gesture arbitration, paged vs strip. At 1x a drag is never
  *   consumed, so the pager turns / the list scrolls as before.
  *   While zoomed, a drag pans. In strips (edgeHandoff = true)
@@ -153,12 +159,13 @@ fun ZoomablePageContainer(
     // PageZoomState): "pager-3-half-0", "strip-12". Never
     // persisted anywhere.
     zoomPageId: String = "",
-    // Strip-shared zoom state, passed in by the viewer (one
-    // state for the whole strip — see the header note). Null
-    // = this box owns its own state (paged mode). With a
-    // shared state this box never pinches on its own: the
-    // strip-level detector owns every strip pinch.
-    sharedZoomState: MutableState<PageZoomState>? = null,
+    // Externally-owned zoom state, passed in by the viewer
+    // (one state per strip page, held in its per-book
+    // registry — see the header note). Null = this box owns
+    // its own state (paged mode). With an external state this
+    // box never pinches on its own: the strip-level detector
+    // owns every strip pinch and routes it to one page.
+    externalZoomState: MutableState<PageZoomState>? = null,
     // Edge handover: true in strips (a drag at the pan edge
     // scrolls the list), false in the pager (a drag at the
     // pan edge is consumed, so the pager never turns from
@@ -203,7 +210,7 @@ fun ZoomablePageContainer(
     // composable LaunchedEffect (where Animatable IS allowed),
     // driven by zoomAnimTarget state the loop only sets.
     // The box's own state (paged mode). Strips pass a shared
-    // state instead (see sharedZoomState above): the box's own
+    // state instead (see externalZoomState above): the box's own
     // state is still remembered unconditionally — a trivial
     // object — so the remember call order never depends on
     // which branch is taken. (A local var with custom
@@ -217,7 +224,7 @@ fun ZoomablePageContainer(
     // read and write below goes through here, so the gesture
     // loop, the double-tap animation and the reset all work
     // on the shared state in strips without knowing it.
-    val zoomStateHolder = sharedZoomState ?: ownZoomState
+    val zoomStateHolder = externalZoomState ?: ownZoomState
     var zoomState by zoomStateHolder
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
     var zoomAnimTarget by remember(sessionKey, zoomPageId) {
@@ -390,15 +397,16 @@ fun ZoomablePageContainer(
                             // its own — the strip-level detector
                             // (see the viewer) owns EVERY strip
                             // pinch, including one whose fingers
-                            // straddle two pages, so the shared
-                            // scale would be zoomed twice per
-                            // frame if this branch ran too. Just
-                            // mark the gesture as a drag, so no
-                            // tap is reported for it when the
+                            // straddle two pages, and routes it
+                            // to the first finger's page — so this
+                            // page's scale would be zoomed twice
+                            // per frame if this branch ran too.
+                            // Just mark the gesture as a drag, so
+                            // no tap is reported for it when the
                             // fingers lift, and let the detector
                             // handle the moves. Paged mode has no
-                            // shared state and pinches here.
-                            if (sharedZoomState != null) {
+                            // external state and pinches here.
+                            if (externalZoomState != null) {
                                 pastSlop = true
                                 continue
                             }

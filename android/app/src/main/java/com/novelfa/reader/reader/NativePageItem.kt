@@ -724,29 +724,33 @@ internal fun NativePageItem(
     onTap: () -> Unit = {},
     onDoubleTap: () -> Unit = {},
     // Per-page-box finger zoom (see ZoomablePageContainer):
-    // a paged box owns its own zoom state; strip boxes share
-    // one state for the whole strip, passed in below as
-    // sharedZoomState (with sharedSettledZoom publishing the
-    // gesture-end scale, so every strip page crosses the sharp
-    // re-render threshold together). Nothing is reported back
-    // to the viewer as a global scale. The viewer passes the
-    // identity keys below: sessionKey drops the state when the
-    // reader's content changes, slotKey/activeSlotKey drive
-    // the paged reset (both null in strips, where no
-    // auto-reset applies), zoomPageId labels the box inside
-    // this session. Defaults keep old callers compiling.
+    // every box owns its own zoom state — a paged box remembers
+    // its own, and a strip box renders the per-page state the
+    // viewer owns for it (passed in below as externalZoomState,
+    // with externalSettledZoom publishing the gesture-end
+    // scale for its sharp re-render threshold). ComicScreen's
+    // method: zoom is per page, never shared across the strip,
+    // so zooming one page never moves another page. Nothing is
+    // reported back to the viewer as a global scale. The viewer
+    // passes the identity keys below: sessionKey drops the
+    // state when the reader's content changes,
+    // slotKey/activeSlotKey drive the paged reset (both null in
+    // strips, where no auto-reset applies), zoomPageId labels
+    // the box inside this session. Defaults keep old callers
+    // compiling.
     sessionKey: Any? = null,
     slotKey: Int? = null,
     activeSlotKey: Int? = null,
     zoomPageId: String = "",
-    // Strip-shared finger zoom (see ZoomablePageContainer):
-    // the viewer passes one shared PageZoomState for the whole
-    // strip, so a pinch zooms every strip page together
-    // instead of one page alone. Null = per-box zoom (paged
-    // mode, unchanged). sharedSettledZoom publishes the
-    // gesture-end scale for the strip (see onPinchScale below).
-    sharedZoomState: MutableState<PageZoomState>? = null,
-    sharedSettledZoom: MutableFloatState? = null,
+    // Strip finger zoom (see ZoomablePageContainer): the viewer
+    // passes this page's own PageZoomState (one per page, held
+    // in its per-book registry — the strip detector routes a
+    // straddle pinch to the first finger's page). Null =
+    // per-box zoom (paged mode, unchanged).
+    // externalSettledZoom publishes this page's gesture-end
+    // scale (see onPinchScale below).
+    externalZoomState: MutableState<PageZoomState>? = null,
+    externalSettledZoom: MutableFloatState? = null,
     // The viewer's page-return park (see
     // NativePageBitmapCache). Null = today's behaviour exactly:
     // render on compose, recycle on dispose, no parking.
@@ -815,25 +819,27 @@ internal fun NativePageItem(
         } else if (s < 1.25f && renderScale != 1) {
             renderScale = 1
         }
-        // Strip: publish the settled scale (this callback only
-        // ever fires at gesture end, never mid-pinch) so every
-        // other strip page crosses the threshold together —
-        // otherwise only the page actually pinched would go
-        // sharp while its neighbours stay soft at the same
-        // zoom. Guarded against no-change writes, so the
+        // Strip: publish this page's settled scale (this
+        // callback only ever fires at gesture end, never
+        // mid-pinch) to its own settled holder, so a page that
+        // only just composed while already zoomed decodes sharp
+        // from the start instead of staying soft until first
+        // touched. Guarded against no-change writes, so the
         // observing effect below can never loop back here.
-        sharedSettledZoom?.let { if (it.floatValue != s) it.floatValue = s }
+        // Neighbouring pages are untouched: each page settles
+        // on its own (ComicScreen's method).
+        externalSettledZoom?.let { if (it.floatValue != s) it.floatValue = s }
     }
-    // Strip-shared settled scale: when a pinch on ANY page
-    // ends, this item crosses the sharp re-render threshold
-    // together with it — including pages that only just
-    // composed while the strip was already zoomed, which
-    // then decode sharp from the start instead of staying
-    // soft until first touched. Keyed on the settled holder
-    // only, so a mid-pinch scale never re-renders anything.
-    val settledStripScale = sharedSettledZoom?.floatValue
-    LaunchedEffect(settledStripScale) {
-        if (settledStripScale != null) onPinchScale(settledStripScale)
+    // This page's settled scale: when its pinch ends, this
+    // item crosses the sharp re-render threshold — including
+    // a page that only just composed while already zoomed,
+    // which then decodes sharp from the start instead of
+    // staying soft until first touched. Keyed on the settled
+    // holder only, so a mid-pinch scale never re-renders
+    // anything.
+    val settledPageScale = externalSettledZoom?.floatValue
+    LaunchedEffect(settledPageScale) {
+        if (settledPageScale != null) onPinchScale(settledPageScale)
     }
     // Known page ratio (width / height) from the source's
     // bounds-only size — ComicScreen's dimension prefetch:
@@ -1320,7 +1326,7 @@ internal fun NativePageItem(
                     // inside this box (see ZoomablePageContainer).
                     sessionKey = sessionKey,
                     zoomPageId = zoomPageId,
-                    sharedZoomState = sharedZoomState,
+                    externalZoomState = externalZoomState,
                     onScaleChange = {},
                     onDoubleTap = onDoubleTap,
                     onTap = onTap,
@@ -1533,7 +1539,7 @@ internal fun NativePageItem(
                     },
                     sessionKey = sessionKey,
                     zoomPageId = zoomPageId,
-                    sharedZoomState = sharedZoomState,
+                    externalZoomState = externalZoomState,
                     // Strips: the edge handover stays — a drag
                     // at the pan edge scrolls the list, and no
                     // auto-reset applies (slot keys are null).
