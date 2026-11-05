@@ -1059,19 +1059,38 @@ fun ReaderScreen(
                 // Vertical in-section tracking (see SectionPosition.kt):
                 // a scrollTop > 0 before any restore means the user was
                 // already scrolling this document — the page-finished
-                // restore must not yank them back. And while a restore
-                // top still stands (the user has not scrolled away from
-                // it), a height change (images/fonts settling) re-applies
-                // the saved fraction under the new metrics.
+                // restore must not yank them back. And while the user
+                // has NOT moved away from the restore point, a height
+                // change (images/fonts settling) re-applies the saved
+                // fraction under the new metrics.
+                // The restore disarms the moment the user moves: the
+                // old <=2px tolerance treated a slow drag's first
+                // reports as "has not scrolled", so every height change
+                // while content settled re-applied the restore and
+                // erased the drag — the first chapter felt completely
+                // unscrollable until a chapter jump (by then heights
+                // had settled), and the never-cleared restore point
+                // could yank the page back later whenever the user
+                // passed within 2px of it during a height change.
+                // scrollTop is integer px and the restore lands on an
+                // integer, so an untouched restore reports exactly
+                // its top; any other value means the user moved (or
+                // the restore was clamped) and the restore is done.
                 if (v.readingMode == ReadingMode.CONTINUOUS_VERTICAL) {
                     if (t > 0) sectionTracker.scrolledGen = gen
                     val saved = sectionTracker.saved
                     if (sectionTracker.appliedGen == gen && sectionTracker.appliedTop != null) {
+                        val top = sectionTracker.appliedTop!!
                         if (sectionTracker.appliedHeight == null) {
+                            // First report after the restore landed:
+                            // capture the height. Movement is judged
+                            // from the next report, so a report that
+                            // raced the restore JS cannot disarm it.
                             sectionTracker.appliedHeight = h
-                        } else if (kotlin.math.abs(t - sectionTracker.appliedTop!!) <= 2 &&
-                            h != sectionTracker.appliedHeight && saved != null
-                        ) {
+                        } else if (t != top) {
+                            sectionTracker.appliedTop = null
+                            sectionTracker.appliedHeight = null
+                        } else if (h != sectionTracker.appliedHeight && saved != null) {
                             applySectionRestore(gen, saved)
                         }
                     }
