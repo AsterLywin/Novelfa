@@ -444,6 +444,27 @@ class PageZoomStateTest {
     }
 
     @Test
+    fun stripItemCrossPxIsFitSizeAtOneX() {
+        assertEquals(1080f, stripItemCrossPx(1080f, 1f, 1f), delta)
+        assertEquals(972f, stripItemCrossPx(1080f, 0.9f, 1f), delta)
+    }
+
+    @Test
+    fun stripItemCrossPxGrowsPastTheViewport() {
+        // The one-canvas zoom: at 2x the item must be twice
+        // the viewport wide — a fill modifier could never do
+        // this (it coerces into the incoming max).
+        assertEquals(2160f, stripItemCrossPx(1080f, 1f, 2f), delta)
+        assertEquals(1944f, stripItemCrossPx(1080f, 0.9f, 2f), delta)
+    }
+
+    @Test
+    fun stripItemCrossPxIsZeroForBadInput() {
+        assertEquals(0f, stripItemCrossPx(0f, 1f, 2f), delta)
+        assertEquals(0f, stripItemCrossPx(1080f, 1f, 0f), delta)
+    }
+
+    @Test
     fun paddingShrinkIsOneWithoutPadding() {
         assertEquals(1f, paddingShrink(0f), delta)
     }

@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.items
@@ -55,6 +57,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.draw.clip
@@ -1197,6 +1200,20 @@ internal fun NativePageItem(
     }
 
     val density = LocalDensity.current
+    // One-canvas strip item cross size (2026-11-05): the fit
+    // size x the shared strip scale, in Dp — laid out with a
+    // REQUIRED size modifier below, never fillMaxWidth/Height
+    // (see stripItemCrossPx: fill coerces into the incoming
+    // max, so the item could never grow past the viewport and
+    // the vc9 pinch changed nothing visible). The main axis
+    // is unbounded in a lazy list, so aspectRatio still sizes
+    // it from the cross size.
+    fun stripCrossDp(shrink: Float): Dp = with(density) {
+        stripItemCrossPx(
+            if (horizontalStrip) screenHeightPx.toFloat() else screenWidthPx.toFloat(),
+            shrink, stripScale
+        ).toDp()
+    }
     // Standard tap surface (2026-11-02): a plain
     // clickable on the page item itself — the standard
     // Compose tap handler for an item inside a pager/list,
@@ -1342,9 +1359,9 @@ internal fun NativePageItem(
                     // the shared strip scale, so the zoomed
                     // strip stays one continuous box.
                     modifier = if (horizontalStrip) {
-                        Modifier.fillMaxHeight(shrink * stripScale).aspectRatio(ratio)
+                        Modifier.requiredHeight(stripCrossDp(shrink)).aspectRatio(ratio)
                     } else {
-                        Modifier.fillMaxWidth(shrink * stripScale).aspectRatio(ratio)
+                        Modifier.requiredWidth(stripCrossDp(shrink)).aspectRatio(ratio)
                     },
                     // Animated pages have no bitmap re-render
                     // to trigger, so the settled scale is
@@ -1560,9 +1577,9 @@ internal fun NativePageItem(
                     // the shared strip scale, so the zoomed
                     // strip stays one continuous box.
                     modifier = if (horizontalStrip) {
-                        Modifier.fillMaxHeight(shrink * stripScale).aspectRatio(ratio)
+                        Modifier.requiredHeight(stripCrossDp(shrink)).aspectRatio(ratio)
                     } else {
-                        Modifier.fillMaxWidth(shrink * stripScale).aspectRatio(ratio)
+                        Modifier.requiredWidth(stripCrossDp(shrink)).aspectRatio(ratio)
                     },
                     sessionKey = sessionKey,
                     zoomPageId = zoomPageId,
@@ -1622,7 +1639,7 @@ internal fun NativePageItem(
                 }
             } else {
                 Column(
-                    modifier = (if (horizontalStrip) Modifier.fillMaxHeight(stripScale).width(200.dp * stripScale) else Modifier.fillMaxWidth(stripScale).height(200.dp * stripScale))
+                    modifier = (if (horizontalStrip) Modifier.requiredHeight(stripCrossDp(1f)).requiredWidth(200.dp * stripScale) else Modifier.requiredWidth(stripCrossDp(1f)).requiredHeight(200.dp * stripScale))
                         .background(Color.White),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
@@ -1669,17 +1686,17 @@ internal fun NativePageItem(
                     Modifier.fillMaxSize()
                 } else if (horizontalStrip) {
                     if (effectiveRatio != null) {
-                        Modifier.fillMaxHeight(placeholderShrink * stripScale)
+                        Modifier.requiredHeight(stripCrossDp(placeholderShrink))
                             .aspectRatio(effectiveRatio)
                     } else {
-                        Modifier.fillMaxHeight(stripScale).width(200.dp * stripScale)
+                        Modifier.requiredHeight(stripCrossDp(1f)).requiredWidth(200.dp * stripScale)
                     }
                 } else {
                     if (effectiveRatio != null) {
-                        Modifier.fillMaxWidth(placeholderShrink * stripScale)
+                        Modifier.requiredWidth(stripCrossDp(placeholderShrink))
                             .aspectRatio(effectiveRatio)
                     } else {
-                        Modifier.fillMaxWidth(stripScale).height(200.dp * stripScale)
+                        Modifier.requiredWidth(stripCrossDp(1f)).requiredHeight(200.dp * stripScale)
                     }
                 }),
                 contentAlignment = Alignment.Center

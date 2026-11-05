@@ -336,3 +336,25 @@ fun stripMaxCrossOffset(boxCrossPx: Float, viewportCrossPx: Float): Float {
     if (!boxCrossPx.isFinite() || !viewportCrossPx.isFinite()) return 0f
     return ((boxCrossPx - viewportCrossPx) / 2f).coerceAtLeast(0f)
 }
+/**
+ * One-canvas strip item cross size in px: the fit size x the
+ * shared strip scale — viewportCross x shrink x scale. The
+ * item MUST be laid out at this size with a REQUIRED size
+ * modifier (requiredWidth / requiredHeight), never a fill
+ * modifier: FillNode.measure coerces round(max * fraction)
+ * into [min, max] (javap-proven, Compose 1.7.4), so a strip
+ * item sized with fillMaxWidth/Height can never grow past
+ * the viewport — the pinch then moves the state, the scroll
+ * compensation and the cross offset, but the pages stay at
+ * fit size forever (vc9 video, 2026-11-05: the "سون جهو"
+ * text stayed exactly 1x through three pinches). SizeNode
+ * with enforceIncoming = false (the required* family) uses
+ * the target as-is, so the item really grows past the
+ * viewport and the strip stays one continuous box.
+ */
+fun stripItemCrossPx(viewportCrossPx: Float, shrink: Float, scale: Float): Float {
+    if (!viewportCrossPx.isFinite() || viewportCrossPx <= 0f) return 0f
+    if (!scale.isFinite() || scale <= 0f) return 0f
+    return viewportCrossPx * shrink.coerceIn(0f, 1f) * coerceZoomScale(scale)
+}
+
