@@ -367,6 +367,18 @@ internal fun NativeImageBookViewer(
 
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
     val rowState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
+    // Strip-shared finger zoom (see ZoomablePageContainer):
+    // one zoom state for the whole strip — a pinch on any
+    // strip page zooms every page together, and the pan is
+    // one shared offset, so the strip moves as a single
+    // canvas instead of each page zooming alone (2026-11-05:
+    // vertical-strip zoom was uncoordinated and pages were
+    // dragged against each other). Paged mode keeps its own
+    // per-box states and is untouched. The settled holder
+    // publishes the gesture-end scale so every visible strip
+    // page crosses the sharp re-render threshold together.
+    val stripZoomState = remember(book.id) { mutableStateOf(PageZoomState(pageId = "strip")) }
+    val stripSettledZoom = remember(book.id) { mutableFloatStateOf(1f) }
     val pagerState = rememberPagerState(
         initialPage = initialPage,
         pageCount = { pagerPageCount }
@@ -1304,6 +1316,8 @@ internal fun NativeImageBookViewer(
                                 onDoubleTap = { tapSuppress = true },
                                 sessionKey = book.id,
                                 zoomPageId = "strip-$page",
+                                sharedZoomState = stripZoomState,
+                                sharedSettledZoom = stripSettledZoom,
                                 bitmapCache = pageBitmapCache
                             )
                         }
@@ -1349,6 +1363,8 @@ internal fun NativeImageBookViewer(
                             onDoubleTap = { tapSuppress = true },
                             sessionKey = book.id,
                             zoomPageId = "strip-$page",
+                            sharedZoomState = stripZoomState,
+                            sharedSettledZoom = stripSettledZoom,
                             bitmapCache = pageBitmapCache
                         )
                     }

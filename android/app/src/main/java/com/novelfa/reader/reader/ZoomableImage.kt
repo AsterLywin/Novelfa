@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -33,18 +34,22 @@ import androidx.compose.ui.unit.IntSize
  *   its touch area is exactly its visible area. The old version
  *   had no clip: a zoomed page drew beyond its box and its
  *   overflow belonged, for touch, to the neighbouring items.
- * - The zoom is per page box, never shared. Each container owns
- *   its own PageZoomState (scale + pan), keyed by sessionKey +
- *   zoomPageId, so zooming one page leaves every other page
- *   exactly as it was — including pages of different sizes in
- *   the same strip, where one shared multiplier was always
- *   wrong for at least one of them. There is no global zoom
- *   anymore: the 32bb0313 decision (one scale for the whole
- *   book, kept across page turns) was reversed by the
- *   2026-11-03 zoom-engine order, which requires per-page
- *   independence in strips and a hard reset on page change in
- *   the pager. A strip item's state dies with its composition
- *   (Lazy disposal), so unloaded pages never hold state.
+ * - The zoom is per page box in the pager, shared in strips.
+ *   A paged container owns its own PageZoomState (scale + pan),
+ *   keyed by sessionKey + zoomPageId, so zooming one page
+ *   leaves every other page exactly as it was, and the zoom
+ *   resets when the displayed page changes. A strip item
+ *   instead uses the one shared state the viewer passes in:
+ *   a pinch on any strip page zooms every page together, and
+ *   the pan is one shared offset, so the strip moves as a
+ *   single canvas. The 2026-11-03 order required per-page
+ *   independence in strips too, but on the phone that left
+ *   each strip page zooming alone, uncoordinated, and pages
+ *   were dragged against each other (2026-11-05) — a vertical
+ *   comic strip is one continuous scroll, so its zoom must be
+ *   one zoom. There is still no global zoom for the whole
+ *   book: the 32bb0313 decision (one scale kept across page
+ *   turns) stays reversed.
  * - Paged reset. The viewer passes the displayed pager item as
  *   activeSlotKey and each box its own slotKey. When they differ
  *   the box is no longer displayed, so it resets to 1x with zero
@@ -52,7 +57,7 @@ import androidx.compose.ui.unit.IntSize
  *   to 1x too). The reset is tied to the real page change, not
  *   to scroll offsets: a partial swipe that settles back resets
  *   nothing. In strips both keys are null and no auto-reset
- *   happens — vertical keeps its per-page independence instead.
+ *   happens — the strip keeps its shared zoom instead.
  * - Gesture arbitration, paged vs strip. At 1x a drag is never
  *   consumed, so the pager turns / the list scrolls as before.
  *   While zoomed, a drag pans. In strips (edgeHandoff = true)
@@ -142,6 +147,10 @@ fun ZoomablePageContainer(
     // PageZoomState): "pager-3-half-0", "strip-12". Never
     // persisted anywhere.
     zoomPageId: String = "",
+    // Strip-shared zoom state, passed in by the viewer (one
+    // state for the whole strip — see the header note). Null
+    // = this box owns its own state (paged mode).
+    sharedZoomState: MutableState<PageZoomState>? = null,
     // Edge handover: true in strips (a drag at the pan edge
     // scrolls the list), false in the pager (a drag at the
     // pan edge is consumed, so the pager never turns from
@@ -185,12 +194,23 @@ fun ZoomablePageContainer(
     // animation below is the exception, and it lives in a
     // composable LaunchedEffect (where Animatable IS allowed),
     // driven by zoomAnimTarget state the loop only sets.
-    // One state per page box: nothing here is shared with any
-    // other page, and the remember keys (session + page box)
-    // drop the state when the content or the box changes.
-    var zoomState by remember(sessionKey, zoomPageId) {
+    // The box's own state (paged mode). Strips pass a shared
+    // state instead (see sharedZoomState above): the box's own
+    // state is still remembered unconditionally — a trivial
+    // object — so the remember call order never depends on
+    // which branch is taken. (A local var with custom
+    // accessors is not valid Kotlin, so the selection is a
+    // plain holder read instead.)
+    val ownZoomState = remember(sessionKey, zoomPageId) {
         mutableStateOf(PageZoomState(pageId = zoomPageId))
     }
+    // One state per page box in the pager; one shared state
+    // for the whole strip when the viewer passes it in. Every
+    // read and write below goes through here, so the gesture
+    // loop, the double-tap animation and the reset all work
+    // on the shared state in strips without knowing it.
+    val zoomStateHolder = sharedZoomState ?: ownZoomState
+    var zoomState by zoomStateHolder
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
     var zoomAnimTarget by remember(sessionKey, zoomPageId) {
         mutableStateOf<ZoomAnimTarget?>(null)
@@ -300,10 +320,22 @@ fun ZoomablePageContainer(
             // never paint over a neighbouring page.
             .graphicsLayer {
                 clip = true
+                // Display clamp: with a strip-shared state the
+                // offset was clamped against the page it was
+                // panned on, which may exceed a shorter page's
+                // own range — clamp what is actually drawn to
+                // this box, so no page can show blank space at
+                // its edge. For per-page boxes this is the same
+                // clamp the gesture loop already applies on
+                // every write, so it is a no-op there.
+                val (dx, dy) = clampPan(
+                    zoomState.offsetX, zoomState.offsetY, zoomState.scale,
+                    boxSize.width.toFloat(), boxSize.height.toFloat()
+                )
                 scaleX = zoomState.scale
                 scaleY = zoomState.scale
-                translationX = zoomState.offsetX
-                translationY = zoomState.offsetY
+                translationX = dx
+                translationY = dy
             }
             .pointerInput(Unit) {
                 awaitPointerEventScope {
