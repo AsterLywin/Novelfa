@@ -38,8 +38,6 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationDrawerItem
-import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -67,6 +65,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -1511,46 +1510,68 @@ fun ReaderScreen(
                     LazyColumn(state = chapterListState) {
                         itemsIndexed(v.chapters, key = { _, c -> c.file.absolutePath }) { i, c ->
                             val selected = i == v.index
-                            NavigationDrawerItem(
-                                label = { Text(c.title) },
-                                selected = selected,
-                                onClick = {
-                                    scope.launch {
-                                        gotoChapter(v, i)
-                                        drawerState.close()
+                            // Selection is a thin accent bar + accent
+                            // title + filled number chip — deliberately
+                            // NOT a full-width background pill: the old
+                            // NavigationDrawerItem selected pill was a
+                            // big rounded rectangle that dominated the
+                            // row (2026-11-05: "not appropriate").
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 52.dp)
+                                    .clickable {
+                                        scope.launch {
+                                            gotoChapter(v, i)
+                                            drawerState.close()
+                                        }
                                     }
-                                },
-                                // Number chip (same avatar-chip language as
-                                // the character rows): bare numeric titles
-                                // no longer leave the row looking empty,
-                                // and titled chapters gain their number.
-                                icon = {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(28.dp)
-                                            .clip(CircleShape)
-                                            .background(
-                                                if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-                                                else MaterialTheme.colorScheme.surfaceVariant
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = String.format("%d", i + 1),
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = if (selected) MaterialTheme.colorScheme.primaryContainer
-                                            else MaterialTheme.colorScheme.onSurfaceVariant
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(3.dp)
+                                        .height(28.dp)
+                                        .clip(RoundedCornerShape(2.dp))
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primary
+                                            else Color.Transparent
                                         )
-                                    }
-                                },
-                                // The default selected pill is purple
-                                // secondaryContainer — off-theme next to
-                                // the app's orange. Use the accent.
-                                colors = NavigationDrawerItemDefaults.colors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
-                            )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                // Number chip (same avatar-chip language
+                                // as the character rows): bare numeric
+                                // titles no longer leave the row looking
+                                // empty, and titled chapters gain their
+                                // number.
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.surfaceVariant
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = String.format("%d", i + 1),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (selected) MaterialTheme.colorScheme.onPrimary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = c.title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
