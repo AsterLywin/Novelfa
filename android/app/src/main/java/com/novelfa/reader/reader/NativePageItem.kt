@@ -659,14 +659,27 @@ internal class NativePageBitmapCache(
  *
  * In vertical mode the strip is ComicScreen's: every page fills
  * the strip width, one below the other, no horizontal scroll —
- * zoom and pan live on the page itself (pinch, see
- * ZoomablePageContainer), one shared zoom for the whole strip
- * (a pinch zooms every page together).
+ * zoom and pan live on the whole strip (pinch, see
+ * ZoomablePageContainer and the strip detector): one shared
+ * zoom for the whole strip — a pinch zooms every page together,
+ * because the zoom changes the layout (each item is fit size x
+ * the shared scale), so the pages stay stuck together.
  * In paged mode horizontal drag is the page turn at 1x; while
  * a page is zoomed the drag pans that page only and the pager
  * is locked, and the zoom resets when the displayed page
  * changes (see ZoomablePageContainer).
  */
+/**
+ * Padding shrink (ComicScreen's set_img_padding_ratio): the
+ * displayed page shrinks by ratio * 1.25 — the 1.25
+ * compensating a portrait screen so the inset looks even —
+ * and the freed space becomes the margin. 0 means off. One
+ * function so the item, the placeholder and the viewer's strip
+ * detector all compute the same fraction.
+ */
+internal fun paddingShrink(paddingRatio: Float): Float =
+    if (paddingRatio > 0f) (1f - 1.25f * paddingRatio).coerceAtLeast(0.5f) else 1f
+
 @Composable
 internal fun NativePageItem(
     source: NativePageSource,
@@ -724,38 +737,52 @@ internal fun NativePageItem(
     onTap: () -> Unit = {},
     onDoubleTap: () -> Unit = {},
     // Per-page-box finger zoom (see ZoomablePageContainer):
-    // every box owns its own zoom state — a paged box remembers
-    // its own, and a strip box renders the per-page state the
-    // viewer owns for it (passed in below as externalZoomState,
-    // with externalSettledZoom publishing the gesture-end
-    // scale for its sharp re-render threshold). ComicScreen's
-    // method: zoom is per page, never shared across the strip,
-    // so zooming one page never moves another page. Nothing is
-    // reported back to the viewer as a global scale. The viewer
-    // passes the identity keys below: sessionKey drops the
-    // state when the reader's content changes,
-    // slotKey/activeSlotKey drive the paged reset (both null in
-    // strips, where no auto-reset applies), zoomPageId labels
-    // the box inside this session. Defaults keep old callers
-    // compiling.
+    // a paged box remembers its own zoom state, and a strip
+    // box renders the ONE shared strip state the viewer owns
+    // for the whole strip (passed in below as
+    // externalZoomState, with externalSettledZoom publishing
+    // the gesture-end scale for the sharp re-render
+    // threshold) — the one-canvas model (2026-11-05): the zoom
+    // changes the layout, so every page zooms together and the
+    // pages stay stuck together. The viewer passes the
+    // identity keys below: sessionKey drops the state when the
+    // reader's content changes, slotKey/activeSlotKey drive
+    // the paged reset (both null in strips, where no
+    // auto-reset applies), zoomPageId labels the box inside
+    // this session. Defaults keep old callers compiling.
     sessionKey: Any? = null,
     slotKey: Int? = null,
     activeSlotKey: Int? = null,
     zoomPageId: String = "",
     // Strip finger zoom (see ZoomablePageContainer): the viewer
-    // passes this page's own PageZoomState (one per page, held
-    // in its per-book registry — the strip detector routes a
-    // straddle pinch to the first finger's page). Null =
-    // per-box zoom (paged mode, unchanged).
-    // externalSettledZoom publishes this page's gesture-end
-    // scale (see onPinchScale below).
+    // passes the ONE shared strip state (one scale + one shared
+    // cross-axis pan for the whole strip — the one-canvas model,
+    // 2026-11-05). Null = per-box zoom (paged mode, unchanged).
+    // externalSettledZoom publishes the strip's gesture-end
+    // scale (see onPinchScale below): one settled scale for all
+    // pages, so every visible page crosses the sharp re-render
+    // threshold together.
     externalZoomState: MutableState<PageZoomState>? = null,
     externalSettledZoom: MutableFloatState? = null,
+    // One-canvas strip host (see ZoomableImage.StripZoomHost):
+    // the viewer passes its strip host here; the strip
+    // containers below hand it to ZoomablePageContainer. Null
+    // in paged mode.
+    stripHost: StripZoomHost? = null,
     // The viewer's page-return park (see
     // NativePageBitmapCache). Null = today's behaviour exactly:
     // render on compose, recycle on dispose, no parking.
     bitmapCache: NativePageBitmapCache? = null
 ) {
+    // One-canvas strip zoom (2026-11-05): the shared strip
+    // scale, read here so the strip branches below lay this
+    // item out at fit size x the scale. Paged mode passes no
+    // external state, so this stays 1 there. Reading the state
+    // subscribes this item to scale changes: a pinch frame
+    // recomposes the visible items (layout only — the bitmap
+    // is remembered, never re-decoded mid-pinch; the sharp
+    // re-render still runs once, at gesture end).
+    val stripScale = externalZoomState?.value?.scale ?: 1f
     // The park key: exactly the remember keys below, so a
     // parked bitmap is only ever reused for the identical
     // render. A mode switch composes the new item before the
@@ -819,24 +846,24 @@ internal fun NativePageItem(
         } else if (s < 1.25f && renderScale != 1) {
             renderScale = 1
         }
-        // Strip: publish this page's settled scale (this
-        // callback only ever fires at gesture end, never
-        // mid-pinch) to its own settled holder, so a page that
-        // only just composed while already zoomed decodes sharp
-        // from the start instead of staying soft until first
-        // touched. Guarded against no-change writes, so the
-        // observing effect below can never loop back here.
-        // Neighbouring pages are untouched: each page settles
-        // on its own (ComicScreen's method).
+        // Strip: publish the settled scale (this callback only
+        // ever fires at gesture end, never mid-pinch) to the
+        // ONE shared settled holder, so a page that only just
+        // composed while already zoomed decodes sharp from the
+        // start instead of staying soft until first touched —
+        // and so every visible page crosses the sharp
+        // re-render threshold together. Guarded against
+        // no-change writes, so the observing effect below can
+        // never loop back here.
         externalSettledZoom?.let { if (it.floatValue != s) it.floatValue = s }
     }
-    // This page's settled scale: when its pinch ends, this
-    // item crosses the sharp re-render threshold — including
-    // a page that only just composed while already zoomed,
-    // which then decodes sharp from the start instead of
-    // staying soft until first touched. Keyed on the settled
-    // holder only, so a mid-pinch scale never re-renders
-    // anything.
+    // The strip's settled scale (one shared holder): when a
+    // strip pinch ends, every item crosses the sharp re-render
+    // threshold together — including a page that only just
+    // composed while already zoomed, which then decodes sharp
+    // from the start instead of staying soft until first
+    // touched. Keyed on the settled holder only, so a mid-pinch
+    // scale never re-renders anything.
     val settledPageScale = externalSettledZoom?.floatValue
     LaunchedEffect(settledPageScale) {
         if (settledPageScale != null) onPinchScale(settledPageScale)
@@ -1201,11 +1228,7 @@ internal fun NativePageItem(
             } else {
                 1f
             }
-            val shrink = if (paddingRatio > 0f) {
-                (1f - 1.25f * paddingRatio).coerceAtLeast(0.5f)
-            } else {
-                1f
-            }
+            val shrink = paddingShrink(paddingRatio)
             if (paged) {
                 when (fitMode) {
                     "height" -> {
@@ -1315,10 +1338,13 @@ internal fun NativePageItem(
                 ZoomablePageContainer(
                     // Horizontal strip: fill the strip height
                     // instead of the width (see horizontalStrip).
+                    // One-canvas: the size is the fit size x
+                    // the shared strip scale, so the zoomed
+                    // strip stays one continuous box.
                     modifier = if (horizontalStrip) {
-                        Modifier.fillMaxHeight(shrink).aspectRatio(ratio)
+                        Modifier.fillMaxHeight(shrink * stripScale).aspectRatio(ratio)
                     } else {
-                        Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
+                        Modifier.fillMaxWidth(shrink * stripScale).aspectRatio(ratio)
                     },
                     // Animated pages have no bitmap re-render
                     // to trigger, so the settled scale is
@@ -1327,6 +1353,8 @@ internal fun NativePageItem(
                     sessionKey = sessionKey,
                     zoomPageId = zoomPageId,
                     externalZoomState = externalZoomState,
+                    stripHost = stripHost,
+                    stripPageIndex = page,
                     onScaleChange = {},
                     onDoubleTap = onDoubleTap,
                     onTap = onTap,
@@ -1350,11 +1378,7 @@ internal fun NativePageItem(
             // space becomes the margin. Aspect is preserved:
             // the width drives, the height follows the ratio.
             // 0 means off, exactly the old behaviour.
-            val shrink = if (paddingRatio > 0f) {
-                (1f - 1.25f * paddingRatio).coerceAtLeast(0.5f)
-            } else {
-                1f
-            }
+            val shrink = paddingShrink(paddingRatio)
             if (paged) {
                 // Page fit (ComicScreen's fitscreen menu). Width
                 // is the old behaviour; height sizes the page to
@@ -1532,17 +1556,23 @@ internal fun NativePageItem(
                 ZoomablePageContainer(
                     // Horizontal strip: fill the strip height
                     // instead of the width (see horizontalStrip).
+                    // One-canvas: the size is the fit size x
+                    // the shared strip scale, so the zoomed
+                    // strip stays one continuous box.
                     modifier = if (horizontalStrip) {
-                        Modifier.fillMaxHeight(shrink).aspectRatio(ratio)
+                        Modifier.fillMaxHeight(shrink * stripScale).aspectRatio(ratio)
                     } else {
-                        Modifier.fillMaxWidth(shrink).aspectRatio(ratio)
+                        Modifier.fillMaxWidth(shrink * stripScale).aspectRatio(ratio)
                     },
                     sessionKey = sessionKey,
                     zoomPageId = zoomPageId,
                     externalZoomState = externalZoomState,
-                    // Strips: the edge handover stays — a drag
-                    // at the pan edge scrolls the list, and no
-                    // auto-reset applies (slot keys are null).
+                    stripHost = stripHost,
+                    stripPageIndex = page,
+                    // One-canvas: the main-axis drag is never
+                    // consumed, so the list scrolls (that IS
+                    // the pan); no auto-reset applies (slot
+                    // keys are null).
                     edgeHandoff = true,
                     onScaleChange = onPinchScale,
                     onDoubleTap = onDoubleTap,
@@ -1592,7 +1622,7 @@ internal fun NativePageItem(
                 }
             } else {
                 Column(
-                    modifier = (if (horizontalStrip) Modifier.fillMaxHeight().width(200.dp) else Modifier.fillMaxWidth().height(200.dp))
+                    modifier = (if (horizontalStrip) Modifier.fillMaxHeight(stripScale).width(200.dp * stripScale) else Modifier.fillMaxWidth(stripScale).height(200.dp * stripScale))
                         .background(Color.White),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
@@ -1633,27 +1663,23 @@ internal fun NativePageItem(
             val effectiveRatio = knownRatio?.let {
                 if (viewRotation == 90 || viewRotation == 270) 1f / it else it
             }
-            val placeholderShrink = if (paddingRatio > 0f) {
-                (1f - 1.25f * paddingRatio).coerceAtLeast(0.5f)
-            } else {
-                1f
-            }
+            val placeholderShrink = paddingShrink(paddingRatio)
             Box(
                 modifier = (if (paged) {
                     Modifier.fillMaxSize()
                 } else if (horizontalStrip) {
                     if (effectiveRatio != null) {
-                        Modifier.fillMaxHeight(placeholderShrink)
+                        Modifier.fillMaxHeight(placeholderShrink * stripScale)
                             .aspectRatio(effectiveRatio)
                     } else {
-                        Modifier.fillMaxHeight().width(200.dp)
+                        Modifier.fillMaxHeight(stripScale).width(200.dp * stripScale)
                     }
                 } else {
                     if (effectiveRatio != null) {
-                        Modifier.fillMaxWidth(placeholderShrink)
+                        Modifier.fillMaxWidth(placeholderShrink * stripScale)
                             .aspectRatio(effectiveRatio)
                     } else {
-                        Modifier.fillMaxWidth().height(200.dp)
+                        Modifier.fillMaxWidth(stripScale).height(200.dp * stripScale)
                     }
                 }),
                 contentAlignment = Alignment.Center

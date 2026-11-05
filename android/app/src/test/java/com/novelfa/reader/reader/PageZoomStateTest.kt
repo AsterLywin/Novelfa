@@ -8,7 +8,10 @@ import org.junit.Test
 /**
  * Acceptance tests (JVM) for the per-page zoom engine
  * (PageZoomState): pan clamps, focal-point math, double-tap
- * targets, and the paged reset rule. The Compose container
+ * targets, and the paged reset rule — plus the one-canvas
+ * strip math (stripScrollDelta / stripCrossOffset /
+ * stripMaxCrossOffset), which the strip detector and the
+ * double-tap animation apply. The Compose container
  * (ZoomablePageContainer) applies exactly these functions, so
  * a green suite here is the contract the gesture loop keeps —
  * the phone test then only has to confirm the gestures reach
@@ -369,6 +372,91 @@ class PageZoomStateTest {
         )
         assertEquals(15f, x, delta)
         assertEquals(17f, y, delta)
+    }
+
+    // One-canvas strip zoom (2026-11-05): the strip is one box,
+    // so the focal math anchors in strip coordinates — the main
+    // axis by scrolling the list, the cross axis by one shared
+    // offset for all pages.
+
+    @Test
+    fun stripScrollDeltaKeepsFocalPointUnderCentroidWhenZoomingIn() {
+        // Item top 100px above the viewport top, centroid 500px
+        // down the viewport, 1x -> 2x: the content point sits
+        // 600px below the item top, so it must sit 1200px below
+        // it after the zoom — the item top must move to -700,
+        // i.e. scroll forward by 600.
+        assertEquals(600f, stripScrollDelta(-100f, 500f, 1f, 2f), delta)
+    }
+
+    @Test
+    fun stripScrollDeltaReversesExactlyWhenZoomingOut() {
+        assertEquals(-600f, stripScrollDelta(-700f, 500f, 2f, 1f), delta)
+    }
+
+    @Test
+    fun stripScrollDeltaIsZeroWhenTheScaleDoesNotChange() {
+        assertEquals(0f, stripScrollDelta(-100f, 500f, 2f, 2f), delta)
+    }
+
+    @Test
+    fun stripScrollDeltaKeepsAFocalPointAtTheItemTop() {
+        // Centroid exactly on the item's top edge: the point is
+        // the edge itself, so it never moves with the scale.
+        assertEquals(0f, stripScrollDelta(200f, 200f, 1f, 3f), delta)
+    }
+
+    @Test
+    fun stripCrossOffsetKeepsTheFocalPointUnderTheCentroid() {
+        // Viewport 1080, fit fraction 1, 1x -> 2x, centroid at
+        // x=800: the content point sits 800px from the item's
+        // left edge, so 1600px after the zoom; the item is 2160
+        // wide, its left edge must sit at -800 — offset -260.
+        assertEquals(-260f, stripCrossOffset(1f, 0f, 800f, 1080f, 1f, 2f), delta)
+    }
+
+    @Test
+    fun stripCrossOffsetIsZeroForACentredPinch() {
+        assertEquals(0f, stripCrossOffset(1f, 0f, 540f, 1080f, 1f, 2f), delta)
+    }
+
+    @Test
+    fun stripCrossOffsetIsUnchangedWhenTheScaleDoesNotChange() {
+        assertEquals(120f, stripCrossOffset(2f, 120f, 800f, 1080f, 1f, 2f), delta)
+    }
+
+    @Test
+    fun stripCrossOffsetClampsToTheViewportEdge() {
+        // 1x -> 4x around the right edge would need -4860, but
+        // the strip can only move half its overflow (1620).
+        assertEquals(-1620f, stripCrossOffset(1f, 0f, 1080f, 1080f, 1f, 4f), delta)
+    }
+
+    @Test
+    fun stripMaxCrossOffsetIsHalfTheOverflow() {
+        assertEquals(540f, stripMaxCrossOffset(2160f, 1080f), delta)
+    }
+
+    @Test
+    fun stripMaxCrossOffsetIsZeroAtFitSize() {
+        assertEquals(0f, stripMaxCrossOffset(1080f, 1080f), delta)
+        assertEquals(0f, stripMaxCrossOffset(900f, 1080f), delta)
+    }
+
+    @Test
+    fun paddingShrinkIsOneWithoutPadding() {
+        assertEquals(1f, paddingShrink(0f), delta)
+    }
+
+    @Test
+    fun paddingShrinkFollowsTheRatio() {
+        assertEquals(0.75f, paddingShrink(0.2f), delta)
+    }
+
+    @Test
+    fun paddingShrinkNeverGoesBelowHalf() {
+        assertEquals(0.5f, paddingShrink(0.5f), delta)
+        assertEquals(0.5f, paddingShrink(1f), delta)
     }
 
 }

@@ -1,7 +1,11 @@
 package com.novelfa.reader.reader
 
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -25,37 +29,44 @@ import androidx.compose.ui.unit.IntSize
  * ComicScreen-style zoom + pan for one page — with one page box
  * as the whole world. This container is the per-page viewport:
  *
- * - Layout and transform are separate. The page's layout size is
- *   its own fit size (width- or height-driven, from that page's
- *   own aspect) and NEVER changes with zoom. Zoom is a GPU
- *   transform of the decoded content inside that box only, and
- *   the layer is clipped to the box (graphicsLayer clip = true),
- *   so a zoomed page can never paint over its neighbours, and
- *   its touch area is exactly its visible area. The old version
- *   had no clip: a zoomed page drew beyond its box and its
- *   overflow belonged, for touch, to the neighbouring items.
- * - The zoom is per page box, everywhere — ComicScreen's
- *   method. A paged container owns its own PageZoomState
- *   (scale + pan), keyed by sessionKey + zoomPageId, so
- *   zooming one page leaves every other page exactly as it
- *   was, and the zoom resets when the displayed page changes.
- *   A strip item renders the per-page state the viewer owns
- *   for it (passed in as externalZoomState): a pinch zooms
- *   only the page under the fingers, around the pinch focal
- *   point in that page's own box coordinates, and the pan is
- *   clamped to that box — so neighbouring pages never move
- *   and can never be pulled into each other. A single shared
- *   state for the whole strip was tried on 2026-11-05
- *   (cfa4beaf + 1a143f8c): it made every page pivot around
- *   its own centre while the focal math ran in viewport
- *   geometry, so the content on both sides of every page
- *   boundary crowded toward that boundary — the "pulled into
- *   each other" the phone showed on vc7. The shared zoom is
- *   therefore gone; the strip detector now routes a straddle
- *   pinch to the first finger's page (ComicScreen's own
- *   routing), and each page zooms on its own. There is still
- *   no global zoom for the whole book: the 32bb0313 decision
- *   (one scale kept across page turns) stays reversed.
+ * - Layout and transform are separate — in paged mode. The
+ *   page's layout size is its own fit size (width- or
+ *   height-driven, from that page's own aspect) and NEVER
+ *   changes with zoom. Zoom is a GPU transform of the decoded
+ *   content inside that box only, and the layer is clipped to
+ *   the box (graphicsLayer clip = true), so a zoomed page can
+ *   never paint over its neighbours, and its touch area is
+ *   exactly its visible area. The old version had no clip: a
+ *   zoomed page drew beyond its box and its overflow belonged,
+ *   for touch, to the neighbouring items. In strips the rule
+ *   is the opposite (see the one-canvas note below): the
+ *   LAYOUT scales — each item is its fit size x the shared
+ *   strip scale — and the layer only carries the shared
+ *   cross-axis pan, so the pages stay stuck together with no
+ *   gap and no overlap by construction.
+ * - One-canvas strip zoom (2026-11-05). A paged container
+ *   owns its own PageZoomState (scale + pan), keyed by
+ *   sessionKey + zoomPageId, so zooming one page leaves every
+ *   other page exactly as it was, and the zoom resets when the
+ *   displayed page changes. A strip is ONE box instead: every
+ *   strip item renders the ONE shared state the viewer owns
+ *   for the whole strip (passed in as externalZoomState), and
+ *   a pinch zooms ALL pages together, uniformly, around the
+ *   pinch focal point in strip coordinates — the main-axis
+ *   pan IS the list scroll, the cross-axis pan is one shared
+ *   offset for all pages. Two earlier strip models failed on
+ *   the phone and are gone: a shared GPU scale per box
+ *   (cfa4beaf + 1a143f8c) made every page pivot around its own
+ *   centre while the focal math ran in viewport geometry, so
+ *   the content on both sides of every page boundary crowded
+ *   toward that boundary — the "pulled into each other" the
+ *   phone showed on vc7; per-page zoom (13ad461d) zoomed each
+ *   page on its own, which is the original complaint all over
+ *   again (vc8). The one-canvas model fixes both by
+ *   construction: the zoom changes the layout, so pages can
+ *   neither gap nor overlap. There is still no global zoom
+ *   for the whole book: the 32bb0313 decision (one scale kept
+ *   across page turns) stays reversed.
  * - Paged reset. The viewer passes the displayed pager item as
  *   activeSlotKey and each box its own slotKey. When they differ
  *   the box is no longer displayed, so it resets to 1x with zero
@@ -85,16 +96,26 @@ import androidx.compose.ui.unit.IntSize
  *   NativeImageBookViewer.stripPinchDetector), because a box
  *   only ever sees the pointers inside its own bounds — a
  *   pinch straddling two pages reached neither box as a
- *   pinch. In the pager the pinch still lives here.
+ *   pinch — and it writes the ONE shared strip state (scale +
+ *   shared cross pan) and scrolls the list, so the whole
+ *   strip zooms as one box. In the pager the pinch still
+ *   lives here.
  * - One-finger drag pans ONLY while zoomed (scale > 1). At
  *   scale 1 the drag is never consumed, so the list scrolls
  *   vertically as before — and since there is no horizontal
  *   scroll anymore, a sideways drag at scale 1 simply does
  *   nothing, which is the requested "no left-right scroll".
+ *   In strips the main-axis drag is NEVER consumed even while
+ *   zoomed — the list scroll through the taller strip IS the
+ *   pan (which is also why panning while zoomed is fast now:
+ *   it is a native list scroll, not a per-box pan) — and only
+ *   the cross-axis drag pans the shared offset, while zoomed.
  * - Double-tap zoom: a double-tap toggles 1x <-> 2x, zooming
  *   around the tap point — the tapped detail lands under the
  *   finger — and it animates there over ~120ms (ComicScreen's
- *   transition duration) instead of snapping.
+ *   transition duration) instead of snapping. In strips the
+ *   toggle moves the WHOLE strip (shared scale, list scroll,
+ *   shared cross offset), not one page.
  * - Taps are never consumed here; the chrome toggle for them
  *   comes from the page item's passive listener (see
  *   NativePageItem), which reports without consuming, so no
@@ -142,6 +163,47 @@ private data class ZoomAnimTarget(
     val tapPos: Offset
 )
 
+/**
+ * One-canvas strip host (2026-11-05): everything a strip
+ * container needs to zoom the WHOLE strip as one box. The
+ * viewer builds one per strip (not per page) and hands it to
+ * every strip item through NativePageItem. Null in paged mode,
+ * where the container owns its own state and none of the
+ * strip math below runs.
+ *
+ * - [listState] is the strip's LazyColumn/LazyRow state: the
+ *   main-axis pan IS its scroll, so the pinch detector and the
+ *   double-tap animation compensate the focal point by
+ *   scrolling it (see PageZoomState.stripScrollDelta).
+ * - [horizontal] is the strip direction (LazyRow vs LazyColumn).
+ * - [viewportWidthPx]/[viewportHeightPx] are the strip viewport.
+ * - [fitFraction] is the page's fit size as a fraction of the
+ *   viewport on its fit axis (the padding shrink: 1 without
+ *   padding) — the cross-axis anchor math needs the item's
+ *   real width, which the list layout does not report.
+ */
+data class StripZoomHost(
+    val listState: LazyListState,
+    val horizontal: Boolean,
+    val viewportWidthPx: Float,
+    val viewportHeightPx: Float,
+    val fitFraction: Float
+)
+
+/**
+ * One-canvas double-tap zoom animation target: from the shared
+ * scale the strip had when the double-tap landed, to the
+ * double-tap target, around the tap point (in this box's
+ * coordinates). The effect below animates the shared scale and
+ * moves the whole strip around that point (list scroll +
+ * shared cross offset) instead of animating a per-box offset.
+ */
+private data class StripZoomAnimTarget(
+    val fromScale: Float,
+    val toScale: Float,
+    val tapPos: Offset
+)
+
 @Composable
 fun ZoomablePageContainer(
     modifier: Modifier,
@@ -160,12 +222,21 @@ fun ZoomablePageContainer(
     // persisted anywhere.
     zoomPageId: String = "",
     // Externally-owned zoom state, passed in by the viewer
-    // (one state per strip page, held in its per-book
-    // registry — see the header note). Null = this box owns
-    // its own state (paged mode). With an external state this
-    // box never pinches on its own: the strip-level detector
-    // owns every strip pinch and routes it to one page.
+    // (paged: null, the box owns its own; strips: the ONE
+    // shared strip state — see the header note). With an
+    // external state this box never pinches on its own: the
+    // strip-level detector owns every strip pinch.
     externalZoomState: MutableState<PageZoomState>? = null,
+    // One-canvas strip host (see StripZoomHost): non-null
+    // exactly in strips, where the zoom is the shared strip
+    // scale and this box's layout is its fit size x that
+    // scale. Null in paged mode.
+    stripHost: StripZoomHost? = null,
+    // This box's page index inside the strip (its
+    // NativePageItem page): the double-tap animation looks
+    // the item up in the strip layout by it. Null in paged
+    // mode, where no strip animation runs.
+    stripPageIndex: Int? = null,
     // Edge handover: true in strips (a drag at the pan edge
     // scrolls the list), false in the pager (a drag at the
     // pan edge is consumed, so the pager never turns from
@@ -230,6 +301,18 @@ fun ZoomablePageContainer(
     var zoomAnimTarget by remember(sessionKey, zoomPageId) {
         mutableStateOf<ZoomAnimTarget?>(null)
     }
+    // One-canvas mode: a non-null stripHost means this box is
+    // a strip item, its layout is fit size x the shared scale,
+    // and the zoom/pan below run on the shared strip state.
+    val layoutZoom = stripHost != null
+    // Latest host for the gesture loop: pointerInput(Unit)
+    // captures its values once, so the loop reads the host
+    // through this state instead (rotation / padding changes
+    // hand it a new host, and the loop must see the new one).
+    val hostState = rememberUpdatedState(stripHost)
+    var stripZoomAnimTarget by remember(sessionKey, zoomPageId) {
+        mutableStateOf<StripZoomAnimTarget?>(null)
+    }
     // Last tap-up, for double-tap detection: a second tap-up
     // within 300ms and near the first is a double-tap, not two
     // single taps. Reset to 0 after a double-tap, so a third
@@ -277,9 +360,30 @@ fun ZoomablePageContainer(
     // the offset starts at zero.
     LaunchedEffect(boxSize) {
         if (boxSize.width > 0 && boxSize.height > 0) {
-            val (x, y) = clampCurrent(zoomState.offsetX, zoomState.offsetY, zoomState.scale)
-            if (x != zoomState.offsetX || y != zoomState.offsetY) {
-                zoomState = zoomState.copy(offsetX = x, offsetY = y)
+            if (layoutZoom) {
+                // One-canvas: only the shared cross offset can
+                // exceed its bound after a viewport change;
+                // the scale lives in the layout and the main
+                // axis is the list scroll.
+                val host = stripHost!!
+                val (boxCross, viewportCross) = if (host.horizontal) {
+                    boxSize.height.toFloat() to host.viewportHeightPx
+                } else {
+                    boxSize.width.toFloat() to host.viewportWidthPx
+                }
+                val maxCross = stripMaxCrossOffset(boxCross, viewportCross)
+                if (host.horizontal) {
+                    val y = zoomState.offsetY.coerceIn(-maxCross, maxCross)
+                    if (y != zoomState.offsetY) zoomState = zoomState.copy(offsetY = y)
+                } else {
+                    val x = zoomState.offsetX.coerceIn(-maxCross, maxCross)
+                    if (x != zoomState.offsetX) zoomState = zoomState.copy(offsetX = x)
+                }
+            } else {
+                val (x, y) = clampCurrent(zoomState.offsetX, zoomState.offsetY, zoomState.scale)
+                if (x != zoomState.offsetX || y != zoomState.offsetY) {
+                    zoomState = zoomState.copy(offsetX = x, offsetY = y)
+                }
             }
         }
     }
@@ -324,6 +428,85 @@ fun ZoomablePageContainer(
         zoomAnimTarget = null
     }
 
+    // One-canvas double-tap animation, same ~120ms as the
+    // per-page one: the scale animates from the shared scale
+    // the strip had to the double-tap target, around the tap
+    // point — and the WHOLE strip moves with it, so the tapped
+    // detail stays under the finger throughout: the main axis
+    // by scrolling the list, the cross axis by the shared
+    // offset (see PageZoomState.stripScrollDelta /
+    // stripCrossOffset). A manual frame loop, not animate():
+    // the loop must scroll the list per frame, and scrollBy
+    // is suspend — animate()'s per-frame block is not. The
+    // settled scale is reported only when the animation
+    // completes, exactly like the per-page path. If the tapped
+    // page has scrolled out of the layout by the time the
+    // effect runs, the scale is set directly instead.
+    LaunchedEffect(stripZoomAnimTarget) {
+        val target = stripZoomAnimTarget ?: return@LaunchedEffect
+        val host = stripHost ?: return@LaunchedEffect
+        val page = stripPageIndex ?: return@LaunchedEffect
+        // Focal point in viewport coordinates, resolved once
+        // at animation start: the item's list offset plus the
+        // tap inside its box. The viewport point itself never
+        // moves during the animation — the scroll and the cross
+        // offset below keep the content under it.
+        val item = host.listState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.index == page }
+        if (item == null) {
+            zoomState = zoomState.copy(scale = target.toScale)
+            lastReportedScale = target.toScale
+            onScaleChange(target.toScale)
+            stripZoomAnimTarget = null
+            return@LaunchedEffect
+        }
+        val focalMain = item.offset.toFloat() +
+            if (host.horizontal) target.tapPos.x else target.tapPos.y
+        val focalCross = if (host.horizontal) {
+            host.viewportHeightPx / 2f + (target.tapPos.y - boxSize.height / 2f)
+        } else {
+            host.viewportWidthPx / 2f + (target.tapPos.x - boxSize.width / 2f)
+        }
+        val startNanos = withFrameNanos { it }
+        var prevScale = target.fromScale
+        while (true) {
+            val nowNanos = withFrameNanos { it }
+            val elapsedMs = (nowNanos - startNanos) / 1_000_000f
+            val t = (elapsedMs / 120f).coerceIn(0f, 1f)
+            val eased = FastOutSlowInEasing.transform(t)
+            val value = target.fromScale +
+                (target.toScale - target.fromScale) * eased
+            // Main axis: scroll so the focal content point
+            // stays under the finger.
+            val currentItem = host.listState.layoutInfo.visibleItemsInfo
+                .firstOrNull { it.index == page }
+            if (currentItem != null) {
+                val delta = stripScrollDelta(
+                    currentItem.offset.toFloat(), focalMain, prevScale, value
+                )
+                if (delta != 0f) host.listState.scroll { scrollBy(delta) }
+            }
+            // Cross axis: the shared offset around the same
+            // focal point.
+            val cross = if (host.horizontal) zoomState.offsetY else zoomState.offsetX
+            val newCross = stripCrossOffset(
+                prevScale, cross, focalCross,
+                if (host.horizontal) host.viewportHeightPx else host.viewportWidthPx,
+                host.fitFraction, value
+            )
+            zoomState = if (host.horizontal) {
+                zoomState.copy(scale = value, offsetY = newCross)
+            } else {
+                zoomState.copy(scale = value, offsetX = newCross)
+            }
+            prevScale = value
+            if (t >= 1f) break
+        }
+        lastReportedScale = target.toScale
+        onScaleChange(target.toScale)
+        stripZoomAnimTarget = null
+    }
+
     Box(
         modifier = modifier
             .onSizeChanged { boxSize = it }
@@ -335,22 +518,55 @@ fun ZoomablePageContainer(
             // never paint over a neighbouring page.
             .graphicsLayer {
                 clip = true
-                // Display clamp: with a strip-shared state the
-                // offset was clamped against the page it was
-                // panned on, which may exceed a shorter page's
-                // own range — clamp what is actually drawn to
-                // this box, so no page can show blank space at
-                // its edge. For per-page boxes this is the same
-                // clamp the gesture loop already applies on
-                // every write, so it is a no-op there.
-                val (dx, dy) = clampPan(
-                    zoomState.offsetX, zoomState.offsetY, zoomState.scale,
-                    boxSize.width.toFloat(), boxSize.height.toFloat()
-                )
-                scaleX = zoomState.scale
-                scaleY = zoomState.scale
-                translationX = dx
-                translationY = dy
+                if (layoutZoom) {
+                    // One-canvas strip: the LAYOUT already
+                    // scales (this box is its fit size x the
+                    // shared scale, see NativePageItem), so
+                    // this layer must NOT scale again — it
+                    // only carries the shared cross-axis pan.
+                    // The main-axis pan is the list scroll.
+                    // The cross offset is clamped to this
+                    // box's own overflow over the viewport, so
+                    // no edge of the strip can enter the
+                    // viewport (the same half-overflow bound
+                    // the per-page clamp uses, against the
+                    // viewport instead of the box).
+                    val host = stripHost!!
+                    val (boxCross, viewportCross) = if (host.horizontal) {
+                        boxSize.height.toFloat() to host.viewportHeightPx
+                    } else {
+                        boxSize.width.toFloat() to host.viewportWidthPx
+                    }
+                    val maxCross = stripMaxCrossOffset(boxCross, viewportCross)
+                    scaleX = 1f
+                    scaleY = 1f
+                    if (host.horizontal) {
+                        translationX = 0f
+                        translationY =
+                            zoomState.offsetY.coerceIn(-maxCross, maxCross)
+                    } else {
+                        translationX =
+                            zoomState.offsetX.coerceIn(-maxCross, maxCross)
+                        translationY = 0f
+                    }
+                } else {
+                    // Display clamp: with a strip-shared state the
+                    // offset was clamped against the page it was
+                    // panned on, which may exceed a shorter page's
+                    // own range — clamp what is actually drawn to
+                    // this box, so no page can show blank space at
+                    // its edge. For per-page boxes this is the same
+                    // clamp the gesture loop already applies on
+                    // every write, so it is a no-op there.
+                    val (dx, dy) = clampPan(
+                        zoomState.offsetX, zoomState.offsetY, zoomState.scale,
+                        boxSize.width.toFloat(), boxSize.height.toFloat()
+                    )
+                    scaleX = zoomState.scale
+                    scaleY = zoomState.scale
+                    translationX = dx
+                    translationY = dy
+                }
             }
             .pointerInput(Unit) {
                 awaitPointerEventScope {
@@ -372,6 +588,7 @@ fun ZoomablePageContainer(
                     // at its intermediate value, and this
                     // gesture starts from there.
                     zoomAnimTarget = null
+                    stripZoomAnimTarget = null
                     var pinch = false
                     var pastSlop = false
                     var prevCentroid = Offset.Zero
@@ -397,8 +614,8 @@ fun ZoomablePageContainer(
                             // its own — the strip-level detector
                             // (see the viewer) owns EVERY strip
                             // pinch, including one whose fingers
-                            // straddle two pages, and routes it
-                            // to the first finger's page — so this
+                            // straddle two pages, and writes the
+                            // ONE shared strip state — so this
                             // page's scale would be zoomed twice
                             // per frame if this branch ran too.
                             // Just mark the gesture as a drag, so
@@ -510,7 +727,46 @@ fun ZoomablePageContainer(
                                 // fight it.
                                 continue
                             }
-                            if (zoomState.scale > 1f) {
+                            if (layoutZoom) {
+                                // One-canvas: the main-axis drag is
+                                // never consumed — the list scrolls
+                                // through the taller strip, and that
+                                // IS the pan. Only the cross-axis
+                                // drag pans the shared offset, while
+                                // zoomed, and it is not consumed
+                                // either: the list has no handler on
+                                // that axis (a LazyColumn never
+                                // scrolls sideways, a LazyRow never
+                                // vertically), so there is nothing
+                                // to fight over.
+                                val host = hostState.value
+                                if (host != null && zoomState.scale > 1f) {
+                                    val (boxCross, viewportCross) =
+                                        if (host.horizontal) {
+                                            boxSize.height.toFloat() to
+                                                host.viewportHeightPx
+                                        } else {
+                                            boxSize.width.toFloat() to
+                                                host.viewportWidthPx
+                                        }
+                                    val maxCross = stripMaxCrossOffset(
+                                        boxCross, viewportCross
+                                    )
+                                    if (host.horizontal) {
+                                        val ny = (zoomState.offsetY + delta.y)
+                                            .coerceIn(-maxCross, maxCross)
+                                        if (ny != zoomState.offsetY) {
+                                            zoomState = zoomState.copy(offsetY = ny)
+                                        }
+                                    } else {
+                                        val nx = (zoomState.offsetX + delta.x)
+                                            .coerceIn(-maxCross, maxCross)
+                                        if (nx != zoomState.offsetX) {
+                                            zoomState = zoomState.copy(offsetX = nx)
+                                        }
+                                    }
+                                }
+                            } else if (zoomState.scale > 1f) {
                                 val (nx, ny) = clampCurrent(
                                     zoomState.offsetX + delta.x,
                                     zoomState.offsetY + delta.y,
@@ -523,15 +779,12 @@ fun ZoomablePageContainer(
                                     // Paged, at the pan edge: consume
                                     // anyway, so the drag can never
                                     // reach the pager and turn the
-                                    // page from a pan. Strips keep
-                                    // the old behaviour below: the
-                                    // unconsumed drag scrolls the
-                                    // list from the edge.
+                                    // page from a pan.
                                     change.consume()
                                 }
-                                // Else (strips) at the pan edge in
-                                // this direction: not consumed, so
-                                // the list scrolls from here.
+                                // Else (edge handover on): not
+                                // consumed, so the list scrolls
+                                // from here.
                             }
                             // At scale 1: never consume. The pager
                             // turns / the list scrolls vertically;
@@ -574,12 +827,26 @@ fun ZoomablePageContainer(
                             // completes, so the sharper re-render
                             // kicks in once, after the zoom.
                             lastTapUpMs = 0L
-                            zoomAnimTarget = ZoomAnimTarget(
-                                fromScale = zoomState.scale,
-                                fromOffset = Offset(zoomState.offsetX, zoomState.offsetY),
-                                toScale = doubleTapTargetScale(zoomState.scale),
-                                tapPos = downPos
-                            )
+                            if (layoutZoom) {
+                                // One-canvas: the animation (see
+                                // the strip effect above) moves the
+                                // whole strip — shared scale, list
+                                // scroll, shared cross offset —
+                                // around the tap point, so the
+                                // target carries no per-box offset.
+                                stripZoomAnimTarget = StripZoomAnimTarget(
+                                    fromScale = zoomState.scale,
+                                    toScale = doubleTapTargetScale(zoomState.scale),
+                                    tapPos = downPos
+                                )
+                            } else {
+                                zoomAnimTarget = ZoomAnimTarget(
+                                    fromScale = zoomState.scale,
+                                    fromOffset = Offset(zoomState.offsetX, zoomState.offsetY),
+                                    toScale = doubleTapTargetScale(zoomState.scale),
+                                    tapPos = downPos
+                                )
+                            }
                             // Confirmed double-tap: the viewer
                             // drops the pending chrome toggle
                             // for this one (a lone second tap

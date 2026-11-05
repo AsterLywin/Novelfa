@@ -247,3 +247,92 @@ fun doubleTapTargetScale(scale: Float): Float =
  */
 fun shouldResetZoom(slotKey: Int?, activeSlotKey: Int?): Boolean =
     slotKey != null && activeSlotKey != null && slotKey != activeSlotKey
+
+/**
+ * One-canvas strip zoom (2026-11-05): the strip is ONE box —
+ * every page laid out at fit size x the SHARED scale, stuck
+ * together with no gap and no overlap — so zoom changes the
+ * LAYOUT, not a GPU transform inside each page box. The main
+ * axis pan IS the list scroll; the cross axis pan is one
+ * shared offset for all pages. The functions below are the
+ * focal math for that model, pure so the strip detector and
+ * the double-tap animation both run them, and the tests pin
+ * them. The per-page box math above (focalPan, clampPan) is
+ * untouched: paged mode still zooms one box at a time.
+ */
+
+/**
+ * Main-axis scroll compensation for one scale step: the list
+ * must scroll by this much (positive = content moves up, the
+ * usual scrollBy sign) so the content point under the centroid
+ * stays under it when the scale goes from [oldScale] to
+ * [newScale]. [itemOffsetMain] is the leading edge of the item
+ * under the centroid, in viewport coordinates (negative when
+ * scrolled past); [centroidMain] is the centroid on the same
+ * axis. The content point sits (centroidMain - itemOffsetMain)
+ * below that edge; after scaling it sits that distance times
+ * (new/old) below the edge, so the edge must move to
+ * centroidMain - (centroidMain - itemOffsetMain) * (new/old),
+ * and the scroll delta is the edge's move, negated (scrolling
+ * forward by D moves content by -D). Zero when the scale does
+ * not change; a shortfall is the caller's to accept (scrollBy
+ * clamps at the list ends, so the focal point drifts a little
+ * at the very top/bottom — the same edge behaviour PhotoView
+ * has).
+ */
+fun stripScrollDelta(
+    itemOffsetMain: Float,
+    centroidMain: Float,
+    oldScale: Float,
+    newScale: Float
+): Float {
+    val old = coerceZoomScale(oldScale)
+    val new = coerceZoomScale(newScale)
+    if (old == new) return 0f
+    if (!itemOffsetMain.isFinite() || !centroidMain.isFinite()) return 0f
+    return itemOffsetMain - centroidMain + (centroidMain - itemOffsetMain) * (new / old)
+}
+
+/**
+ * Cross-axis shared offset after one scale step: the content
+ * point under the centroid stays under it. The item is
+ * [fitFraction] of the viewport wide (tall in a horizontal
+ * strip) at fit size, centred, plus the shared [oldOffsetCross]
+ * translation; its size at [scale] is viewportCross x
+ * fitFraction x scale. The result is clamped so no edge of the
+ * strip can enter the viewport (see [stripMaxCrossOffset]).
+ * Unchanged when the scale does not change.
+ */
+fun stripCrossOffset(
+    oldScale: Float,
+    oldOffsetCross: Float,
+    centroidCross: Float,
+    viewportCross: Float,
+    fitFraction: Float,
+    newScale: Float
+): Float {
+    val old = coerceZoomScale(oldScale)
+    val new = coerceZoomScale(newScale)
+    if (!viewportCross.isFinite() || viewportCross <= 0f) return 0f
+    if (!centroidCross.isFinite() || !oldOffsetCross.isFinite()) return oldOffsetCross
+    val frac = fitFraction.coerceIn(0f, 1f)
+    val oldSize = viewportCross * frac * old
+    val oldEdge = (viewportCross - oldSize) / 2f + oldOffsetCross
+    val content = centroidCross - oldEdge
+    val newSize = viewportCross * frac * new
+    val newEdge = (viewportCross - newSize) / 2f
+    val raw = centroidCross - content * (new / old) - newEdge
+    val max = stripMaxCrossOffset(newSize, viewportCross)
+    return raw.coerceIn(-max, max)
+}
+
+/**
+ * Cross-axis pan bound for a strip item [boxCrossPx] wide
+ * (tall) in a [viewportCrossPx] viewport: each direction can
+ * move at most half the overflow. At fit size (or narrower)
+ * the bound is zero, so an unzoomed strip never shifts.
+ */
+fun stripMaxCrossOffset(boxCrossPx: Float, viewportCrossPx: Float): Float {
+    if (!boxCrossPx.isFinite() || !viewportCrossPx.isFinite()) return 0f
+    return ((boxCrossPx - viewportCrossPx) / 2f).coerceAtLeast(0f)
+}
