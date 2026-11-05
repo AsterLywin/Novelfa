@@ -65,6 +65,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.MutableFloatState
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,6 +78,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -92,6 +95,7 @@ import kotlinx.coroutines.flow.first
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
@@ -161,6 +165,106 @@ private fun hashFromSourceUri(context: Context, sourceUri: String?): String? {
         }
     } catch (e: Exception) {
         null
+    }
+}
+
+/**
+ * Strip-level pinch detector (2026-11-05): a pinch whose two
+ * fingers land on DIFFERENT strip pages.
+ *
+ * Why this has to live here, above the items: each page box
+ * (ZoomablePageContainer) only ever sees the pointers that land
+ * inside its own bounds, so a pinch straddling a page boundary
+ * reached neither box as a pinch — each box saw one finger and
+ * treated it as a drag. This detector sits on the strip itself,
+ * so it sees every pointer in the strip at once, whichever page
+ * it landed on.
+ *
+ * It owns EVERY strip pinch, not only straddling ones: when
+ * both fingers are on one page, the box's own pinch branch is
+ * disabled (see ZoomablePageContainer), so the scale is never
+ * applied twice per frame. Paged mode is untouched — it passes
+ * no shared state, and its boxes keep their own pinch.
+ *
+ * How it stays out of the way of everything else: it reads
+ * events in the Initial pass (ancestors first) and consumes a
+ * move only while two pointers are down. Single-finger drags
+ * are never consumed, so list scrolling, per-page panning and
+ * taps behave exactly as before. While a pinch runs, the
+ * consumed moves also stop the list from scrolling under the
+ * pinch and stop the boxes from panning the same fingers a
+ * second time. The scale math is the same as the box pinch
+ * (start-referenced target on a smoothed span + focalPan
+ * against the viewport); at gesture end it publishes the
+ * settled scale once, so every strip page crosses the sharp
+ * re-render threshold together.
+ */
+private fun Modifier.stripPinchDetector(
+    zoomState: MutableState<PageZoomState>,
+    settledZoom: MutableFloatState,
+    viewportWidthPx: Float,
+    viewportHeightPx: Float
+): Modifier = pointerInput(zoomState, settledZoom, viewportWidthPx, viewportHeightPx) {
+    // awaitPointerEvent is a member of AwaitPointerEventScope,
+    // not of PointerInputScope, so the loop lives inside this
+    // scope (same pattern as the box loop in ZoomableImage).
+    awaitPointerEventScope {
+    var pinching = false
+    var prevCentroid = Offset.Zero
+    var pinchStartScale = 1f
+    var pinchStartSpan = 0f
+    var pinchSmoothSpan = 0f
+    while (true) {
+        val event = awaitPointerEvent(PointerEventPass.Initial)
+        val pressed = event.changes.filter { it.pressed }.sortedBy { it.id.value }
+        if (pressed.size >= 2) {
+            val c1 = pressed[0].position
+            val c2 = pressed[1].position
+            val centroid = (c1 + c2) / 2f
+            val distance = (c1 - c2).getDistance()
+            if (!pinching) {
+                pinching = true
+                prevCentroid = centroid
+                pinchStartScale = zoomState.value.scale
+                pinchStartSpan = distance
+                pinchSmoothSpan = distance
+            } else if (distance < MIN_PINCH_SPAN_PX) {
+                // Fingers too close for a signal: hold the
+                // scale and re-base the gesture reference at
+                // the floor (see the box pinch loop), so
+                // crossing it again resumes continuously.
+                pinchStartScale = zoomState.value.scale
+                pinchStartSpan = MIN_PINCH_SPAN_PX
+                pinchSmoothSpan = distance
+                prevCentroid = centroid
+                pressed.forEach { it.consume() }
+            } else {
+                pinchSmoothSpan = smoothPinchSpan(pinchSmoothSpan, distance)
+                val newScale = pinchTargetScale(
+                    pinchStartScale, pinchStartSpan, pinchSmoothSpan
+                )
+                val center = Offset(viewportWidthPx / 2f, viewportHeightPx / 2f)
+                val cur = zoomState.value
+                // Same focal math as the box pinch: pan by the
+                // centroid move, then zoom around the new
+                // centroid, so the content point under the
+                // fingers stays under them.
+                val (newX, newY) = focalPan(
+                    cur.scale, cur.offsetX, cur.offsetY,
+                    centroid.x - prevCentroid.x, centroid.y - prevCentroid.y,
+                    newScale, centroid.x, centroid.y,
+                    center.x, center.y, viewportWidthPx, viewportHeightPx
+                )
+                zoomState.value = cur.copy(scale = newScale, offsetX = newX, offsetY = newY)
+                prevCentroid = centroid
+                pressed.forEach { it.consume() }
+            }
+        } else if (pinching) {
+            pinching = false
+            val settled = zoomState.value.scale
+            if (settledZoom.floatValue != settled) settledZoom.floatValue = settled
+        }
+    }
     }
 }
 
@@ -1281,7 +1385,11 @@ internal fun NativeImageBookViewer(
                     LazyRow(
                         state = rowState,
                         modifier = Modifier.fillMaxSize()
-                            .background(pageBg),
+                            .background(pageBg)
+                            .stripPinchDetector(
+                                stripZoomState, stripSettledZoom,
+                                screenWidthPx.toFloat(), screenHeightPx.toFloat()
+                            ),
                         verticalAlignment = Alignment.CenterVertically,
                         // No gap: ComicScreen's strip pages touch.
                         // The old 8.dp showed as a dark strip
@@ -1329,7 +1437,11 @@ internal fun NativeImageBookViewer(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize()
-                        .background(pageBg),
+                        .background(pageBg)
+                        .stripPinchDetector(
+                            stripZoomState, stripSettledZoom,
+                            screenWidthPx.toFloat(), screenHeightPx.toFloat()
+                        ),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     // No gap: ComicScreen's strip pages touch.
                     // The old 8.dp showed as a dark strip

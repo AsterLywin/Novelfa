@@ -74,6 +74,12 @@ import androidx.compose.ui.unit.IntSize
  *   point and pans with the centroid, consuming the whole
  *   gesture so the list/pager never moves mid-pinch. The focal
  *   math lives in PageZoomState.focalPan and is unit-tested.
+ *   In strips this box does NOT pinch: the strip-level
+ *   detector on the viewer owns every strip pinch (see
+ *   NativeImageBookViewer.stripPinchDetector), because a box
+ *   only ever sees the pointers inside its own bounds — a
+ *   pinch straddling two pages reached neither box as a
+ *   pinch. In the pager the pinch still lives here.
  * - One-finger drag pans ONLY while zoomed (scale > 1). At
  *   scale 1 the drag is never consumed, so the list scrolls
  *   vertically as before — and since there is no horizontal
@@ -149,7 +155,9 @@ fun ZoomablePageContainer(
     zoomPageId: String = "",
     // Strip-shared zoom state, passed in by the viewer (one
     // state for the whole strip — see the header note). Null
-    // = this box owns its own state (paged mode).
+    // = this box owns its own state (paged mode). With a
+    // shared state this box never pinches on its own: the
+    // strip-level detector owns every strip pinch.
     sharedZoomState: MutableState<PageZoomState>? = null,
     // Edge handover: true in strips (a drag at the pan edge
     // scrolls the list), false in the pager (a drag at the
@@ -360,13 +368,16 @@ fun ZoomablePageContainer(
                     var pinch = false
                     var pastSlop = false
                     var prevCentroid = Offset.Zero
-                    var prevDistance = 0f
-                    // Smoothed scale the pinch loop actually
-                    // displays (see smoothPinchScale): reset
-                    // to the live scale whenever a pinch
-                    // starts, so a new gesture never jumps
-                    // from a stale smoothed value.
-                    var pinchSmoothScale = 1f
+                    // Gesture-start reference for the pinch
+                    // scale (see PageZoomState.pinchTargetScale)
+                    // and the smoothed span it is computed from
+                    // (see smoothPinchSpan): both reset to the
+                    // live values whenever a pinch starts, so a
+                    // new gesture never jumps from a stale
+                    // reference.
+                    var pinchStartScale = 1f
+                    var pinchStartSpan = 0f
+                    var pinchSmoothSpan = 0f
                     var totalDrag = Offset.Zero
                     val slop = viewConfiguration.touchSlop
                     var gestureActive = true
@@ -375,6 +386,22 @@ fun ZoomablePageContainer(
                         val pressed = event.changes.filter { it.pressed }
                         if (pressed.isEmpty()) break
                         if (pressed.size >= 2) {
+                            // Strips: this box never pinches on
+                            // its own — the strip-level detector
+                            // (see the viewer) owns EVERY strip
+                            // pinch, including one whose fingers
+                            // straddle two pages, so the shared
+                            // scale would be zoomed twice per
+                            // frame if this branch ran too. Just
+                            // mark the gesture as a drag, so no
+                            // tap is reported for it when the
+                            // fingers lift, and let the detector
+                            // handle the moves. Paged mode has no
+                            // shared state and pinches here.
+                            if (sharedZoomState != null) {
+                                pastSlop = true
+                                continue
+                            }
                             // Pinch: zoom around the focal point,
                             // pan with the centroid, consume all.
                             val c1 = pressed[0].position
@@ -384,37 +411,42 @@ fun ZoomablePageContainer(
                             if (!pinch) {
                                 pinch = true
                                 prevCentroid = centroid
-                                prevDistance = distance
-                                pinchSmoothScale = zoomState.scale
-                            } else if (prevDistance > 0f && distance > 0f) {
-                                val prevSmooth = pinchSmoothScale
-                                // Span-floor guard (see pinchScale):
-                                // near-touching fingers give a noise
-                                // ratio, not a zoom signal — without
-                                // it the scale spikes frame to frame
-                                // while the fingers hover close
-                                // together, which is the trembling
-                                // users see on pinch-in starts and
-                                // pinch-out ends. The floor alone
-                                // does not cover normal spans:
-                                // the raw ratio still carries
-                                // 1-3% touch noise per frame, and
-                                // focalPan multiplies the offset
-                                // by new/old — at 3x zoom a 2%
-                                // wobble is a multi-pixel offset
-                                // jump per frame. So the loop
-                                // never applies the raw ratio:
-                                // smoothPinchScale moves three-quarters
-                                // of the way toward the target each frame
-                                // (see PageZoomState), damping
-                                // the offset jumps by the same
-                                // factor, and the pan math runs
-                                // on the smoothed scale.
-                                val targetScale =
-                                    pinchScale(prevSmooth, prevDistance, distance)
-                                val newScale =
-                                    smoothPinchScale(prevSmooth, targetScale)
-                                pinchSmoothScale = newScale
+                                pinchStartScale = zoomState.scale
+                                pinchStartSpan = distance
+                                pinchSmoothSpan = distance
+                            } else if (distance < MIN_PINCH_SPAN_PX) {
+                                // Span-floor guard: near-touching
+                                // fingers give a noise ratio, not a
+                                // zoom signal — without it the scale
+                                // spikes frame to frame while the
+                                // fingers hover close together, which
+                                // is the trembling users see on
+                                // pinch-in starts and pinch-out ends.
+                                // Hold the scale, and re-base the
+                                // gesture reference at the floor, so
+                                // crossing it again resumes
+                                // continuously instead of jumping.
+                                pinchStartScale = zoomState.scale
+                                pinchStartSpan = MIN_PINCH_SPAN_PX
+                                pinchSmoothSpan = distance
+                                prevCentroid = centroid
+                                pressed.forEach { it.consume() }
+                            } else {
+                                // The scale is the absolute ratio
+                                // from the gesture start, on a
+                                // smoothed span (see PageZoomState):
+                                // it tracks the fingers 1:1 instead
+                                // of trailing them the way a smoothed
+                                // per-frame ratio did, so zooming in
+                                // and out no longer feels slow. The
+                                // pan math runs on the same scale,
+                                // so the content point under the
+                                // fingers stays under them.
+                                pinchSmoothSpan =
+                                    smoothPinchSpan(pinchSmoothSpan, distance)
+                                val newScale = pinchTargetScale(
+                                    pinchStartScale, pinchStartSpan, pinchSmoothSpan
+                                )
                                 val center = Offset(
                                     boxSize.width / 2f,
                                     boxSize.height / 2f
@@ -425,7 +457,7 @@ fun ZoomablePageContainer(
                                 // fingers stays under them.
                                 // (Pure math: PageZoomState.focalPan.)
                                 val (nx, ny) = focalPan(
-                                    prevSmooth, zoomState.offsetX, zoomState.offsetY,
+                                    zoomState.scale, zoomState.offsetX, zoomState.offsetY,
                                     centroid.x - prevCentroid.x,
                                     centroid.y - prevCentroid.y,
                                     newScale, centroid.x, centroid.y,
@@ -441,11 +473,7 @@ fun ZoomablePageContainer(
                                 // mid-pinch re-render never
                                 // stalls the gesture.
                                 prevCentroid = centroid
-                                prevDistance = distance
                                 pressed.forEach { it.consume() }
-                            } else {
-                                prevCentroid = centroid
-                                prevDistance = distance
                             }
                             pastSlop = true
                         } else {

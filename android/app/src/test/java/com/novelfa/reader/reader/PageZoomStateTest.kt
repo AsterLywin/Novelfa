@@ -286,37 +286,72 @@ class PageZoomStateTest {
     }
 
     @Test
-    fun pinchScaleHoldsBelowTheSpanFloor() {
-        // The trembling fix: fingers nearly touching (both
-        // spans under 20px) must not move the scale at all,
-        // however wild the ratio between them is — 8px -> 12px
-        // would otherwise be a 1.5x jump in one frame.
-        assertEquals(2f, pinchScale(2f, 8f, 12f), delta)
-        assertEquals(2f, pinchScale(2f, 12f, 8f), delta)
-        // Either side below the floor holds, even if the
-        // other side is a normal span.
-        assertEquals(2f, pinchScale(2f, 19f, 100f), delta)
-        assertEquals(2f, pinchScale(2f, 100f, 19f), delta)
-        // Degenerate spans hold too, never NaN or infinity.
-        assertEquals(2f, pinchScale(2f, 0f, 100f), delta)
-        assertEquals(2f, pinchScale(2f, 100f, 0f), delta)
-        assertEquals(2f, pinchScale(2f, Float.NaN, 100f), delta)
+    fun pinchTargetScaleAppliesTheAbsoluteRatioFromTheStart() {
+        // The scale is the absolute ratio from the gesture
+        // start, not a per-frame ratio chained onto the
+        // previous frame — so it tracks the fingers 1:1.
+        assertEquals(3f, pinchTargetScale(2f, 100f, 150f), delta)
+        assertEquals(1.5f, pinchTargetScale(2f, 100f, 75f), delta)
+        assertEquals(2f, pinchTargetScale(2f, 200f, 200f), delta)
+        assertEquals(3f, pinchTargetScale(2f, 20f, 30f), delta)
     }
 
     @Test
-    fun pinchScaleAppliesTheRatioAtAndAboveTheFloor() {
-        // At exactly the floor the ratio is already a signal.
-        assertEquals(3f, pinchScale(2f, 20f, 30f), delta)
-        assertEquals(1.5f, pinchScale(2f, 100f, 75f), delta)
-        // Normal pinch spans are untouched by the floor.
-        assertEquals(3f, pinchScale(2f, 100f, 150f), delta)
-        assertEquals(2f, pinchScale(2f, 200f, 200f), delta)
+    fun pinchTargetScaleStaysInsideTheCaps() {
+        assertEquals(4f, pinchTargetScale(3f, 100f, 200f), delta)
+        assertEquals(1f, pinchTargetScale(1.2f, 200f, 100f), delta)
     }
 
     @Test
-    fun pinchScaleStaysInsideTheCaps() {
-        assertEquals(4f, pinchScale(3f, 100f, 200f), delta)
-        assertEquals(1f, pinchScale(1.2f, 200f, 100f), delta)
+    fun pinchTargetScaleHoldsOnBadInputs() {
+        // Bad inputs hold the start scale, never NaN or
+        // infinity. The span floor itself lives in the
+        // caller, which holds the CURRENT scale below it.
+        assertEquals(2f, pinchTargetScale(2f, 0f, 100f), delta)
+        assertEquals(2f, pinchTargetScale(2f, 100f, 0f), delta)
+        assertEquals(2f, pinchTargetScale(2f, Float.NaN, 100f), delta)
+        assertEquals(2f, pinchTargetScale(2f, 100f, Float.NaN), delta)
+    }
+
+    @Test
+    fun smoothPinchSpanMovesHalfwayTowardTheRawSpan() {
+        assertEquals(110f, smoothPinchSpan(100f, 120f), delta)
+        assertEquals(90f, smoothPinchSpan(100f, 80f), delta)
+        // A fresh (non-finite) previous span restarts from
+        // the raw span.
+        assertEquals(120f, smoothPinchSpan(Float.NaN, 120f), delta)
+    }
+
+    @Test
+    fun smoothPinchSpanNeverGoesBelowTheFloor() {
+        // The smoothed span is floored at 20px, so the target
+        // scale can never dip below the start scale just
+        // because the EMA still lags a crossing span.
+        assertEquals(20f, smoothPinchSpan(10f, 5f), delta)
+        // A degenerate raw span holds the previous smoothed
+        // span instead of dragging it down.
+        assertEquals(100f, smoothPinchSpan(100f, 0f), delta)
+        assertEquals(100f, smoothPinchSpan(100f, Float.NaN), delta)
+    }
+
+    @Test
+    fun steadyPinchTracksTheFingersInsteadOfTrailingThem() {
+        // Regression test for the 2026-11-05 "zoom still feels
+        // slow" report: the old per-frame ratio target, smoothed
+        // at 0.75, reached only ~1.7x after the fingers spread
+        // 100px -> 200px over 10 frames (the lag fed back into
+        // each frame's target and compounded). The new loop —
+        // absolute ratio from the gesture start on a smoothed
+        // span — must end within 8% of the fingers' 2x.
+        var smoothedSpan = 100f
+        var scale = 1f
+        for (frame in 1..10) {
+            val span = 100f + 10f * frame
+            smoothedSpan = smoothPinchSpan(smoothedSpan, span)
+            scale = pinchTargetScale(1f, 100f, smoothedSpan)
+        }
+        assertTrue("scale $scale trails the fingers' 2x too far", scale > 1.85f)
+        assertTrue("scale $scale overshoots the fingers' 2x", scale < 2f)
     }
 
     @Test
@@ -336,25 +371,4 @@ class PageZoomStateTest {
         assertEquals(17f, y, delta)
     }
 
-    @Test
-    fun smoothPinchScaleMovesThreeQuartersToTarget() {
-        assertEquals(2.5f, smoothPinchScale(1f, 3f), delta)
-        assertEquals(2.75f, smoothPinchScale(2f, 3f), delta)
-        assertEquals(1.25f, smoothPinchScale(2f, 1f), delta)
-    }
-
-    @Test
-    fun smoothPinchScaleNeverOvershootsAndStaysInsideCaps() {
-        // Between prev and target, never past the target.
-        assertEquals(3.75f, smoothPinchScale(3f, 4f), delta)
-        // Caps: the target is coerced first, then the three-quarter step.
-        assertEquals(3.975f, smoothPinchScale(3.9f, 10f), delta)
-        assertEquals(1f, smoothPinchScale(1f, 0f), delta)
-    }
-
-    @Test
-    fun smoothPinchScaleHoldsOnNonFiniteTarget() {
-        assertEquals(2f, smoothPinchScale(2f, Float.NaN), delta)
-        assertEquals(2f, smoothPinchScale(2f, Float.POSITIVE_INFINITY), delta)
-    }
 }
