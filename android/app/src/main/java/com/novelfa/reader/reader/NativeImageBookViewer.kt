@@ -2777,7 +2777,8 @@ internal fun NativeImageBookViewer(
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         text = stringResource(R.string.comic_upscale_mode),
-                        style = MaterialTheme.typography.bodyMedium
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     SheetChoiceRow(
                         label = stringResource(R.string.comic_upscale_linear),
