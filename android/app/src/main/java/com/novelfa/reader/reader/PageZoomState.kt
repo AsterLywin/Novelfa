@@ -296,12 +296,12 @@ fun stripScrollDelta(
 /**
  * Cross-axis shared offset after one scale step: the content
  * point under the centroid stays under it. The item is
- * [fitFraction] of the viewport wide (tall in a horizontal
- * strip) at fit size, centred, plus the shared [oldOffsetCross]
- * translation; its size at [scale] is viewportCross x
- * fitFraction x scale. The result is clamped so no edge of the
- * strip can enter the viewport (see [stripMaxCrossOffset]).
- * Unchanged when the scale does not change.
+ * [fitFraction] of the viewport wide at fit size, centred,
+ * plus the shared [oldOffsetCross] translation; its size at
+ * [scale] is viewportCross x fitFraction x scale. The result
+ * is clamped so no edge of the strip can enter the viewport
+ * (see [stripMaxCrossOffset]). Unchanged when the scale does
+ * not change.
  */
 fun stripCrossOffset(
     oldScale: Float,

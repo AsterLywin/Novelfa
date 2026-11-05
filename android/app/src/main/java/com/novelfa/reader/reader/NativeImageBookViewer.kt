@@ -30,7 +30,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -225,11 +224,9 @@ private fun Modifier.stripPinchDetector(
     stripZoomState: MutableState<PageZoomState>,
     stripSettledZoom: MutableFloatState,
     listState: LazyListState,
-    horizontal: Boolean,
     viewportWidthPx: Float,
-    viewportHeightPx: Float,
     fitFraction: Float
-): Modifier = pointerInput(stripZoomState, stripSettledZoom, listState, horizontal, viewportWidthPx, viewportHeightPx, fitFraction) {
+): Modifier = pointerInput(stripZoomState, stripSettledZoom, listState, viewportWidthPx, fitFraction) {
     // awaitPointerEvent is a member of AwaitPointerEventScope,
     // not of PointerInputScope, so the loop lives inside this
     // scope (same pattern as the box loop in ZoomableImage).
@@ -270,7 +267,7 @@ private fun Modifier.stripPinchDetector(
                 // The zoom is global (one canvas), so the
                 // anchor is the CENTROID, not the first
                 // finger — and it must be over content.
-                val mainPos = if (horizontal) centroid.x else centroid.y
+                val mainPos = centroid.y
                 val page = pageAt(mainPos) ?: continue
                 itemOffsetMain(page) ?: continue
                 pinching = true
@@ -298,7 +295,7 @@ private fun Modifier.stripPinchDetector(
                 // content point stays put by construction, so
                 // it is the same item, but the layout moves
                 // under it as the strip rescales).
-                val mainPos = if (horizontal) centroid.x else centroid.y
+                val mainPos = centroid.y
                 val page = pageAt(mainPos)
                 if (page != null) {
                     val off = itemOffsetMain(page)
@@ -321,21 +318,14 @@ private fun Modifier.stripPinchDetector(
                 }
                 // Cross axis: one shared offset around the
                 // centroid (see PageZoomState.stripCrossOffset).
-                val (centroidCross, viewportCross) = if (horizontal) {
-                    centroid.y to viewportHeightPx
-                } else {
+                val (centroidCross, viewportCross) =
                     centroid.x to viewportWidthPx
-                }
-                val oldCross = if (horizontal) cur.offsetY else cur.offsetX
+                val oldCross = cur.offsetX
                 val newCross = stripCrossOffset(
                     cur.scale, oldCross, centroidCross, viewportCross,
                     fitFraction, newScale
                 )
-                stripZoomState.value = if (horizontal) {
-                    cur.copy(scale = newScale, offsetY = newCross)
-                } else {
-                    cur.copy(scale = newScale, offsetX = newCross)
-                }
+                stripZoomState.value = cur.copy(scale = newScale, offsetX = newCross)
                 pressed.forEach { it.consume() }
             }
         } else if (pinching) {
@@ -1434,8 +1424,8 @@ internal fun NativeImageBookViewer(
                 // One host per strip (not per page): every
                 // strip item reads the same one.
                 val stripHost = StripZoomHost(
-                    listState, horizontal = false,
-                    screenWidthPx.toFloat(), screenHeightPx.toFloat(),
+                    listState,
+                    screenWidthPx.toFloat(),
                     stripFitFraction
                 )
                 LazyColumn(
@@ -1443,8 +1433,8 @@ internal fun NativeImageBookViewer(
                     modifier = Modifier.fillMaxSize()
                         .background(pageBg)
                         .stripPinchDetector(
-                            stripZoomState, stripSettledZoom, listState, horizontal = false,
-                            screenWidthPx.toFloat(), screenHeightPx.toFloat(),
+                            stripZoomState, stripSettledZoom, listState,
+                            screenWidthPx.toFloat(),
                             stripFitFraction
                         ),
                     horizontalAlignment = Alignment.CenterHorizontally,

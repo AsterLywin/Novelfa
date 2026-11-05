@@ -171,12 +171,11 @@ private data class ZoomAnimTarget(
  * where the container owns its own state and none of the
  * strip math below runs.
  *
- * - [listState] is the strip's LazyColumn/LazyRow state: the
+ * - [listState] is the strip's LazyColumn state: the
  *   main-axis pan IS its scroll, so the pinch detector and the
  *   double-tap animation compensate the focal point by
  *   scrolling it (see PageZoomState.stripScrollDelta).
- * - [horizontal] is the strip direction (LazyRow vs LazyColumn).
- * - [viewportWidthPx]/[viewportHeightPx] are the strip viewport.
+ * - [viewportWidthPx] is the strip viewport width.
  * - [fitFraction] is the page's fit size as a fraction of the
  *   viewport on its fit axis (the padding shrink: 1 without
  *   padding) — the cross-axis anchor math needs the item's
@@ -184,9 +183,7 @@ private data class ZoomAnimTarget(
  */
 data class StripZoomHost(
     val listState: LazyListState,
-    val horizontal: Boolean,
     val viewportWidthPx: Float,
-    val viewportHeightPx: Float,
     val fitFraction: Float
 )
 
@@ -366,19 +363,11 @@ fun ZoomablePageContainer(
                 // the scale lives in the layout and the main
                 // axis is the list scroll.
                 val host = stripHost!!
-                val (boxCross, viewportCross) = if (host.horizontal) {
-                    boxSize.height.toFloat() to host.viewportHeightPx
-                } else {
+                val (boxCross, viewportCross) =
                     boxSize.width.toFloat() to host.viewportWidthPx
-                }
                 val maxCross = stripMaxCrossOffset(boxCross, viewportCross)
-                if (host.horizontal) {
-                    val y = zoomState.offsetY.coerceIn(-maxCross, maxCross)
-                    if (y != zoomState.offsetY) zoomState = zoomState.copy(offsetY = y)
-                } else {
-                    val x = zoomState.offsetX.coerceIn(-maxCross, maxCross)
-                    if (x != zoomState.offsetX) zoomState = zoomState.copy(offsetX = x)
-                }
+                val x = zoomState.offsetX.coerceIn(-maxCross, maxCross)
+                if (x != zoomState.offsetX) zoomState = zoomState.copy(offsetX = x)
             } else {
                 val (x, y) = clampCurrent(zoomState.offsetX, zoomState.offsetY, zoomState.scale)
                 if (x != zoomState.offsetX || y != zoomState.offsetY) {
@@ -460,13 +449,9 @@ fun ZoomablePageContainer(
             stripZoomAnimTarget = null
             return@LaunchedEffect
         }
-        val focalMain = item.offset.toFloat() +
-            if (host.horizontal) target.tapPos.x else target.tapPos.y
-        val focalCross = if (host.horizontal) {
-            host.viewportHeightPx / 2f + (target.tapPos.y - boxSize.height / 2f)
-        } else {
+        val focalMain = item.offset.toFloat() + target.tapPos.y
+        val focalCross =
             host.viewportWidthPx / 2f + (target.tapPos.x - boxSize.width / 2f)
-        }
         val startNanos = withFrameNanos { it }
         var prevScale = target.fromScale
         while (true) {
@@ -488,17 +473,13 @@ fun ZoomablePageContainer(
             }
             // Cross axis: the shared offset around the same
             // focal point.
-            val cross = if (host.horizontal) zoomState.offsetY else zoomState.offsetX
+            val cross = zoomState.offsetX
             val newCross = stripCrossOffset(
                 prevScale, cross, focalCross,
-                if (host.horizontal) host.viewportHeightPx else host.viewportWidthPx,
+                host.viewportWidthPx,
                 host.fitFraction, value
             )
-            zoomState = if (host.horizontal) {
-                zoomState.copy(scale = value, offsetY = newCross)
-            } else {
-                zoomState.copy(scale = value, offsetX = newCross)
-            }
+            zoomState = zoomState.copy(scale = value, offsetX = newCross)
             prevScale = value
             if (t >= 1f) break
         }
@@ -532,23 +513,14 @@ fun ZoomablePageContainer(
                     // the per-page clamp uses, against the
                     // viewport instead of the box).
                     val host = stripHost!!
-                    val (boxCross, viewportCross) = if (host.horizontal) {
-                        boxSize.height.toFloat() to host.viewportHeightPx
-                    } else {
+                    val (boxCross, viewportCross) =
                         boxSize.width.toFloat() to host.viewportWidthPx
-                    }
                     val maxCross = stripMaxCrossOffset(boxCross, viewportCross)
                     scaleX = 1f
                     scaleY = 1f
-                    if (host.horizontal) {
-                        translationX = 0f
-                        translationY =
-                            zoomState.offsetY.coerceIn(-maxCross, maxCross)
-                    } else {
-                        translationX =
-                            zoomState.offsetX.coerceIn(-maxCross, maxCross)
-                        translationY = 0f
-                    }
+                    translationX =
+                        zoomState.offsetX.coerceIn(-maxCross, maxCross)
+                    translationY = 0f
                 } else {
                     // Display clamp: with a strip-shared state the
                     // offset was clamped against the page it was
@@ -736,34 +708,20 @@ fun ZoomablePageContainer(
                                 // zoomed, and it is not consumed
                                 // either: the list has no handler on
                                 // that axis (a LazyColumn never
-                                // scrolls sideways, a LazyRow never
-                                // vertically), so there is nothing
+                                // scrolls sideways), so there is nothing
                                 // to fight over.
                                 val host = hostState.value
                                 if (host != null && zoomState.scale > 1f) {
                                     val (boxCross, viewportCross) =
-                                        if (host.horizontal) {
-                                            boxSize.height.toFloat() to
-                                                host.viewportHeightPx
-                                        } else {
-                                            boxSize.width.toFloat() to
-                                                host.viewportWidthPx
-                                        }
+                                        boxSize.width.toFloat() to
+                                            host.viewportWidthPx
                                     val maxCross = stripMaxCrossOffset(
                                         boxCross, viewportCross
                                     )
-                                    if (host.horizontal) {
-                                        val ny = (zoomState.offsetY + delta.y)
-                                            .coerceIn(-maxCross, maxCross)
-                                        if (ny != zoomState.offsetY) {
-                                            zoomState = zoomState.copy(offsetY = ny)
-                                        }
-                                    } else {
-                                        val nx = (zoomState.offsetX + delta.x)
-                                            .coerceIn(-maxCross, maxCross)
-                                        if (nx != zoomState.offsetX) {
-                                            zoomState = zoomState.copy(offsetX = nx)
-                                        }
+                                    val nx = (zoomState.offsetX + delta.x)
+                                        .coerceIn(-maxCross, maxCross)
+                                    if (nx != zoomState.offsetX) {
+                                        zoomState = zoomState.copy(offsetX = nx)
                                     }
                                 }
                             } else if (zoomState.scale > 1f) {
