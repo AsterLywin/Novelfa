@@ -282,33 +282,6 @@ internal fun detectBookIsLtr(chapters: List<com.novelfa.reader.model.Chapter>): 
 /** Zip-bomb guardrails for EPUB extraction (generous: real books are far smaller). */
 
 /**
- * One row of the diagnostic dialog: a localized label on one side
- * and the raw diagnostic value on the other. Values are codes and
- * numbers, never prose, so they need no translation; labels are
- * all in strings.xml.
- */
-@Composable
-internal fun DiagRow(label: String, value: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium
-        )
-    }
-}
-
-/**
  * One reading-mode option in the mode picker popup: the mode's drawn
  * icon (IcoStack pages for horizontal, IcoScroll for vertical-continuous)
  * with its label underneath, highlighted when selected.
