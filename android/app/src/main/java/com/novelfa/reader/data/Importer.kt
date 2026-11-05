@@ -625,6 +625,24 @@ class Importer(
                 ioCtx.ensureActive()
                 reportStage("validate")
                 pdfPageCountOrThrow(destFile, displayName)
+                // First page as the cover (2026-11-05): a PDF's
+                // library cover is its first page, not a generated
+                // typographic cover — the old design kept generated
+                // covers for copy PDFs because the engine reports
+                // no embedded cover, but the cover was reported as
+                // not detected. One page render is O(1): it does
+                // not grow with the book, so lazy import still
+                // holds. Best-effort: any failure leaves coverFile
+                // null and the generated cover below applies.
+                // Password PDFs are decrypted above, so the render
+                // sees the plain file; file:// in-place books
+                // render from the user's own file (read-only).
+                val pdfCover = runCatching {
+                    ioCtx.ensureActive()
+                    CoverBackfill.pdfFirstPageCoverForFile(
+                        context, destFile, openCacheDir
+                    )
+                }.getOrNull()
                 // A re-imported file keeps its saved position: the
                 // record is keyed by content hash, and the same
                 // content parses to the same chapters, so the
@@ -645,7 +663,7 @@ class Importer(
                     title = File(displayName).nameWithoutExtension
                         .takeIf { it.isNotBlank() } ?: displayName,
                     chapters = emptyList(),
-                    coverFile = null
+                    coverFile = pdfCover
                 )
             } else if (format == BookFormat.CBZ) {
                 // Native image book (manhwa/manga/comic): import only
@@ -893,6 +911,64 @@ class Importer(
     }
 
     /**
+     * Real cover for a register-only (content://) in-place
+     * import: a PDF's first page rendered from the provider's
+     * descriptor, or the first image of a CBZ / image-only ZIP
+     * read through a seekable archive (tail read + one entry —
+     * no full copy, no working copy yet). Best-effort: null
+     * means "no real cover" and the caller falls back to the
+     * generated cover. Never throws into the import: a cover
+     * must never fail an import. The file is written into
+     * [scratchDir]; the caller owns that dir and deletes it
+     * after the cover is saved.
+     */
+    private fun realCoverForInPlace(
+        sourceUri: Uri,
+        format: BookFormat,
+        scratchDir: File
+    ): File? = runCatching {
+        when (format) {
+            BookFormat.PDF -> CoverBackfill.pdfFirstPageCoverForUri(
+                context, sourceUri, scratchDir
+            )
+            BookFormat.CBZ, BookFormat.ZIP -> {
+                SeekableZip.openFromUri(context, sourceUri)?.use { seekable ->
+                    if (format == BookFormat.ZIP) {
+                        // A ZIP carrying a book has no cover of
+                        // its own — only image-only ZIPs are
+                        // comics (same rule as the route probe).
+                        val names = seekable.entries
+                            .filter { !it.isDirectory }
+                            .map { it.name }
+                            .filter { !it.startsWith("__MACOSX/") }
+                            .filter { !it.substringAfterLast('/').startsWith(".") }
+                        val hasBook = names.any {
+                            it.substringAfterLast('.', "").lowercase() in
+                                setOf(
+                                    "epub", "docx", "pdf", "txt", "text",
+                                    "md", "markdown", "mdown"
+                                )
+                        }
+                        if (hasBook) return@runCatching null
+                    }
+                    val first = seekable.imageEntryNames().firstOrNull()
+                        ?: return@runCatching null
+                    val bytes = seekable.openEntry(first)?.use { it.readBytes() }
+                        ?: return@runCatching null
+                    if (bytes.isEmpty()) return@runCatching null
+                    val ext = first.substringAfterLast('.', "jpg")
+                        .takeIf { it.isNotBlank() } ?: "jpg"
+                    scratchDir.mkdirs()
+                    val dest = File(scratchDir, "cover.$ext")
+                    dest.writeBytes(bytes)
+                    dest.takeIf { it.exists() && it.length() > 0 }
+                }
+            }
+            else -> null
+        }
+    }.getOrNull()
+
+    /**
      * Register-only import for `content://` in-place books: the
      * persistable permission is already held (checked by the caller).
      * With fast import ON (the default) only the head sample is
@@ -900,8 +976,11 @@ class Importer(
      * hash pass that used to dominate this path is deferred to
      * the background job below (and to the first open's copy,
      * which digests for free). With fast import OFF the old
-     * single streaming hash pass is preserved. Nothing is copied,
-     * parsed, or covered here. The row's
+     * single streaming hash pass is preserved. Nothing is copied
+     * or parsed here; the cover is the one bounded exception (one
+     * page / one entry — see [realCoverForInPlace]), because the
+     * library used to show only a generated cover until first
+     * open. The row's
      * [BookEntity.filePath] is the transient working-copy path
      * (see [InPlaceSource.resolve]), which does not exist yet —
      * the first open materializes it, then parses through the
@@ -1020,12 +1099,29 @@ class Importer(
         if (!fastImport) {
             ioCtx.ensureActive()
             syncCoverPath = runCatching {
-                val tmp = GeneratedCover.generate(context, bookTitle, workingPath)
-                    ?: return@runCatching null
+                // Real cover first (2026-11-05): a PDF's first
+                // page, or a comic's first image — the library
+                // used to show only a generated cover until
+                // first open. The extraction is one page / one
+                // entry, so it stays cheap; a failure falls back
+                // to the generated cover below, exactly as before.
+                val scratch = File(context.cacheDir, "cover_import" + File.separatorChar + id)
+                    .apply { mkdirs() }
                 try {
-                    CoverStore(context).saveCover(tmp, workingPath).absolutePath
+                    val real = realCoverForInPlace(sourceUri, format, scratch)
+                    if (real != null) {
+                        return@runCatching CoverStore(context)
+                            .saveCover(real, workingPath).absolutePath
+                    }
+                    val tmp = GeneratedCover.generate(context, bookTitle, workingPath)
+                        ?: return@runCatching null
+                    try {
+                        CoverStore(context).saveCover(tmp, workingPath).absolutePath
+                    } finally {
+                        tmp.delete()
+                    }
                 } finally {
-                    tmp.delete()
+                    runCatching { scratch.deleteRecursively() }
                 }
             }.getOrNull()
         }
@@ -1102,17 +1198,34 @@ class Importer(
             val deferredPath = workingPath
             backgroundScope.launch {
                 runCatching {
-                    val tmp = GeneratedCover.generate(context, deferredTitle, deferredPath)
-                        ?: return@runCatching
+                    // Real cover first (see the sync path above):
+                    // the deferred job fills the cover the import
+                    // left empty, and it now tries the first page
+                    // / first image before falling back to the
+                    // generated cover.
+                    val scratch = File(context.cacheDir, "cover_import" + File.separatorChar + id)
+                        .apply { mkdirs() }
                     try {
-                        val saved = CoverStore(context)
-                            .saveCover(tmp, deferredPath).absolutePath
-                        val current = db.bookDao().getById(id)
-                        if (current != null && current.coverPath == null) {
-                            db.bookDao().update(current.copy(coverPath = saved))
+                        val real = realCoverForInPlace(sourceUri, format, scratch)
+                        val src = real
+                            ?: GeneratedCover.generate(context, deferredTitle, deferredPath)
+                            ?: return@runCatching
+                        try {
+                            val saved = CoverStore(context)
+                                .saveCover(src, deferredPath).absolutePath
+                            val current = db.bookDao().getById(id)
+                            if (current != null && current.coverPath == null) {
+                                db.bookDao().update(current.copy(coverPath = saved))
+                            }
+                        } finally {
+                            // The generated tmp lives in cacheDir
+                            // and needs its own delete; the real
+                            // cover lives in scratch and goes with
+                            // the scratch dir below.
+                            if (real == null) src.delete()
                         }
                     } finally {
-                        tmp.delete()
+                        runCatching { scratch.deleteRecursively() }
                     }
                 }
             }

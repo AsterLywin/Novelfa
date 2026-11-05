@@ -103,6 +103,27 @@ import com.novelfa.reader.theme.StitchDiagonalLarge
 import com.novelfa.reader.theme.StitchSeam
 import com.novelfa.reader.theme.StitchStrip
 
+/**
+ * Cover request with a cache-busting signature (same pattern as
+ * the avatar): the cover file is overwritten in place when the
+ * backfill replaces a generated cover with the real one, so a
+ * path-keyed request would keep showing the generated bitmap.
+ * The signature (file mtime + length, plus the path itself)
+ * changes on every rewrite, forcing a fresh load; it also
+ * recomposes the card, since the path string alone never
+ * changes on an in-place replacement.
+ */
+@Composable
+private fun coverImageRequest(coverPath: String?): ImageRequest {
+    val signature = coverPath?.let { File(it) }
+        ?.takeIf { it.isFile }?.let { "${it.lastModified()}-${it.length()}" } ?: ""
+    return ImageRequest.Builder(LocalContext.current)
+        .data(coverPath)
+        .memoryCacheKey("cover-$coverPath-$signature")
+        .diskCacheKey("cover-$coverPath-$signature")
+        .build()
+}
+
 internal fun LazyGridScope.libraryHeaderSpan(
     profileName: String,
     rankTitle: String,
@@ -660,7 +681,7 @@ private fun HeroCard(
                         )
                 )
                 AsyncImage(
-                    model = book.coverPath,
+                    model = coverImageRequest(book.coverPath),
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -996,7 +1017,7 @@ fun BookCard(
                     style = MaterialTheme.typography.displayMedium
                 )
                 AsyncImage(
-                    model = book.coverPath,
+                    model = coverImageRequest(book.coverPath),
                     contentDescription = title,
                     // Crop fills the box completely (no side gaps); the box
                     // is 0.75 aspect so covers fill edge-to-edge.
@@ -1150,7 +1171,7 @@ internal fun BookRow(
         ) {
             Box(modifier = Modifier.size(44.dp, 60.dp)) {
                 AsyncImage(
-                    model = book.coverPath,
+                    model = coverImageRequest(book.coverPath),
                     contentDescription = title,
                     modifier = Modifier.fillMaxSize()
                 )

@@ -135,9 +135,14 @@ object CoverBackfill {
             val saved = CoverStore(context)
                 .saveCover(realCover, pathKey).absolutePath
             val fresh = dao.getById(book.id) ?: return
-            if (fresh.coverPath != saved) {
-                dao.update(fresh.copy(coverPath = saved))
-            }
+            // Always write the row, even when the path string
+            // is unchanged: the cover file was replaced in
+            // place (same path, new bytes — a PNG first page
+            // replacing a generated PNG), and the write is
+            // what re-emits the library Flow so the new
+            // signature key takes effect. Without it the
+            // library keeps showing the generated cover.
+            dao.update(fresh.copy(coverPath = saved))
         } else if (latest.coverPath == null) {
             val tmp = GeneratedCover.generate(context, latest.title, pathKey)
                 ?: return
@@ -173,19 +178,55 @@ object CoverBackfill {
                     context.cacheDir,
                     "cover_backfill" + File.separatorChar + book.id
                 ).apply { mkdirs() }
-                val realCover = runCatching {
-                    val pfd = context.contentResolver.openFileDescriptor(
-                        Uri.parse(uriStr), "r"
-                    ) ?: return@runCatching null
-                    try {
-                        pdfFirstPageCover(context, pfd, scratchDir)
-                    } finally {
-                        runCatching { pfd.close() }
-                    }
-                }.getOrNull()?.takeIf { it.exists() }
+                val realCover = pdfFirstPageCoverForUri(
+                    context, Uri.parse(uriStr), scratchDir
+                )?.takeIf { it.exists() }
                 saveRealCover(context, dao, book, realCover, book.filePath)
                 runCatching { scratchDir.deleteRecursively() }
             }
+        }
+    }
+
+    /**
+     * Renders a PDF file's first page as its cover (JPEG, 600px
+     * wide), for import-time use: a PDF's library cover is its
+     * first page, not a generated typographic cover. One page
+     * render is O(1) — it does not grow with the book, so lazy
+     * import still holds. Best-effort: any failure returns null
+     * and the caller falls back to the generated cover.
+     */
+    fun pdfFirstPageCoverForFile(
+        context: Context,
+        file: File,
+        scratchDir: File
+    ): File? {
+        val pfd = runCatching {
+            ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        }.getOrNull() ?: return null
+        try {
+            return pdfFirstPageCover(context, pfd, scratchDir)
+        } finally {
+            runCatching { pfd.close() }
+        }
+    }
+
+    /**
+     * Same first-page render from a provider descriptor, for
+     * register-only (content://) imports where no File exists
+     * yet. Best-effort like [pdfFirstPageCoverForFile].
+     */
+    fun pdfFirstPageCoverForUri(
+        context: Context,
+        uri: Uri,
+        scratchDir: File
+    ): File? {
+        val pfd = runCatching {
+            context.contentResolver.openFileDescriptor(uri, "r")
+        }.getOrNull() ?: return null
+        try {
+            return pdfFirstPageCover(context, pfd, scratchDir)
+        } finally {
+            runCatching { pfd.close() }
         }
     }
 
