@@ -2374,7 +2374,7 @@ internal fun NativeImageBookViewer(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             AppIcon(
-                                AppIconKind.Crop,
+                                AppIconKind.MarginH,
                                 tint = LocalContentColor.current,
                                 size = 16.dp
                             )
@@ -2406,7 +2406,7 @@ internal fun NativeImageBookViewer(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             AppIcon(
-                                AppIconKind.Crop,
+                                AppIconKind.MarginV,
                                 tint = LocalContentColor.current,
                                 size = 16.dp
                             )
