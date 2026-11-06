@@ -19,6 +19,7 @@ import com.novelfa.reader.settings.CollectionManager
 import com.novelfa.reader.settings.ManualCollectionRegistry
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -27,12 +28,27 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 /** Batch-import parallelism cap (step 4): 2 in flight. SAF copies
  * and parses are IO-bound, so 2 roughly halves a multi-book batch;
  * more made flash + provider contention dominate on a phone, so
  * the cap is deliberate, not a placeholder. */
 private const val BATCH_PARALLELISM = 2
+
+/**
+ * Stored books indexed by file size, for the duplicate screen: a
+ * picked file only needs hashing against books of the same declared
+ * size. Built once per batch instead of scanning the whole library
+ * per file — the old scan was O(n·m) full-file hash reads on a bulk
+ * import. Books with no stored file are left out: a missing file
+ * can never be a content match.
+ */
+internal fun booksBySize(books: List<Book>): Map<Long, List<Book>> =
+    books.mapNotNull { book ->
+        val file = File(book.filePath)
+        if (file.isFile) file.length() to book else null
+    }.groupBy({ it.first }, { it.second })
 
 /** Per-file outcome of one parallel batch import (step 4): async
  * bodies share nothing, so aggregation after the join needs no lock. */
@@ -298,13 +314,27 @@ class LibraryViewModel(
         // each file, so the dialog names the file it is actually on
         // instead of the previous file or none at all.
         onFile: ((Int, String?) -> Unit)? = null
-    ): ImportSummary {
+    ): ImportSummary = withContext(Dispatchers.IO) {
+        // The whole batch runs off the main thread: the callers
+        // launch from a Compose scope (Main), and the duplicate
+        // screen below does blocking SAF queries
+        // (displayNameOf/displaySizeOf) plus a per-file candidate
+        // scan — 138 picks stalled the main thread past the ANR
+        // limit. The callbacks are already IO-safe: onStage is
+        // invoked from importBook (Dispatchers.IO) today, onFile
+        // only sets snapshot state (safe to write from any thread),
+        // and the password prompt documents the same.
         val imp = requireNotNull(importer) { "Importer not provided" }
         val existingBooks = repo.books().first()
         val knownByName = existingBooks
             .mapNotNull { b -> b.originalFileName?.lowercase()?.let { it to b } }
             .toMap()
         val known = knownByName.keys.toMutableSet()
+        // Size index for the duplicate screen (see booksBySize):
+        // without it every new file scanned every stored book and
+        // re-read same-size files for hashing — O(n·m) full-file
+        // reads on a bulk import, on top of the main-thread stall.
+        val bySize = booksBySize(existingBooks)
         val batchAddedNames = mutableSetOf<String>()
         var added = 0
         var duplicates = 0
@@ -393,19 +423,19 @@ class LibraryViewModel(
                                     null -> duplicate = knownByName.getValue(key)
                                 }
                             } else {
-                                // No name match: nominate by declared size, then hash.
+                                // No name match: nominate by declared
+                                // size, then hash. The size index
+                                // answers in O(1); the old code scanned
+                                // every stored book per file.
                                 val size = imp.displaySizeOf(uri)
                                 if (size != null) {
-                                    for (candidate in existingBooks) {
-                                        val stored = File(candidate.filePath)
-                                        if (stored.isFile && stored.length() == size) {
-                                            when (isSameContent(uri, candidate)) {
-                                                true -> {
-                                                    duplicate = candidate
-                                                    break
-                                                }
-                                                false, null -> Unit
+                                    for (candidate in bySize[size].orEmpty()) {
+                                        when (isSameContent(uri, candidate)) {
+                                            true -> {
+                                                duplicate = candidate
+                                                break
                                             }
+                                            false, null -> Unit
                                         }
                                     }
                                 }
@@ -488,7 +518,7 @@ class LibraryViewModel(
                 }
             }
         }
-        return ImportSummary(
+        ImportSummary(
             added, duplicates, failed, duplicateUris, duplicateNames,
             duplicateBookIds, addedNames, restored, failedDetails
         )
@@ -512,8 +542,13 @@ class LibraryViewModel(
         passwordProvider: PdfPasswordProvider? = null,
         onStage: ((String?) -> Unit)? = null,
         onFile: ((Int, String?) -> Unit)? = null
-    ): ImportSummary {
+    ): ImportSummary = withContext(Dispatchers.IO) {
+        // Same rule as importMultiple: the whole batch runs off
+        // the main thread (blocking SAF queries per file), and the
+        // library is snapshotted ONCE — the old code re-loaded the
+        // whole table for every overwritten file.
         val imp = requireNotNull(importer) { "Importer not provided" }
+        val snapshot = repo.books().first()
         var added = 0
         var failed = 0
         var restored = 0
@@ -528,10 +563,9 @@ class LibraryViewModel(
                 // screen identified one, else by same file name.
                 val existingId = existingIds.getOrNull(index)
                 val existing = if (existingId != null) {
-                    repo.books().first().firstOrNull { it.id == existingId }
+                    snapshot.firstOrNull { it.id == existingId }
                 } else if (key != null) {
-                    repo.books().first()
-                        .firstOrNull { it.originalFileName?.lowercase() == key }
+                    snapshot.firstOrNull { it.originalFileName?.lowercase() == key }
                 } else null
                 if (existing != null) {
                     removeBook(existing)
@@ -553,7 +587,7 @@ class LibraryViewModel(
                 )
             }
         }
-        return ImportSummary(
+        ImportSummary(
             added, 0, failed, progressRestored = restored,
             failedDetails = failedDetails, addedNames = addedNames
         )

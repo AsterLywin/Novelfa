@@ -131,8 +131,17 @@ class Importer(
      * builds and lands via the library Flow. Best-effort only: a failed
      * or interrupted cover job leaves the book coverless, never failing
      * an import that already succeeded.
+     *
+     * The scope itself is unbounded (Dispatchers.IO), so the deferred
+     * cover jobs run on [coverDispatcher] instead: each generation
+     * holds a 600x900 ARGB_8888 bitmap (~2.2 MB), and a 138-book
+     * import used to launch 138 such jobs at once — up to 64 in
+     * flight on IO threads, a memory spike that crashed the app.
+     * Two at a time bounds the spike to ~4.4 MB and spreads the
+     * Room updates; the rest queue as cheap suspended coroutines.
      */
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val coverDispatcher = Dispatchers.IO.limitedParallelism(2)
 
     /**
      * SHA-256 of the bytes actually copied, keyed by the new book id
@@ -846,7 +855,7 @@ class Importer(
                 // another path, must never be overwritten.
                 val deferredTitle = bookTitle
                 val deferredPath = destFile.absolutePath
-                backgroundScope.launch {
+                backgroundScope.launch(coverDispatcher) {
                     runCatching {
                         val tmp = GeneratedCover.generate(
                             context, deferredTitle, deferredPath
@@ -1196,7 +1205,9 @@ class Importer(
             }
             val deferredTitle = bookTitle
             val deferredPath = workingPath
-            backgroundScope.launch {
+            // Same bound as the copy path's deferred cover above:
+            // this job also generates a bitmap cover.
+            backgroundScope.launch(coverDispatcher) {
                 runCatching {
                     // Real cover first (see the sync path above):
                     // the deferred job fills the cover the import
