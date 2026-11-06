@@ -8,6 +8,8 @@ import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
+import java.util.zip.CRC32
+import java.util.zip.DataFormatException
 import java.util.zip.Inflater
 import java.util.zip.InflaterInputStream
 import java.util.zip.ZipFile
@@ -214,6 +216,17 @@ object CbzBook {
      * legacy decoding. Returns null for anything unparseable;
      * the caller then falls back to the platform reader's
      * original exception.
+     *
+     * The entries are read SEQUENTIALLY from cdOffset, one by
+     * one — cdSize is deliberately never consulted. ComicScreen's
+     * reader (and zip4j's) reads the directory the same way, and
+     * some writers record a wrong cdSize in the EOCD (too large,
+     * zero, or stale): the old code required cdOffset+cdSize to
+     * fit the file and read exactly cdSize bytes, so such an
+     * archive failed this whole scan even though every entry is
+     * intact — and, with the local walk blocked too, the import
+     * failed with "zip END header not found" on a file
+     * ComicScreen renders easily.
      */
     private fun tolerantEntries(zipFile: File): List<CentralEntry>? {
         return try {
@@ -235,32 +248,31 @@ object CbzBook {
                 }
                 if (eocd < 0) return null
                 val count = readShortLE(tail, eocd + 10)
-                val cdSize = readIntLE(tail, eocd + 12).toLong() and 0xFFFFFFFFL
                 val cdOffset = readIntLE(tail, eocd + 16).toLong() and 0xFFFFFFFFL
-                if (count == 0xFFFF || cdSize == 0xFFFFFFFFL ||
-                    cdOffset == 0xFFFFFFFFL || count <= 0 || cdSize <= 0L ||
-                    cdOffset < 0 || cdOffset + cdSize > size
+                if (count == 0xFFFF || cdOffset == 0xFFFFFFFFL ||
+                    count <= 0 || cdOffset < 0 || cdOffset >= size
                 ) {
                     return null
                 }
-                val cd = ByteArray(cdSize.toInt())
-                if (!readFullyAt(channel, cdOffset, cd)) return null
                 val list = ArrayList<CentralEntry>(count)
-                var p = 0
+                var p = cdOffset
                 repeat(count) {
-                    if (p + 46 > cd.size) return null
-                    if (readIntLE(cd, p) != 0x02014b50) return null
-                    val flags = readShortLE(cd, p + 8)
-                    val method = readShortLE(cd, p + 10)
-                    val compSize = readIntLE(cd, p + 20).toLong() and 0xFFFFFFFFL
-                    val nameLen = readShortLE(cd, p + 28)
-                    val extraLen = readShortLE(cd, p + 30)
-                    val commentLen = readShortLE(cd, p + 32)
-                    val localOff = readIntLE(cd, p + 42).toLong() and 0xFFFFFFFFL
-                    if (p + 46 + nameLen > cd.size) return null
-                    val nameBytes = cd.copyOfRange(p + 46, p + 46 + nameLen)
+                    val fixed = ByteArray(46)
+                    if (!readFullyAt(channel, p, fixed)) return null
+                    if (readIntLE(fixed, 0) != 0x02014b50) return null
+                    val flags = readShortLE(fixed, 8)
+                    val method = readShortLE(fixed, 10)
+                    val compSize = readIntLE(fixed, 20).toLong() and 0xFFFFFFFFL
+                    val nameLen = readShortLE(fixed, 28)
+                    val extraLen = readShortLE(fixed, 30)
+                    val commentLen = readShortLE(fixed, 32)
+                    val localOff = readIntLE(fixed, 42).toLong() and 0xFFFFFFFFL
+                    val nameStart = p + 46
+                    if (nameStart + nameLen > size) return null
+                    val nameBytes = ByteArray(nameLen)
+                    if (!readFullyAt(channel, nameStart, nameBytes)) return null
                     list.add(CentralEntry(decodeName(nameBytes), method, compSize, localOff, flags))
-                    p += 46 + nameLen + extraLen + commentLen
+                    p = nameStart + nameLen + extraLen + commentLen
                 }
                 list
             }
@@ -321,7 +333,12 @@ object CbzBook {
                         if (dataEnd > size) break // this entry is cut: stop, keep what we have
                         nextPos = dataEnd
                     } else {
+                        // Signed descriptor first, then the unsigned
+                        // form (see findUnsignedDescriptor): the ZIP
+                        // spec leaves the PK\x07\x08 signature
+                        // optional, and some writers omit it.
                         val hit = findDescriptorWithSize(channel, dataStart, size)
+                            ?: findUnsignedDescriptor(channel, dataStart, method, size)
                             ?: break // no descriptor before EOF: this entry is cut
                         compSize = hit.compSize
                         nextPos = hit.offset + hit.totalLen
@@ -396,6 +413,134 @@ object CbzBook {
             }
             searchFrom = at + 4 // false positive inside the data: keep scanning
         }
+    }
+
+    /**
+     * A data descriptor WITHOUT its PK\x07\x08 signature. The ZIP
+     * spec leaves that signature optional, and some writers emit
+     * only the 12 (or 16 for ZIP64) descriptor bytes — crc,
+     * compressed size, uncompressed size — with no marker at all.
+     * The descriptor is then the bytes right before the next
+     * header, and the entry is resolved by finding that header
+     * and validating the bytes before it exactly (CRC for STORED
+     * data, a full inflate for DEFLATED), so a header-like byte
+     * sequence inside the data cannot pass as a false end.
+     * Returns null when no following header validates: the entry
+     * is cut.
+     */
+    private fun findUnsignedDescriptor(
+        channel: FileChannel,
+        dataStart: Long,
+        method: Int,
+        size: Long
+    ): DescriptorHit? {
+        var searchFrom = dataStart
+        while (true) {
+            val next = findNextHeader(channel, searchFrom, size)
+            if (next == null) {
+                // No further header: the descriptor, if any, is
+                // the 12 (or 16) bytes right before end of file —
+                // the last entry of a truncated archive.
+                for (totalLen in listOf(12L, 16L)) {
+                    val descAt = size - totalLen
+                    if (descAt < dataStart) continue
+                    if (validateUnsignedDescriptor(channel, dataStart, descAt, method)) {
+                        return DescriptorHit(descAt, descAt - dataStart, totalLen)
+                    }
+                }
+                return null
+            }
+            // 12-byte layout first, then the 16-byte ZIP64 layout.
+            for (totalLen in listOf(12L, 16L)) {
+                val descAt = next - totalLen
+                if (descAt < dataStart) continue
+                if (validateUnsignedDescriptor(channel, dataStart, descAt, method)) {
+                    return DescriptorHit(descAt, descAt - dataStart, totalLen)
+                }
+            }
+            // Not a descriptor before this header (a false header
+            // signature inside the data): keep scanning past it.
+            searchFrom = next + 4
+        }
+    }
+
+    private fun validateUnsignedDescriptor(
+        channel: FileChannel,
+        dataStart: Long,
+        descAt: Long,
+        method: Int
+    ): Boolean {
+        return try {
+            when (method) {
+                0 -> {
+                    // STORED: the descriptor's first field is the CRC32
+                    // of the verbatim data.
+                    val crcBytes = readBytesAt(channel, descAt, 4) ?: return false
+                    val expected = readIntLE(crcBytes, 0).toLong() and 0xFFFFFFFFL
+                    val crc = CRC32()
+                    val buf = ByteArray(65536)
+                    var pos = dataStart
+                    while (pos < descAt) {
+                        val want = minOf(buf.size.toLong(), descAt - pos).toInt()
+                        val bb = ByteBuffer.wrap(buf, 0, want)
+                        var at = pos
+                        while (bb.hasRemaining()) {
+                            val n = channel.read(bb, at)
+                            if (n < 0) return false
+                            at += n
+                        }
+                        crc.update(buf, 0, want)
+                        pos += want
+                    }
+                    crc.value == expected
+                }
+                8 -> {
+                    // DEFLATED: the deflate stream must end exactly
+                    // where the descriptor begins.
+                    val inflater = Inflater(true)
+                    try {
+                        val inBuf = ByteArray(65536)
+                        val outBuf = ByteArray(8192)
+                        var pos = dataStart
+                        while (!inflater.finished()) {
+                            if (inflater.needsInput()) {
+                                if (pos >= descAt) return false
+                                val want = minOf(inBuf.size.toLong(), descAt - pos).toInt()
+                                val bb = ByteBuffer.wrap(inBuf, 0, want)
+                                var at = pos
+                                while (bb.hasRemaining()) {
+                                    val n = channel.read(bb, at)
+                                    if (n < 0) return false
+                                    at += n
+                                }
+                                inflater.setInput(inBuf, 0, want)
+                                pos += want
+                            }
+                            try {
+                                inflater.inflate(outBuf)
+                            } catch (e: DataFormatException) {
+                                return false
+                            }
+                            if (inflater.needsDictionary()) return false
+                        }
+                        inflater.totalIn.toLong() == descAt - dataStart
+                    } finally {
+                        inflater.end()
+                    }
+                }
+                else -> false
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** First offset >= [start] where a local, central or EOCD header starts, or null. */
+    private fun findNextHeader(channel: FileChannel, start: Long, size: Long): Long? {
+        val candidates = listOf(0x04034b50, 0x02014b50, 0x06054b50).mapNotNull {
+            findSignature(channel, start, size, it)
+        }
+        return candidates.minOrNull()
     }
 
     /** True at end of file, or when a known ZIP header signature sits at [pos]. */
