@@ -334,4 +334,57 @@ class ReaderViewModelTest {
         assertTrue(v.html.contains("#FFFFFF"))
         assertFalse(v.html.contains("#1C1A2A"))
     }
+
+    private fun footnoteChapters(): List<Chapter> {
+        val dir = tmp.newFolder("fnchaps")
+        val ch1 = dir.resolve("ch1.xhtml").apply {
+            writeText(
+                "<html><body><p>متن <sup><a href=\"ch2.xhtml#fn1\">1</a></sup> " +
+                    "و <sup><a href=\"#novelfa-fn-1\">[1]</a></sup></p></body></html>",
+                Charsets.UTF_8
+            )
+        }
+        val ch2 = dir.resolve("ch2.xhtml").apply {
+            writeText(
+                "<html><body><p id=\"fn1\">متن پاورقی</p>" +
+                    "<ol><li id=\"novelfa-fn-1\">" +
+                    "<a href=\"#novelfa-fnref-1\">↩</a> متن پاورقی داکس</li></ol>" +
+                    "</body></html>",
+                Charsets.UTF_8
+            )
+        }
+        return listOf(Chapter("فصل 1", ch1), Chapter("فصل 2", ch2))
+    }
+
+    @Test
+    fun footnoteFor_crossChapterEndnote_returnsTextAndChapter() = runBlocking {
+        val repo = FakeReaderRepo(listOf(book()))
+        val v = vm(repo, footnoteChapters())
+        val note = v.footnoteFor("ch2.xhtml#fn1", 0, "1")
+        assertNotNull(note)
+        assertEquals("متن پاورقی", note!!.text)
+        assertEquals("1", note.number)
+        assertEquals(1, note.chapterIdx)
+        assertEquals("fn1", note.fragment)
+    }
+
+    @Test
+    fun footnoteFor_docxStyleNoteInLastChapter_foundByScan() = runBlocking {
+        val repo = FakeReaderRepo(listOf(book()))
+        val v = vm(repo, footnoteChapters())
+        // resolveLink lands on the reference's own chapter (0), where
+        // the id does not exist; the scan must find it in chapter 1.
+        val note = v.footnoteFor("#novelfa-fn-1", 0, "[1]")
+        assertNotNull(note)
+        assertEquals("متن پاورقی داکس", note!!.text)
+        assertEquals("1", note.number)
+        assertEquals(1, note.chapterIdx)
+    }
+
+    @Test
+    fun footnoteFor_missingNote_returnsNull() = runBlocking {
+        val repo = FakeReaderRepo(listOf(book()))
+        val v = vm(repo, footnoteChapters())
+        assertEquals(null, v.footnoteFor("#no-such-note", 0, "9"))
+    }
 }

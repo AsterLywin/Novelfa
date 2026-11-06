@@ -58,6 +58,10 @@ class PrefsStore(private val context: Context) {
         val GUIDE_SHOWN = booleanPreferencesKey("guideShown")
         // Reading layout mode (replaces the old continuous toggle).
         val READING_MODE = stringPreferencesKey("readingMode")
+        // Footnote display: "navigate" (default — the current
+        // behaviour: tapping a footnote reference jumps to the note)
+        // or "popup" (the note opens in a window on the same page).
+        val FOOTNOTE_DISPLAY = stringPreferencesKey("footnoteDisplay")
         // Native comic viewer page background: "dark" (default, the
         // old 0xFF1E1E1E letterbox), "black" or "white".
         val COMIC_BACKGROUND = stringPreferencesKey("comicBackground")
@@ -350,6 +354,13 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setReadingMode(value: String) {
         context.dataStore.edit { it[READING_MODE] = value }
+    }
+
+    suspend fun getFootnoteDisplay(): String =
+        context.dataStore.data.map { it[FOOTNOTE_DISPLAY] ?: "navigate" }.first()
+
+    suspend fun setFootnoteDisplay(value: String) {
+        context.dataStore.edit { it[FOOTNOTE_DISPLAY] = value }
     }
 
     suspend fun setComicBackground(value: String) {

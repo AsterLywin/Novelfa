@@ -385,9 +385,13 @@ object DocxParser {
                         // reference jumps to the note, and the note
                         // (appended below) jumps back. In an HTML
                         // reader this is the closest faithful form
-                        // of a page-bottom footnote link.
+                        // of a page-bottom footnote link. The marker
+                        // tells the reader this is a footnote link,
+                        // so it can open the note in a popup when
+                        // the footnote-display setting says so.
                         html.append("<sup><a href=\"#novelfa-fn-").append(num)
                             .append("\" id=\"novelfa-fnref-").append(num)
+                            .append("\" data-novelfa-footnote=\"").append(num)
                             .append("\">[").append(num).append("]</a></sup>")
                     }
                 }
@@ -402,6 +406,7 @@ object DocxParser {
                         val num = state.referencedEndnotes.indexOf(id) + 1
                         html.append("<sup><a href=\"#novelfa-en-").append(num)
                             .append("\" id=\"novelfa-enref-").append(num)
+                            .append("\" data-novelfa-footnote=\"").append(num)
                             .append("\">[").append(num).append("]</a></sup>")
                     }
                 }

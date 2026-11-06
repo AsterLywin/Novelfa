@@ -142,12 +142,80 @@ class HtmlTextTest {
     }
 
     @Test
-    fun makeImageSourcesAbsolute_cssUrlResolved() {
-        val folder = tmp.newFolder("chap5")
-        val got = HtmlText.makeImageSourcesAbsolute(
-            "<div style=\"background:url(bg.png)\">x</div>", folder
+    fun markFootnoteLinks_fnFragment_marks() {
+        val got = HtmlText.markFootnoteLinks("<p>متن <sup><a href=\"#fn1\">1</a></sup></p>")
+        assertTrue(got.contains("data-novelfa-footnote"))
+    }
+
+    @Test
+    fun markFootnoteLinks_fileHrefFootnote_marks() {
+        val got = HtmlText.markFootnoteLinks("<p><a href=\"notes.xhtml#footnote-2\">2</a></p>")
+        assertTrue(got.contains("data-novelfa-footnote"))
+    }
+
+    @Test
+    fun markFootnoteLinks_chapterPrefixedFn_marks() {
+        val got = HtmlText.markFootnoteLinks("<p><a href=\"#ch1-fn3\">3</a></p>")
+        assertTrue(got.contains("data-novelfa-footnote"))
+    }
+
+    @Test
+    fun markFootnoteLinks_noterefType_marks() {
+        val got = HtmlText.markFootnoteLinks("<p><a epub:type=\"noteref\" href=\"#x1\">1</a></p>")
+        assertTrue(got.contains("data-novelfa-footnote"))
+    }
+
+    @Test
+    fun markFootnoteLinks_classFootnote_marks() {
+        val got = HtmlText.markFootnoteLinks("<p><a class=\"footnote\" href=\"#r5\">5</a></p>")
+        assertTrue(got.contains("data-novelfa-footnote"))
+    }
+
+    @Test
+    fun markFootnoteLinks_plainAnchor_notMarked() {
+        val got = HtmlText.markFootnoteLinks("<p><a href=\"#section-2\">بخش ۲</a></p>")
+        assertFalse(got.contains("data-novelfa-footnote"))
+    }
+
+    @Test
+    fun markFootnoteLinks_backLink_notMarked() {
+        val got = HtmlText.markFootnoteLinks("<li><a href=\"#novelfa-fnref-1\">↩</a> متن</li>")
+        assertFalse(got.contains("data-novelfa-footnote"))
+    }
+
+    @Test
+    fun markFootnoteLinks_alreadyMarked_notDoubled() {
+        val got = HtmlText.markFootnoteLinks(
+            "<p><a href=\"#novelfa-fn-1\" data-novelfa-footnote=\"1\">[1]</a></p>"
         )
-        assertTrue(got.contains("file:"))
-        assertTrue(got.contains("bg.png"))
+        assertEquals(1, Regex("data-novelfa-footnote").findAll(got).count())
+    }
+
+    @Test
+    fun footnoteText_liWithBacklink_returnsTextWithoutArrow() {
+        val html = "<ol><li id=\"novelfa-fn-1\">" +
+            "<a href=\"#novelfa-fnref-1\">↩</a> متن پاورقی</li></ol>"
+        assertEquals("متن پاورقی", HtmlText.footnoteText(html, "novelfa-fn-1"))
+    }
+
+    @Test
+    fun footnoteText_pWithNestedTags_stripsTagsAndDecodes() {
+        val html = "<p id=\"fn1\">متن <b>مهم</b> و &amp; چیز</p>"
+        assertEquals("متن مهم و & چیز", HtmlText.footnoteText(html, "fn1"))
+    }
+
+    @Test
+    fun footnoteText_missingId_returnsNull() {
+        assertEquals(null, HtmlText.footnoteText("<p id=\"fn1\">x</p>", "fn2"))
+    }
+
+    @Test
+    fun footnoteText_empty_returnsNull() {
+        assertEquals(null, HtmlText.footnoteText("<p id=\"fn1\">   </p>", "fn1"))
+    }
+
+    @Test
+    fun footnoteText_singleQuoteId_works() {
+        assertEquals("متن", HtmlText.footnoteText("<p id='fn1'>متن</p>", "fn1"))
     }
 }

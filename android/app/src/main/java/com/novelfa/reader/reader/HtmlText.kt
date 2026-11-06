@@ -307,7 +307,96 @@ object HtmlText {
         if (absoluteFolder != null) {
             body = makeImageSourcesAbsolute(body, absoluteFolder)
         }
+        body = markFootnoteLinks(body)
         return applyTextDirection(body)
+    }
+
+    /**
+     * Marks footnote-reference links so the reader can tell them
+     * apart from ordinary in-book links (see LINK_JS): a marked link
+     * opens the note in a popup when the footnote-display setting
+     * says so, instead of navigating away. EPUB chapters are the
+     * book's own XHTML, so the mark is a heuristic — the href
+     * fragment looks like a footnote id (fn1, footnote-2, ch1-fn3,
+     * note_4, endnote1), or the link carries epub:type="noteref",
+     * or its class names a footnote. DOCX references are marked
+     * deterministically by the parser instead (data-novelfa-footnote
+     * is already on them; an existing mark is never doubled). The
+     * note's own back-link (↩, pointing at the reference) is never
+     * marked: it stays a navigation link.
+     */
+    fun markFootnoteLinks(html: String): String {
+        return Regex("<a\\b[^>]*>", RegexOption.IGNORE_CASE).replace(html) { m ->
+            val tag = m.value
+            if (tag.contains("data-novelfa-footnote", ignoreCase = true)) return@replace tag
+            val href = Regex(
+                "\\bhref\\s*=\\s*\"([^\"]*)\"|\\bhref\\s*=\\s*'([^']*)'",
+                RegexOption.IGNORE_CASE
+            ).find(tag)?.let {
+                it.groupValues[1].ifEmpty { it.groupValues[2] }
+            } ?: return@replace tag
+            val frag = href.substringAfter('#', "")
+            val isFootnote =
+                FOOTNOTE_FRAG.containsMatchIn(frag) ||
+                    Regex(
+                        "(?:epub:)?type\\s*=\\s*[\"']noteref[\"']",
+                        RegexOption.IGNORE_CASE
+                    ).containsMatchIn(tag) ||
+                    Regex(
+                        "\\bclass\\s*=\\s*\"([^\"]*)\"|\\bclass\\s*=\\s*'([^']*)'",
+                        RegexOption.IGNORE_CASE
+                    ).find(tag)?.let {
+                        val cls = it.groupValues[1].ifEmpty { it.groupValues[2] }
+                        Regex(
+                            "\\b(footnote|noteref|fn)\\b",
+                            RegexOption.IGNORE_CASE
+                        ).containsMatchIn(cls)
+                    } == true
+            if (!isFootnote) return@replace tag
+            tag.replaceFirst("<a", "<a data-novelfa-footnote=\"1\"", ignoreCase = true)
+        }
+    }
+
+    /** A footnote-id fragment: fn1, footnote-2, ch1-fn3, note_4, endnote1. */
+    private val FOOTNOTE_FRAG = Regex(
+        "(?:^|[-_.])(?:fn|footnote|note|endnote)[-_]?[0-9]+[a-z]?$",
+        RegexOption.IGNORE_CASE
+    )
+
+    /**
+     * The plain text of the element with id [fragId] in [html]
+     * (a footnote/endnote paragraph or list item), or null when the
+     * element is missing, unclosed, or empty. The element is bounded
+     * by its own closing tag — footnote containers are flat paragraphs
+     * or list items, so the first matching close tag ends it (a
+     * same-tag nest inside would cut early; that never occurs in a
+     * footnote). The DOCX back-link remnant ("↩") is stripped from
+     * the front; everything else is the note's own text.
+     */
+    fun footnoteText(html: String, fragId: String): String? {
+        if (fragId.isBlank()) return null
+        val idAt = Regex(
+            "\\bid\\s*=\\s*[\"']" + Regex.escape(fragId) + "[\"']",
+            RegexOption.IGNORE_CASE
+        ).find(html) ?: return null
+        val tagStart = html.lastIndexOf('<', idAt.range.first)
+        if (tagStart < 0) return null
+        val nameStart = tagStart + 1
+        if (nameStart >= html.length || html[nameStart] == '/') return null
+        val tagName = Regex("[A-Za-z][A-Za-z0-9]*").find(html, nameStart)
+            ?.takeIf { it.range.first == nameStart }?.value ?: return null
+        val contentStart = html.indexOf('>', idAt.range.last)
+        if (contentStart < 0) return null
+        val closeAt = Regex(
+            "</" + Regex.escape(tagName) + "\\s*>",
+            RegexOption.IGNORE_CASE
+        ).find(html, contentStart + 1) ?: return null
+        val inner = html.substring(contentStart + 1, closeAt.range.first)
+        var text = htmlToPlainText(inner)
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (text.startsWith("↩")) text = text.substring(1).trim()
+        return text.ifEmpty { null }
     }
 
     /** Replacements copied EXACTLY from MainWindow.EscapeForJs. */

@@ -162,6 +162,12 @@ class ReaderViewModel(
         private set
     var paragraphSpacing: Double
         private set
+    // Footnote popup mode (reader setting, global — not per book):
+    // when true, LINK_JS hands marked footnote links to
+    // onFootnoteLink instead of navigating. Set by the reader screen
+    // from PrefsStore; part of the cached-HTML key below, so flipping
+    // it rebuilds the document with the new flag.
+    var footnotePopup by mutableStateOf(false)
 
     /**
      * Cached @font-face CSS: fontFaceCss() base64-encodes the font
@@ -372,7 +378,7 @@ class ReaderViewModel(
                 fontIdentity(fallbackFontFiles), fontSize.toString(),
                 lineHeight.toString(), sideMargin.toString(),
                 paragraphSpacing.toString(), isEnglish.toString(),
-                isPaged().toString()
+                isPaged().toString(), footnotePopup.toString()
             ).joinToString("|")
             val cachedHtml = SharedReaderCache.getHtml(htmlKey)
             docGen++
@@ -386,7 +392,8 @@ class ReaderViewModel(
                     baseUrl, wrapped, theme, fontFamily, fontSize,
                     lineHeight, sideMargin, paragraphSpacing, isEnglish,
                     fontCss, docGen,
-                    paged = isPaged()
+                    paged = isPaged(),
+                    footnotePopup = footnotePopup
                 )
                 SharedReaderCache.putHtml(
                     htmlKey,
@@ -558,7 +565,8 @@ class ReaderViewModel(
             baseUrl, sb.toString(), theme, fontFamily, fontSize,
             lineHeight, sideMargin, paragraphSpacing, isEnglish,
             cachedFontFaceCss(), docGen,
-            paged = false // rebuildWindowHtml only serves continuous mode
+            paged = false, // rebuildWindowHtml only serves continuous mode
+            footnotePopup = footnotePopup
         )
     }
 
@@ -733,7 +741,8 @@ class ReaderViewModel(
                         baseUrl, wrapped, theme, fontFamily, fontSize,
                         lineHeight, sideMargin, paragraphSpacing, isEnglish,
                         cachedFontFaceCss(), docGen,
-                        paged = isPaged()
+                        paged = isPaged(),
+                        footnotePopup = footnotePopup
                     )
                 }
             }
@@ -859,6 +868,46 @@ class ReaderViewModel(
             if (idx < 0) null else idx to frag
         }
 
+    /**
+     * Resolves a tapped footnote link to the note itself, for the
+     * popup. [resolveLink] gives the target chapter + fragment; when
+     * the note is not in that chapter — DOCX appends every note to
+     * the LAST section while its references sit in earlier ones, so
+     * the resolve lands on the reference's own chapter, where the id
+     * does not exist — every chapter is scanned for the fragment id
+     * instead. Returns null when the note cannot be found anywhere:
+     * the caller then navigates exactly as before, so a missed note
+     * never becomes a dead tap.
+     */
+    suspend fun footnoteFor(href: String, baseIdx: Int, label: String): FootnotePopup? =
+        withContext(Dispatchers.IO) {
+            val resolved = resolveLink(href, baseIdx) ?: return@withContext null
+            val frag = resolved.second
+            if (frag.isBlank()) return@withContext null
+            val number = label.trim().trim('[', ']').trim()
+            val direct = HtmlText.footnoteText(readPrepared(resolved.first), frag)
+            if (direct != null) {
+                return@withContext FootnotePopup(number, direct, resolved.first, frag)
+            }
+            for (i in chapters.indices) {
+                if (i == resolved.first) continue
+                val text = HtmlText.footnoteText(readPrepared(i), frag) ?: continue
+                return@withContext FootnotePopup(number, text, i, frag)
+            }
+            null
+        }
+
     private fun baseUrl(i: Int): String =
         chapters[i].file.parentFile?.toURI()?.toString() ?: ""
 }
+
+/**
+ * A footnote note, resolved for the popup: its display number, its
+ * plain text, and where it lives in the book (for "View in text").
+ */
+data class FootnotePopup(
+    val number: String,
+    val text: String,
+    val chapterIdx: Int,
+    val fragment: String
+)

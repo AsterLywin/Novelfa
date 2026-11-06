@@ -26,11 +26,17 @@ import androidx.compose.ui.viewinterop.AndroidView
  * see SectionPosition.kt), and
  * in-book link taps handed over by the LINK_JS interceptor in
  * [HtmlBuilder.build] (`Android.onLink(href, chapIdx)` with the raw
- * authored href and the index of the chapter containing the link).
+ * authored href and the index of the chapter containing the link),
+ * and footnote taps in popup mode (`Android.onFootnoteLink(href,
+ * chapIdx, label)` — a marked footnote reference, with the link's
+ * own text as the note number; the app resolves the note and shows
+ * it in a popup on the same page instead of navigating).
  */
 class ScrollBridge(
     private val onScroll: (Int, Int, Int, Int) -> Unit,
     private val onLinkClick: (String, Int) -> Unit = { _, _ -> },
+    /** Footnote tap in popup mode (LINK_JS): raw href + containing chapter + link text. */
+    private val onFootnoteClick: (String, Int, String) -> Unit = { _, _, _ -> },
     /** Image-save tap (IMAGE_JS): raw <img> src + containing chapter index. */
     private val onImageClick: (String, Int) -> Unit = { _, _ -> },
     private val onChapterVisible: (Int, Int) -> Unit = { _, _ -> },
@@ -74,6 +80,11 @@ class ScrollBridge(
     @JavascriptInterface
     fun onLink(href: String, chap: Long) {
         onLinkClick(href, chap.toInt())
+    }
+
+    @JavascriptInterface
+    fun onFootnoteLink(href: String, chap: Long, label: String) {
+        onFootnoteClick(href, chap.toInt(), label)
     }
 
     @JavascriptInterface

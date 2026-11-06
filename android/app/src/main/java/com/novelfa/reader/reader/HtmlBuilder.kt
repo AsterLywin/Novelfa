@@ -46,7 +46,12 @@ object HtmlBuilder {
         isEnglish: Boolean,
         fontFaceCss: String,
         docGen: Int,
-        paged: Boolean = false
+        paged: Boolean = false,
+        // Footnote popup mode: LINK_JS hands marked footnote links
+        // to Android.onFootnoteLink instead of navigating. The flag
+        // is part of the document (and of the cached-HTML key in
+        // ReaderViewModel), so flipping the setting rebuilds the page.
+        footnotePopup: Boolean = false
     ): String {
         val sb = StringBuilder()
         val themeAttr = if (theme.isDark) " data-theme=\"dark\"" else " data-theme=\"light\""
@@ -123,6 +128,8 @@ object HtmlBuilder {
                 .append("</style>")
         }
         sb.append("<script>window.__rdrGen=").append(docGen).append(";</script>")
+        sb.append("<script>window.__rdrFootnotePopup=")
+            .append(if (footnotePopup) "true" else "false").append(";</script>")
         sb.append("<script>(function(){")
         sb.append("var lt=-1,lh=-1,lc=-1,lr=-1,lci=-1,lpt=0,lfr=-1;")
         sb.append("function r(){try{var d=document.documentElement,b=document.body;")
@@ -1869,6 +1876,10 @@ object HtmlBuilder {
 // (paged and vertical). EPUB chapters link to footnotes/endnotes and to
 // other chapter files; the WebView must never navigate itself (it would
 // leave the reader shell and load a raw XHTML file). Instead:
+//   - footnote link  -> when window.__rdrFootnotePopup is on, a link
+//                       carrying data-novelfa-footnote goes to
+//                       Android.onFootnoteLink instead of navigating:
+//                       the app shows the note in a popup on this page.
 //   - "#frag"        -> paged: rdrGoToAnchor jumps to the target's page;
 //                       vertical: native fragment scroll (left untouched).
 //   - "file.xhtml#f" -> Android.onLink(rawHref); the app resolves it
@@ -1891,6 +1902,27 @@ object HtmlBuilder {
         if (raw == null) return;
         var h = raw.trim();
         if (!h) { e.preventDefault(); return; }
+        // Footnote popup mode: a link the app marked as a footnote
+        // reference (data-novelfa-footnote — written by the DOCX
+        // parser, or by prepareChapterBody's EPUB heuristic) opens
+        // the note in a popup on this page instead of navigating.
+        // The app resolves the note and shows it; when it cannot
+        // find the note it navigates exactly as before. This check
+        // runs before the '#frag' branch: most footnote links are
+        // fragment-only hrefs.
+        if (window.__rdrFootnotePopup && a.getAttribute('data-novelfa-footnote') !== null) {
+            e.preventDefault();
+            var fci = -1;
+            var fcd = a.closest ? a.closest('.rdr-chap') : null;
+            if (fcd) {
+                var fdv = parseInt(fcd.getAttribute('data-idx'), 10);
+                if (!isNaN(fdv)) fci = fdv;
+            }
+            var label = '';
+            try { label = a.textContent || ''; } catch (err) { }
+            try { if (window.Android && Android.onFootnoteLink) Android.onFootnoteLink(h, fci, label); } catch (err) { }
+            return;
+        }
         if (h.charAt(0) === '#') {
             if (window.rdrGoToAnchor) {
                 e.preventDefault();

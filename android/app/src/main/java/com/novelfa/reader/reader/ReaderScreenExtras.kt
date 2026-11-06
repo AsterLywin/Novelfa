@@ -63,17 +63,19 @@ internal fun SpacingDialog(
     lineHeight: Float,
     sideMargin: Int,
     paragraphSpacing: Float,
+    footnotePopup: Boolean,
     onDismiss: () -> Unit,
-    onApply: (Float, Int, Float) -> Unit,
+    onApply: (Float, Int, Float, Boolean) -> Unit,
     onReset: () -> Unit
 ) {
     var lh by remember { mutableFloatStateOf(lineHeight) }
     var margin by remember { mutableIntStateOf(sideMargin) }
     var para by remember { mutableFloatStateOf(paragraphSpacing) }
+    var footnote by remember { mutableStateOf(footnotePopup) }
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(onClick = { onApply(lh, margin, para) }) {
+            TextButton(onClick = { onApply(lh, margin, para, footnote) }) {
                 Text(stringResource(R.string.ok))
             }
         },
@@ -111,6 +113,26 @@ internal fun SpacingDialog(
                     valueRange = 0f..2.5f,
                     steps = 24
                 )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(stringResource(R.string.footnote_display))
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    ReadingModeChoice(
+                        icon = AppIconKind.ArrowForward,
+                        label = stringResource(R.string.footnote_display_navigate),
+                        selected = !footnote,
+                        onClick = { footnote = false }
+                    )
+                    ReadingModeChoice(
+                        icon = AppIconKind.Reading,
+                        label = stringResource(R.string.footnote_display_popup),
+                        selected = footnote,
+                        onClick = { footnote = true }
+                    )
+                }
             }
         }
     )

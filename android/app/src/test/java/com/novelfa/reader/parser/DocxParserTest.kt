@@ -22,6 +22,7 @@ class DocxParserTest {
         coreXml: String? = null,
         relsXml: String? = null,
         numberingXml: String? = null,
+        footnotesXml: String? = null,
         media: Map<String, ByteArray> = emptyMap()
     ): File {
         val f = tempFolder.newFile("book.docx")
@@ -36,6 +37,7 @@ class DocxParserTest {
             if (coreXml != null) entry("docProps/core.xml", coreXml.toByteArray(Charsets.UTF_8))
             if (relsXml != null) entry("word/_rels/document.xml.rels", relsXml.toByteArray(Charsets.UTF_8))
             if (numberingXml != null) entry("word/numbering.xml", numberingXml.toByteArray(Charsets.UTF_8))
+            if (footnotesXml != null) entry("word/footnotes.xml", footnotesXml.toByteArray(Charsets.UTF_8))
             for ((name, bytes) in media) entry("word/media/$name", bytes)
         }
         return f
@@ -108,6 +110,24 @@ class DocxParserTest {
         val body = book.chapters.single().file.readText()
         assertTrue(body.contains("<ul>") && body.contains("<li>گلوله یک</li>"))
         assertTrue(body.contains("<ol>") && body.contains("<li>شماره یک</li>"))
+    }
+
+    @Test
+    fun footnoteReference_markedForPopup_noteTextInLastSection() {
+        val footnotes = "<w:footnotes $ns>" +
+            "<w:footnote w:id=\"1\"><w:p><w:r><w:t xml:space=\"preserve\">متن پاورقی یک</w:t></w:r></w:p></w:footnote>" +
+            "</w:footnotes>"
+        val doc = "<w:document $ns><w:body>" +
+            "<w:p><w:r><w:t xml:space=\"preserve\">متن اصلی</w:t></w:r>" +
+            "<w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>" +
+            "</w:body></w:document>"
+        val docx = buildDocx(doc, footnotesXml = footnotes)
+        val out = tempFolder.newFolder("out")
+        val book = DocxParser.parseFile(docx, out, ::fallback)
+        val body = book.chapters.single().file.readText()
+        assertTrue(body.contains("data-novelfa-footnote=\"1\""))
+        assertTrue(body.contains("href=\"#novelfa-fn-1\""))
+        assertTrue(body.contains("متن پاورقی یک"))
     }
 
     @Test

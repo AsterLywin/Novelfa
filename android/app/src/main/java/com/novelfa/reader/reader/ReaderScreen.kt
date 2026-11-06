@@ -294,6 +294,10 @@ fun ReaderScreen(
     var rev by remember { mutableIntStateOf(0) }
     var webView by remember { mutableStateOf<android.webkit.WebView?>(null) }
     var spacingOpen by remember { mutableStateOf(false) }
+    // Footnote popup (see handleFootnoteTap): the resolved note, or
+    // null when no popup is shown. The setting itself lives on the
+    // ViewModel (v.footnotePopup) and in PrefsStore.
+    var footnoteNote by remember { mutableStateOf<FootnotePopup?>(null) }
     var supportOpen by remember { mutableStateOf(false) }
     var themeOpen by remember { mutableStateOf(false) }
     var fontOpen by remember { mutableStateOf(false) }
@@ -549,6 +553,9 @@ fun ReaderScreen(
             }
             val savedTheme = withContext(Dispatchers.IO) { prefs.getReaderTheme(bookId) }
             val savedMode = withContext(Dispatchers.IO) { prefs.getReadingMode() }
+            val savedFootnotePopup = withContext(Dispatchers.IO) {
+                prefs.getFootnoteDisplay() == "popup"
+            }
             val charThemeId = withContext(Dispatchers.IO) { prefs.charTheme.first() }
             val isLight = withContext(Dispatchers.IO) { prefs.theme.first() == "light" }
             // XP credit: private books never earn XP (old-rank parity).
@@ -621,6 +628,7 @@ fun ReaderScreen(
             // stamped separately by prepareChapterBody either way.
             v.isEnglish = detectBookIsLtr(parsed.chapters)
             v.readingMode = ReadingMode.fromKey(savedMode)
+            v.footnotePopup = savedFootnotePopup
             // Seed the text-point anchor BEFORE loadChapter: its
             // forced saveProgress must preserve the saved anchor for
             // the target chapter (not clear it), and onPageStarted
@@ -930,6 +938,38 @@ fun ReaderScreen(
     }
 
     /**
+     * Footnote tap in popup mode (from LINK_JS via the bridge): the
+     * note opens in a popup on this page instead of navigating.
+     * When the note cannot be found anywhere, navigate exactly as
+     * before — a missed note never becomes a dead tap.
+     */
+    suspend fun handleFootnoteTap(v: ReaderViewModel, href: String, chap: Int, label: String) {
+        val note = v.footnoteFor(href, chap, label)
+        if (note == null) {
+            handleInBookLink(v, href, chap)
+            return
+        }
+        footnoteNote = note
+    }
+
+    /**
+     * Persists a footnote-display change and rebuilds the document
+     * with the new flag (a no-op when nothing changed). The rebuild
+     * goes through reloadForSettings, so the reading position is
+     * restored the same way any other settings change restores it.
+     */
+    suspend fun applyFootnoteDisplay(v: ReaderViewModel, popup: Boolean) {
+        if (popup == v.footnotePopup) return
+        v.footnotePopup = popup
+        runCatching {
+            prefs.setFootnoteDisplay(if (popup) "popup" else "navigate")
+        }
+        v.reloadForSettings()
+        pageHtml = v.html
+        rev++
+    }
+
+    /**
      * Runs the in-section restore JS for [pos] and records the landed
      * scrollTop from the JS result, so the scroll bridge can tell a
      * restore echo from a user scroll and re-apply while images/fonts
@@ -1037,6 +1077,10 @@ fun ReaderScreen(
             onLinkClick = { href, chap ->
                 val v = vm
                 if (v != null) scope.launch { handleInBookLink(v, href, chap) }
+            },
+            onFootnoteClick = { href, chap, label ->
+                val v = vm
+                if (v != null) scope.launch { handleFootnoteTap(v, href, chap, label) }
             },
             onImageClick = { src, chap ->
                 val v = vm
@@ -2178,15 +2222,23 @@ fun ReaderScreen(
                 lineHeight = v.lineHeight.toFloat(),
                 sideMargin = v.sideMargin,
                 paragraphSpacing = v.paragraphSpacing.toFloat(),
+                footnotePopup = v.footnotePopup,
                 onDismiss = { spacingOpen = false },
-                onApply = { lh, margin, para ->
+                onApply = { lh, margin, para, footnote ->
                     scope.launch {
                         try {
                             v.applySpacing(lh.toDouble(), margin, para.toDouble())
-                            webView?.updateSpacingJs(v.spacingCss())
-                            webView?.updatePagedStyleJs(v.pagedCss())
-                            pageHtml = v.html
-                            rev++
+                            if (footnote != v.footnotePopup) {
+                                // The document carries the footnote
+                                // flag, so a change needs a rebuild;
+                                // reloadForSettings restores position.
+                                applyFootnoteDisplay(v, footnote)
+                            } else {
+                                webView?.updateSpacingJs(v.spacingCss())
+                                webView?.updatePagedStyleJs(v.pagedCss())
+                                pageHtml = v.html
+                                rev++
+                            }
                         } finally {
                             // A DB failure must not leave the dialog stuck open.
                             spacingOpen = false
@@ -2197,10 +2249,14 @@ fun ReaderScreen(
                     scope.launch {
                         try {
                             v.applySpacing(1.8, 24, 0.0)
-                            webView?.updateSpacingJs(v.spacingCss())
-                            webView?.updatePagedStyleJs(v.pagedCss())
-                            pageHtml = v.html
-                            rev++
+                            if (v.footnotePopup) {
+                                applyFootnoteDisplay(v, false)
+                            } else {
+                                webView?.updateSpacingJs(v.spacingCss())
+                                webView?.updatePagedStyleJs(v.pagedCss())
+                                pageHtml = v.html
+                                rev++
+                            }
                         } finally {
                             spacingOpen = false
                         }
@@ -2281,6 +2337,63 @@ fun ReaderScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
+                }
+            }
+        }
+    }
+
+    // Footnote popup: the tapped note, shown in a window on this
+    // page (the note's own text, resolved by handleFootnoteTap).
+    // "View in text" jumps to where the note lives in the book —
+    // the current navigation behaviour, kept as an explicit action.
+    if (footnoteNote != null) {
+        val note = footnoteNote!!
+        val title = if (note.number.isNotBlank()) {
+            stringResource(R.string.footnote_title, note.number)
+        } else {
+            stringResource(R.string.footnote)
+        }
+        Dialog(onDismissRequest = { footnoteNote = null }) {
+            Card {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = note.text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        TextButton(onClick = {
+                            footnoteNote = null
+                            val vv = vm ?: return@TextButton
+                            scope.launch {
+                                if (note.chapterIdx == vv.index) {
+                                    if (note.fragment.isNotBlank()) jumpToAnchor(vv, note.fragment)
+                                } else {
+                                    if (note.fragment.isNotBlank()) pendingAnchor = note.fragment
+                                    gotoChapter(vv, note.chapterIdx)
+                                }
+                            }
+                        }) {
+                            Text(stringResource(R.string.footnote_view_in_text))
+                        }
+                        TextButton(onClick = { footnoteNote = null }) {
+                            Text(stringResource(R.string.close))
+                        }
+                    }
                 }
             }
         }
