@@ -73,6 +73,24 @@ class SeekableZip private constructor(
     fun hasEncryptedEntries(): Boolean = entries.any { it.isEncrypted }
 
     /**
+     * True when an image entry uses a compression method this
+     * reader cannot serve (anything but STORED/DEFLATED). The
+     * listing still works — names and page count look fine — but
+     * such a page can never open through the direct route, and
+     * Retry cannot help it: the store is fixed at open time, so
+     * the same entry fails the same way every time. The caller
+     * should fall back to the working copy instead, whose
+     * backends serve the readable pages and fail only the bad
+     * ones. See the class rule above: any doubt falls back to
+     * the working copy.
+     */
+    fun hasUnservableImageEntries(): Boolean =
+        entries.any { entry ->
+            entry.method != 0 && entry.method != 8 &&
+                CbzBook.isImageEntry(entry.name)
+        }
+
+    /**
      * Opens one entry for reading, or null when the entry cannot be
      * served (unknown method, encrypted, or a bad local header).
      * The caller owns the stream; closing it does not close the archive.

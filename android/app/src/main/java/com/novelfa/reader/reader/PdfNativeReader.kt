@@ -547,10 +547,10 @@ internal class CbzNativeSource(
             runCatching {
                 store.openEntry(entryName)?.use { it.readBytes() }
             }.getOrNull()
-        } ?: throw IllegalArgumentException("Unreadable comic image: $entryName")
+        } ?: throw IllegalArgumentException("Cannot open comic image: $entryName")
         if (isAvifEntry(entryName)) {
                 val decoded = AvifDecoder.decode(bytes)
-                    ?: throw IllegalArgumentException("Unreadable comic image: ${entries[index]}")
+                    ?: throw IllegalArgumentException("Cannot decode AVIF image: ${entries[index]}")
                 // Ceiling: the same 8192 x 16384 cap as the
                 // sampled path below. libavif has no sampled
                 // decode, so an over-ceiling AVIF decodes full
@@ -576,7 +576,7 @@ internal class CbzNativeSource(
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                throw IllegalArgumentException("Unreadable comic image: $entryName")
+                throw IllegalArgumentException("Not a valid image: $entryName")
             }
             // EXIF rotation, read BEFORE the sample loop: a
             // 90/270 rotation swaps the dimensions the ceiling
@@ -684,7 +684,7 @@ internal class CbzNativeSource(
                 attemptSample *= 2
             }
             val decoded = bitmap
-                ?: throw IllegalArgumentException("Unreadable comic image: $entryName")
+                ?: throw IllegalArgumentException("Cannot decode comic image: $entryName")
             if (exifDegrees == 0) return decoded
             val rotated = rotateBitmap(decoded, exifDegrees)
             if (rotated !== decoded) decoded.recycle()

@@ -137,7 +137,17 @@ fun PdfReaderRoute(
                             SeekableZip.openFromUri(context, Uri.parse(uriStr))
                         }.getOrNull()
                     }
-                    if (seekable != null && !seekable.hasEncryptedEntries()) {
+                    // The direct route lists fine even when image
+                    // entries use a method it cannot serve (bzip2,
+                    // LZMA, zstd) — but then every such page fails
+                    // to open, and Retry cannot help (the store is
+                    // fixed). Such archives fall through to the
+                    // working copy below, whose backends serve the
+                    // readable pages instead. See
+                    // SeekableZip.hasUnservableImageEntries.
+                    if (seekable != null && !seekable.hasEncryptedEntries() &&
+                        !seekable.hasUnservableImageEntries()
+                    ) {
                         val direct = if (ext == "cbz") {
                             seekable.imageEntryNames().isNotEmpty()
                         } else {
