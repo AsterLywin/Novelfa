@@ -88,9 +88,10 @@ object CbzBook {
      * Every entry name in the archive, in central-directory order.
      * Same tolerance as [imageEntryNames]: the platform listing
      * first, the direct central-directory scan when it refuses
-     * the archive. Throws the platform reader's original
-     * exception only when both readers fail — a file that is
-     * not a readable ZIP at all.
+     * the archive, and the local-header scan when the tail itself
+     * is gone (see [localHeaderEntries]). Throws the platform
+     * reader's original exception only when all three readers
+     * fail — a file that is not a readable ZIP at all.
      */
     fun allEntryNames(zipFile: File): List<String> {
         try {
@@ -144,7 +145,7 @@ object CbzBook {
      * in-place reader, with the same per-entry failure shape.
      */
     fun openEntryStream(zipFile: File, entryName: String): InputStream? {
-        val entry = tolerantEntries(zipFile)
+        val entry = recoveredEntries(zipFile)
             ?.firstOrNull { it.name == entryName } ?: return null
         if (entry.isEncrypted || (entry.method != 0 && entry.method != 8)) return null
         val fis = try {
@@ -191,7 +192,18 @@ object CbzBook {
     }
 
     private fun tolerantEntryNames(zipFile: File): List<String>? =
-        tolerantEntries(zipFile)?.map { it.name }
+        recoveredEntries(zipFile)?.map { it.name }
+
+    /**
+     * The archive's entries by any means that works: the direct
+     * central-directory scan first, the local-header scan when
+     * the tail (and with it the central directory) is gone.
+     * Both return the same [CentralEntry] shape, so the callers
+     * ([tolerantEntryNames], [openEntryStream]) need no second
+     * path for recovered entries.
+     */
+    private fun recoveredEntries(zipFile: File): List<CentralEntry>? =
+        tolerantEntries(zipFile) ?: localHeaderEntries(zipFile)
 
     /**
      * The central directory, read directly — the file-backed twin
@@ -257,6 +269,179 @@ object CbzBook {
         }
     }
 
+    /**
+     * The local file headers, read sequentially from the start of
+     * the file — the recovery for an archive whose tail is missing
+     * (an incomplete download: no EOCD, so the platform reader
+     * and the central-directory scan both fail with "zip END
+     * header not found"). Every COMPLETE entry before the cut is
+     * recovered; the cut entry itself and everything after it are
+     * dropped, so the book imports and opens with the pages that
+     * survived. A file that is not a ZIP at all has no local
+     * headers, so it still fails exactly as before (null here).
+     *
+     * Entries are walked by their own lengths: without a data
+     * descriptor the size sits in the header; with one (flag bit
+     * 3) the descriptor after the data carries it, found by a
+     * validated signature search (see [findDescriptorWithSize])
+     * — a stray signature inside compressed data cannot pass
+     * that validation. Entries of any method are recorded (an
+     * unservable one fails per-page later, like a
+     * central-directory entry would); the scan only stops when
+     * an entry's length cannot be determined — its data is cut,
+     * or no valid descriptor exists before EOF. Returns null
+     * when zero entries were recovered.
+     */
+    private fun localHeaderEntries(zipFile: File): List<CentralEntry>? {
+        return try {
+            FileInputStream(zipFile).use { fis ->
+                val channel = fis.channel
+                val size = channel.size()
+                val out = ArrayList<CentralEntry>()
+                var pos = findFirstLocalHeader(channel, size) ?: return null
+                while (pos + 30 <= size) {
+                    val header = ByteArray(30)
+                    if (!readFullyAt(channel, pos, header)) break
+                    if (readIntLE(header, 0) != 0x04034b50) break
+                    val flags = readShortLE(header, 6)
+                    val method = readShortLE(header, 8)
+                    val compSizeHdr = readIntLE(header, 18).toLong() and 0xFFFFFFFFL
+                    val nameLen = readShortLE(header, 26)
+                    val extraLen = readShortLE(header, 28)
+                    val dataStart = pos + 30L + nameLen + extraLen
+                    if (dataStart > size) break
+                    val nameBytes = ByteArray(nameLen)
+                    if (!readFullyAt(channel, pos + 30, nameBytes)) break
+                    val name = decodeName(nameBytes)
+                    val compSize: Long
+                    val nextPos: Long
+                    if (flags and 0x08 == 0) {
+                        compSize = compSizeHdr
+                        val dataEnd = dataStart + compSize
+                        if (dataEnd > size) break // this entry is cut: stop, keep what we have
+                        nextPos = dataEnd
+                    } else {
+                        val hit = findDescriptorWithSize(channel, dataStart, size)
+                            ?: break // no descriptor before EOF: this entry is cut
+                        compSize = hit.compSize
+                        nextPos = hit.offset + hit.totalLen
+                        if (nextPos > size) break
+                    }
+                    out.add(CentralEntry(name, method, compSize, pos, flags))
+                    if (nextPos <= pos) break // cannot advance: never loop forever
+                    pos = nextPos
+                }
+                out.ifEmpty { null }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** The first local-header offset: 0, or past a stub/junk prefix (first 1 MiB). */
+    private fun findFirstLocalHeader(channel: FileChannel, size: Long): Long? {
+        val probe = ByteArray(4)
+        if (size >= 4 && readFullyAt(channel, 0, probe) &&
+            readIntLE(probe, 0) == 0x04034b50
+        ) {
+            return 0
+        }
+        val window = minOf(size, 1024L * 1024).toInt()
+        val buf = ByteArray(window)
+        if (!readFullyAt(channel, 0, buf)) return null
+        var i = 0
+        while (i + 4 <= window) {
+            if (readIntLE(buf, i) == 0x04034b50) return i.toLong()
+            i++
+        }
+        return null
+    }
+
+    /** A data descriptor found after an entry's data: its offset, data length, and total size. */
+    private data class DescriptorHit(
+        val offset: Long,
+        val compSize: Long,
+        val totalLen: Long
+    )
+
+    /**
+     * The data descriptor for an entry whose data starts at
+     * [start]: the first PK\x07\x08 whose fields validate — the
+     * 12-byte layout (crc + compSize + uncompSize) or the 20-byte
+     * ZIP64 layout, either followed by a known header signature
+     * or by end of file. A PK\x07\x08 inside compressed data
+     * fails the validation (its "fields" are not followed by a
+     * header), so the search continues past it. Null when no
+     * valid descriptor exists before EOF: the entry is cut.
+     */
+    private fun findDescriptorWithSize(
+        channel: FileChannel,
+        start: Long,
+        size: Long
+    ): DescriptorHit? {
+        var searchFrom = start
+        while (true) {
+            val at = findSignature(channel, searchFrom, size, 0x08074b50) ?: return null
+            val fields12 = readBytesAt(channel, at + 4, 12)
+            if (fields12 != null && at + 16 <= size &&
+                isKnownSignatureAt(channel, at + 16, size)
+            ) {
+                return DescriptorHit(at, readIntLE(fields12, 4).toLong() and 0xFFFFFFFFL, 16)
+            }
+            val fields20 = readBytesAt(channel, at + 4, 20)
+            if (fields20 != null && at + 24 <= size &&
+                isKnownSignatureAt(channel, at + 24, size)
+            ) {
+                return DescriptorHit(at, readLongLE(fields20, 4), 24)
+            }
+            searchFrom = at + 4 // false positive inside the data: keep scanning
+        }
+    }
+
+    /** True at end of file, or when a known ZIP header signature sits at [pos]. */
+    private fun isKnownSignatureAt(channel: FileChannel, pos: Long, size: Long): Boolean {
+        if (pos >= size) return true
+        val sig = readBytesAt(channel, pos, 4) ?: return false
+        val v = readIntLE(sig, 0)
+        return v == 0x04034b50 || v == 0x02014b50 ||
+            v == 0x06054b50 || v == 0x08074b50
+    }
+
+    /** First offset >= [start] where the 4-byte [sig] occurs, or null. Chunked; no full-file read. */
+    private fun findSignature(channel: FileChannel, start: Long, size: Long, sig: Int): Long? {
+        val chunkSize = 65536
+        val buf = ByteArray(chunkSize)
+        var pos = start
+        var tail = ByteArray(0)
+        while (pos < size) {
+            val want = minOf(chunkSize.toLong(), size - pos).toInt()
+            val bb = ByteBuffer.wrap(buf, 0, want)
+            var at = pos
+            while (bb.hasRemaining()) {
+                val n = channel.read(bb, at)
+                if (n < 0) return null
+                at += n
+            }
+            val search = tail + buf.copyOfRange(0, want)
+            var i = 0
+            while (i + 4 <= search.size) {
+                if (readIntLE(search, i) == sig) {
+                    return pos - tail.size + i
+                }
+                i++
+            }
+            tail = search.takeLast(minOf(3, search.size)).toByteArray()
+            pos += want
+        }
+        return null
+    }
+
+    /** [len] bytes at [pos], or null on a short read. */
+    private fun readBytesAt(channel: FileChannel, pos: Long, len: Int): ByteArray? {
+        val buf = ByteArray(len)
+        return if (readFullyAt(channel, pos, buf)) buf else null
+    }
+
     private fun decodeName(bytes: ByteArray): String {
         // Strict UTF-8 first (the flag-11 case and the common
         // case); CP437 fallback matches the platform reader's
@@ -280,6 +465,14 @@ object CbzBook {
             ((bytes[off + 1].toInt() and 0xFF) shl 8) or
             ((bytes[off + 2].toInt() and 0xFF) shl 16) or
             ((bytes[off + 3].toInt() and 0xFF) shl 24)
+
+    private fun readLongLE(bytes: ByteArray, off: Int): Long {
+        var v = 0L
+        for (i in 0 until 8) {
+            v = v or ((bytes[off + i].toLong() and 0xFF) shl (8 * i))
+        }
+        return v
+    }
 
     private fun readFullyAt(channel: FileChannel, pos: Long, buf: ByteArray): Boolean {
         val bb = ByteBuffer.wrap(buf)
