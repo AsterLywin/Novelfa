@@ -1,6 +1,15 @@
 package com.novelfa.reader.parser
 
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
+import java.io.InputStream
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.charset.Charset
+import java.nio.charset.CodingErrorAction
+import java.util.zip.Inflater
+import java.util.zip.InflaterInputStream
 import java.util.zip.ZipFile
 
 /**
@@ -57,14 +66,230 @@ object CbzBook {
      * or non-ZIP file (the importer's generic catch turns that into
      * a localized import error); returns an empty list only when
      * the archive is valid but holds no images.
+     *
+     * The listing is tolerant: the platform reader ([ZipFile])
+     * rejects a whole archive when a single entry uses an unusual
+     * compression method (bzip2, LZMA, zstd, AES — "invalid CEN
+     * header (bad compression method)"), even when that entry is
+     * not a page at all. ComicScreen's reader does not validate
+     * the method while listing, so such books open there and only
+     * the one page fails. When the platform reader refuses the
+     * archive, the central directory is scanned directly and
+     * only the truly unreadable entries fail later, one page at
+     * a time ([openEntryStream], [readEntryBytes]).
      */
     fun imageEntryNames(zipFile: File): List<String> {
-        ZipFile(zipFile).use { zip ->
-            return zip.entries().toList()
-                .map { it.name }
-                .filter { isImageEntry(it) }
-                .sortedWith(::compareNatural)
+        return allEntryNames(zipFile)
+            .filter { isImageEntry(it) }
+            .sortedWith(::compareNatural)
+    }
+
+    /**
+     * Every entry name in the archive, in central-directory order.
+     * Same tolerance as [imageEntryNames]: the platform listing
+     * first, the direct central-directory scan when it refuses
+     * the archive. Throws the platform reader's original
+     * exception only when both readers fail — a file that is
+     * not a readable ZIP at all.
+     */
+    fun allEntryNames(zipFile: File): List<String> {
+        try {
+            ZipFile(zipFile).use { zip ->
+                return zip.entries().toList().map { it.name }
+            }
+        } catch (first: Exception) {
+            return tolerantEntryNames(zipFile) ?: throw first
         }
+    }
+
+    /**
+     * One entry's bytes, read tolerantly: STORED verbatim,
+     * DEFLATED through an inflater, anything else (bzip2, LZMA,
+     * zstd, encrypted) returns null instead of failing the
+     * whole archive. The bytes are capped ([maxBytes]) so one
+     * hostile entry cannot exhaust memory. Null also covers a
+     * missing entry, a bad local header, or a file that is not
+     * a readable ZIP at all.
+     */
+    fun readEntryBytes(
+        zipFile: File,
+        entryName: String,
+        maxBytes: Long = 64L * 1024 * 1024
+    ): ByteArray? {
+        return try {
+            openEntryStream(zipFile, entryName)?.use { stream ->
+                val out = ByteArrayOutputStream()
+                val buf = ByteArray(8192)
+                var total = 0L
+                while (true) {
+                    val n = stream.read(buf)
+                    if (n < 0) break
+                    total += n
+                    if (total > maxBytes) return null
+                    out.write(buf, 0, n)
+                }
+                out.toByteArray()
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * A stream over one entry's data, or null when the entry
+     * cannot be served (unknown method, encrypted, bad local
+     * header, missing entry). The stream owns its file channel:
+     * closing it closes the channel; the caller owns the stream.
+     * STORED and DEFLATED only — the same rule as SeekableZip's
+     * in-place reader, with the same per-entry failure shape.
+     */
+    fun openEntryStream(zipFile: File, entryName: String): InputStream? {
+        val entry = tolerantEntries(zipFile)
+            ?.firstOrNull { it.name == entryName } ?: return null
+        if (entry.isEncrypted || (entry.method != 0 && entry.method != 8)) return null
+        val fis = try {
+            FileInputStream(zipFile)
+        } catch (e: Exception) {
+            return null
+        }
+        try {
+            val channel = fis.channel
+            val header = ByteArray(30)
+            if (!readFullyAt(channel, entry.localHeaderOffset, header)) {
+                runCatching { fis.close() }
+                return null
+            }
+            if (readIntLE(header, 0) != 0x04034b50) {
+                runCatching { fis.close() }
+                return null
+            }
+            val nameLen = readShortLE(header, 26)
+            val extraLen = readShortLE(header, 28)
+            val dataStart = entry.localHeaderOffset + 30 + nameLen + extraLen
+            val slice = FileSliceInputStream(channel, dataStart, entry.compressedSize) {
+                runCatching { fis.close() }
+            }
+            return when (entry.method) {
+                0 -> slice
+                else -> InflaterInputStream(slice, Inflater(true))
+            }
+        } catch (e: Exception) {
+            runCatching { fis.close() }
+            return null
+        }
+    }
+
+    /** One central-directory row: enough to locate and open the entry. */
+    private data class CentralEntry(
+        val name: String,
+        val method: Int,
+        val compressedSize: Long,
+        val localHeaderOffset: Long,
+        val flags: Int
+    ) {
+        val isEncrypted: Boolean get() = flags and 0x01 != 0
+    }
+
+    private fun tolerantEntryNames(zipFile: File): List<String>? =
+        tolerantEntries(zipFile)?.map { it.name }
+
+    /**
+     * The central directory, read directly — the file-backed twin
+     * of SeekableZip's scan for in-place archives: the EOCD is
+     * found by scanning the tail, ZIP64 sentinels decline (the
+     * platform reader handles those), and names decode as UTF-8
+     * with a CP437 fallback, matching the platform reader's
+     * legacy decoding. Returns null for anything unparseable;
+     * the caller then falls back to the platform reader's
+     * original exception.
+     */
+    private fun tolerantEntries(zipFile: File): List<CentralEntry>? {
+        return try {
+            FileInputStream(zipFile).use { fis ->
+                val channel = fis.channel
+                val size = channel.size()
+                if (size < 22) return null
+                val tailLen = minOf(size, 65536L + 22).toInt()
+                val tail = ByteArray(tailLen)
+                if (!readFullyAt(channel, size - tailLen, tail)) return null
+                var eocd = -1
+                var i = tailLen - 22
+                while (i >= 0) {
+                    if (readIntLE(tail, i) == 0x06054b50) {
+                        eocd = i
+                        break
+                    }
+                    i--
+                }
+                if (eocd < 0) return null
+                val count = readShortLE(tail, eocd + 10)
+                val cdSize = readIntLE(tail, eocd + 12).toLong() and 0xFFFFFFFFL
+                val cdOffset = readIntLE(tail, eocd + 16).toLong() and 0xFFFFFFFFL
+                if (count == 0xFFFF || cdSize == 0xFFFFFFFFL ||
+                    cdOffset == 0xFFFFFFFFL || count <= 0 || cdSize <= 0L ||
+                    cdOffset < 0 || cdOffset + cdSize > size
+                ) {
+                    return null
+                }
+                val cd = ByteArray(cdSize.toInt())
+                if (!readFullyAt(channel, cdOffset, cd)) return null
+                val list = ArrayList<CentralEntry>(count)
+                var p = 0
+                repeat(count) {
+                    if (p + 46 > cd.size) return null
+                    if (readIntLE(cd, p) != 0x02014b50) return null
+                    val flags = readShortLE(cd, p + 8)
+                    val method = readShortLE(cd, p + 10)
+                    val compSize = readIntLE(cd, p + 20).toLong() and 0xFFFFFFFFL
+                    val nameLen = readShortLE(cd, p + 28)
+                    val extraLen = readShortLE(cd, p + 30)
+                    val commentLen = readShortLE(cd, p + 32)
+                    val localOff = readIntLE(cd, p + 42).toLong() and 0xFFFFFFFFL
+                    if (p + 46 + nameLen > cd.size) return null
+                    val nameBytes = cd.copyOfRange(p + 46, p + 46 + nameLen)
+                    list.add(CentralEntry(decodeName(nameBytes), method, compSize, localOff, flags))
+                    p += 46 + nameLen + extraLen + commentLen
+                }
+                list
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun decodeName(bytes: ByteArray): String {
+        // Strict UTF-8 first (the flag-11 case and the common
+        // case); CP437 fallback matches the platform reader's
+        // legacy decoding for archives without it.
+        runCatching {
+            return Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes)).toString()
+        }
+        return runCatching {
+            Charset.forName("IBM437").decode(ByteBuffer.wrap(bytes)).toString()
+        }.getOrDefault(String(bytes, Charsets.UTF_8))
+    }
+
+    private fun readShortLE(bytes: ByteArray, off: Int): Int =
+        (bytes[off].toInt() and 0xFF) or ((bytes[off + 1].toInt() and 0xFF) shl 8)
+
+    private fun readIntLE(bytes: ByteArray, off: Int): Int =
+        (bytes[off].toInt() and 0xFF) or
+            ((bytes[off + 1].toInt() and 0xFF) shl 8) or
+            ((bytes[off + 2].toInt() and 0xFF) shl 16) or
+            ((bytes[off + 3].toInt() and 0xFF) shl 24)
+
+    private fun readFullyAt(channel: FileChannel, pos: Long, buf: ByteArray): Boolean {
+        val bb = ByteBuffer.wrap(buf)
+        var at = pos
+        while (bb.hasRemaining()) {
+            val n = channel.read(bb, at)
+            if (n < 0) return false
+            at += n
+        }
+        return true
     }
 
     /**
@@ -195,5 +420,55 @@ object CbzBook {
             }
         }
         return out
+    }
+}
+
+/**
+ * A slice of a file channel as an InputStream: positioned reads
+ * only, so the channel's shared position never moves. Closing
+ * the stream runs [onClose] (the channel owner). The file-backed
+ * twin of SeekableZip's ChannelSliceInputStream.
+ */
+private class FileSliceInputStream(
+    private val channel: FileChannel,
+    private val start: Long,
+    private val length: Long,
+    private val onClose: () -> Unit = {}
+) : InputStream() {
+    private var pos = 0L
+    private var closed = false
+
+    override fun read(): Int {
+        if (pos >= length) return -1
+        val b = ByteArray(1)
+        return if (read(b, 0, 1) < 0) -1 else b[0].toInt() and 0xFF
+    }
+
+    override fun read(buf: ByteArray, off: Int, len: Int): Int {
+        if (pos >= length) return -1
+        val want = minOf(len.toLong(), length - pos).toInt()
+        val bb = ByteBuffer.wrap(buf, off, want)
+        var total = 0
+        while (bb.hasRemaining()) {
+            val n = try {
+                channel.read(bb, start + pos + total)
+            } catch (e: java.io.IOException) {
+                return if (total == 0) -1 else total
+            }
+            if (n < 0) break
+            total += n
+        }
+        if (total == 0) return -1
+        pos += total
+        return total
+    }
+
+    override fun available(): Int =
+        minOf(length - pos, Int.MAX_VALUE.toLong()).toInt()
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        onClose()
     }
 }

@@ -6,8 +6,6 @@ import com.novelfa.reader.model.ParsedBook
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CbzBook
 import java.io.File
-import java.util.zip.ZipEntry
-import java.util.zip.ZipFile
 
 /**
  * The comic engine. A CBZ is a ZIP of page images, and this engine
@@ -44,7 +42,7 @@ object CbzEngine : BookEngine {
         if (entries.isEmpty()) throw IllegalArgumentException(
             "Comic archive has no readable images: $displayName"
         )
-        val coverFile = extractFirstImage(source, entries.first(), scratchDir)
+        val coverFile = extractFirstImage(source, entries, scratchDir)
         return EngineMetadata(
             title = File(displayName).nameWithoutExtension
                 .takeIf { it.isNotBlank() } ?: displayName,
@@ -66,45 +64,53 @@ object CbzEngine : BookEngine {
         )
     }
 
-    private fun extractFirstImage(source: File, entryName: String, scratchDir: File): File? {
-        ZipFile(source).use { zf ->
-            val entry = zf.getEntry(entryName) ?: return null
-            if (entry.size > MAX_COVER_BYTES) {
-                // Oversized first page (a high-res PNG): downsample
-                // it instead of giving up the cover — a big page
-                // is still the cover, just stored smaller. The
-                // cap used to return null here, so the book fell
-                // back to a generated cover with no trace of why.
-                return downsampledCover(zf, entry, scratchDir)
-            }
+    /**
+     * The cover is the first READABLE page, not necessarily the
+     * first page: a poisoned first page (an unusual compression
+     * method, a corrupt entry) must not cost the cover when the
+     * next page reads fine, and a book whose every page is
+     * unreadable still imports — with a generated cover — instead
+     * of failing the whole import.
+     */
+    private fun extractFirstImage(
+        source: File,
+        entryNames: List<String>,
+        scratchDir: File
+    ): File? {
+        for (name in entryNames) {
+            val bytes = runCatching { CbzBook.readEntryBytes(source, name) }.getOrNull()
+                ?: continue
+            if (bytes.isEmpty()) continue
             scratchDir.mkdirs()
-            val dest = File(scratchDir, "cover." + entryName.substringAfterLast('.', "jpg"))
-            zf.getInputStream(entry).use { input ->
-                dest.outputStream().use { output -> input.copyTo(output) }
+            if (bytes.size <= MAX_COVER_BYTES) {
+                val dest = File(scratchDir, "cover." + name.substringAfterLast('.', "jpg"))
+                runCatching { dest.writeBytes(bytes) }.getOrNull() ?: continue
+                val done = dest.takeIf { it.exists() && it.length() > 0 } ?: continue
+                return done
             }
-            return dest.takeIf { it.exists() && it.length() > 0 }
+            val downsampled = downsampledCover(bytes, scratchDir)
+            if (downsampled != null) return downsampled
         }
+        return null
     }
 
     /**
-     * Downsamples one oversized archive entry to a <=1200px
+     * Downsamples one oversized page's bytes to a <=1200px
      * cover (JPEG 85). Bounds are read first so the sample size
      * is known before any pixels are decoded — the full bitmap
      * is never held in memory. Any failure returns null and the
      * caller falls back to the generated cover.
      */
-    private fun downsampledCover(zf: ZipFile, entry: ZipEntry, scratchDir: File): File? {
+    private fun downsampledCover(bytes: ByteArray, scratchDir: File): File? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        zf.getInputStream(entry).use { BitmapFactory.decodeStream(it, null, bounds) }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         val width = bounds.outWidth
         val height = bounds.outHeight
         if (width <= 0 || height <= 0) return null
         var sample = 1
         while (width / sample > 1200 || height / sample > 1200) sample *= 2
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-        val bitmap = zf.getInputStream(entry).use {
-            BitmapFactory.decodeStream(it, null, opts)
-        } ?: return null
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return null
         scratchDir.mkdirs()
         val dest = File(scratchDir, "cover.jpg")
         try {

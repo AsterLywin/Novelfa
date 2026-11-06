@@ -4,7 +4,6 @@ import com.novelfa.reader.model.ParsedBook
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CbzBook
 import java.io.File
-import java.util.zip.ZipFile
 
 /**
  * A book candidate inside a ZIP archive: the entry's path inside
@@ -64,38 +63,37 @@ object ZipEngine : BookEngine {
     private val imageExtensions = setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")
 
     fun classify(source: File): ZipKind {
-        ZipFile(source).use { zf ->
-            val names = zf.entries().asSequence()
-                .filter { !it.isDirectory }
-                .map { it.name }
-                .filter { !it.startsWith("__MACOSX/") }
-                .filter { !it.substringAfterLast('/').startsWith(".") }
-                .toList()
-            val candidates = names.mapNotNull { name ->
-                val format = when (name.substringAfterLast('.', "").lowercase()) {
-                    "epub" -> BookFormat.EPUB
-                    "docx" -> BookFormat.DOCX
-                    "pdf" -> BookFormat.PDF
-                    "txt", "text" -> BookFormat.TXT
-                    "md", "markdown", "mdown" -> BookFormat.MARKDOWN
-                    else -> return@mapNotNull null
-                }
-                ArchiveCandidate(name, format, name.substringAfterLast('/'))
-            }.distinctBy { it.entryName }
-            if (candidates.isNotEmpty()) {
-                return if (candidates.size == 1) ZipKind.SingleBook(candidates[0])
-                else ZipKind.MultiBook(candidates)
+        // Tolerant listing (CbzBook.allEntryNames): one entry
+        // with an unusual compression method must not fail the
+        // whole classification, exactly as for CBZ imports.
+        val names = CbzBook.allEntryNames(source)
+            .filter { !it.endsWith('/') }
+            .filter { !it.startsWith("__MACOSX/") }
+            .filter { !it.substringAfterLast('/').startsWith(".") }
+        val candidates = names.mapNotNull { name ->
+            val format = when (name.substringAfterLast('.', "").lowercase()) {
+                "epub" -> BookFormat.EPUB
+                "docx" -> BookFormat.DOCX
+                "pdf" -> BookFormat.PDF
+                "txt", "text" -> BookFormat.TXT
+                "md", "markdown", "mdown" -> BookFormat.MARKDOWN
+                else -> return@mapNotNull null
             }
-            val images = names.count {
-                it.substringAfterLast('.', "").lowercase() in imageExtensions
-            }
-            if (images > 0) {
-                // CbzBook applies the same natural-order and junk
-                // rules to the count the viewer will actually use.
-                return ZipKind.ImageOnly(CbzBook.imageEntryNames(source).size)
-            }
-            return ZipKind.NothingReadable
+            ArchiveCandidate(name, format, name.substringAfterLast('/'))
+        }.distinctBy { it.entryName }
+        if (candidates.isNotEmpty()) {
+            return if (candidates.size == 1) ZipKind.SingleBook(candidates[0])
+            else ZipKind.MultiBook(candidates)
         }
+        val images = names.count {
+            it.substringAfterLast('.', "").lowercase() in imageExtensions
+        }
+        if (images > 0) {
+            // CbzBook applies the same natural-order and junk
+            // rules to the count the viewer will actually use.
+            return ZipKind.ImageOnly(CbzBook.imageEntryNames(source).size)
+        }
+        return ZipKind.NothingReadable
     }
 
     override fun metadata(

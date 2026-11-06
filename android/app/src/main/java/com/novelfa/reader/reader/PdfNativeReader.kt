@@ -268,7 +268,11 @@ internal class PdfNativeRenderer(pdfFile: File) : NativePageSource {
  * in-place `content://` backend (step 5: pages stream from the
  * provider's descriptor with no working copy). Both serve the
  * same calls, so the decode pipeline below never learns which
- * one it is reading from.
+ * one it is reading from. The file-backed store falls back to
+ * [CbzBook.openEntryStream] when zip4j refuses an archive (one
+ * entry with an unusual compression method makes zip4j fail the
+ * whole header read), so the good pages of such an archive
+ * still decode and only the one page fails.
  */
 internal interface CbzEntryStore : Closeable {
     fun openEntry(name: String): InputStream?
@@ -276,7 +280,7 @@ internal interface CbzEntryStore : Closeable {
 }
 
 internal class ZipFileStore(
-    zipFile: File,
+    private val zipFile: File,
     password: CharArray?
 ) : CbzEntryStore {
     private val zip = ZipFile(zipFile).apply {
@@ -284,10 +288,19 @@ internal class ZipFileStore(
     }
 
     override fun openEntry(name: String): InputStream? {
-        val header = runCatching {
-            zip.fileHeaders.firstOrNull { it.fileName == name }
-        }.getOrNull() ?: return null
-        return runCatching { zip.getInputStream(header) }.getOrNull()
+        // zip4j first: it alone decrypts password-protected
+        // archives. But its header read throws for the whole
+        // archive when any entry uses an unusual compression
+        // method — then the tolerant reader serves the good
+        // pages (STORED/DEFLATED) one by one instead of failing
+        // every page of the book.
+        val viaZip4j = runCatching {
+            val header = zip.fileHeaders.firstOrNull { it.fileName == name }
+                ?: return@runCatching null
+            zip.getInputStream(header)
+        }.getOrNull()
+        if (viaZip4j != null) return viaZip4j
+        return runCatching { CbzBook.openEntryStream(zipFile, name) }.getOrNull()
     }
 
     override fun firstEncryptedName(): String? =
