@@ -691,9 +691,23 @@ class Importer(
                         ioCtx.ensureActive()
                     }
                 } catch (e: Exception) {
+                    // A ZipException here means the archive could
+                    // not be listed by ANY reader — not the platform
+                    // reader, not the central-directory scan, not
+                    // the local-header scan — so no page could be
+                    // recovered at all. That is an incomplete
+                    // download (or a file that is not an archive),
+                    // not a readable book with a damaged page: say
+                    // so, and say what fixes it, instead of the raw
+                    // "zip END header not found".
+                    val unreadable = generateSequence<Throwable>(e) { it.cause }
+                        .any { it is ZipException }
                     throw ImportException(
                         e.message ?: "invalid comic archive: $displayName",
-                        messageFa = context.getString(R.string.import_error_bad_structure),
+                        messageFa = context.getString(
+                            if (unreadable) R.string.import_error_incomplete_archive
+                            else R.string.import_error_bad_structure
+                        ),
                         cause = e
                     )
                 }

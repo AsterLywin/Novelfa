@@ -71,17 +71,22 @@ class CbzLocalHeaderRecoveryTest {
 
     /** Offset of the last local-header signature (PK\x03\x04) in the file. */
     private fun lastLocalHeaderOffset(bytes: ByteArray): Int {
-        var last = -1
+        return allLocalHeaderOffsets(bytes).lastOrNull() ?: -1
+    }
+
+    /** Offsets of every local-header signature (PK\x03\x04) in the file, in order. */
+    private fun allLocalHeaderOffsets(bytes: ByteArray): List<Int> {
+        val out = ArrayList<Int>()
         var i = 0
         while (i + 4 <= bytes.size) {
             val v = (bytes[i].toInt() and 0xFF) or
                 ((bytes[i + 1].toInt() and 0xFF) shl 8) or
                 ((bytes[i + 2].toInt() and 0xFF) shl 16) or
                 ((bytes[i + 3].toInt() and 0xFF) shl 24)
-            if (v == 0x04034b50) last = i
+            if (v == 0x04034b50) out.add(i)
             i++
         }
-        return last
+        return out
     }
 
     private fun localHeaderDataStart(bytes: ByteArray, headerOff: Int): Int {
@@ -197,6 +202,54 @@ class CbzLocalHeaderRecoveryTest {
         } catch (e: java.util.zip.ZipException) {
             // The platform reader's own wording for a 0-byte file.
             assertTrue(e.message!!.contains("zip file is empty"))
+        }
+    }
+
+    /**
+     * The import path itself (CbzEngine.metadata — the exact step
+     * the user's toast came from): a 23-page book like the reported
+     * Luminare chapter, cut right after page 10, imports with 10
+     * pages and a real cover instead of failing.
+     */
+    @Test
+    fun importPath_truncated23PageBook_recoversFirst10Pages() {
+        val full = tmp.newFile("luminare.cbz")
+        writeCbz(full, pages = 23)
+        val bytes = full.readBytes()
+        val page11Header = allLocalHeaderOffsets(bytes)[10]
+        val cut = truncate(full, page11Header)
+        val scratch = tmp.newFolder("scratch")
+        val meta = com.novelfa.reader.parser.engine.CbzEngine.metadata(
+            cut, "Luminare Translations_Ch.33.cbz", scratch, null
+        )
+        assertEquals(10, meta.chapterCount)
+        assertEquals("Luminare Translations_Ch.33", meta.title)
+        assertTrue(meta.coverFile != null && meta.coverFile!!.exists() && meta.coverFile!!.length() > 0)
+        assertTrue(meta.coverFile!!.readBytes().contentEquals(pageBytes(1)))
+    }
+
+    /**
+     * The same import path on a file cut inside its first page:
+     * nothing can be recovered, so metadata still throws the
+     * platform reader's ZipException — this is the toast the user
+     * saw on the new build, and it means this file (not the fix)
+     * has nothing left to read.
+     */
+    @Test
+    fun importPath_cutInsideFirstPage_stillThrows() {
+        val full = tmp.newFile("luminare.cbz")
+        writeCbz(full, pages = 23)
+        val bytes = full.readBytes()
+        val firstData = localHeaderDataStart(bytes, 0)
+        val cut = truncate(full, firstData + 100)
+        val scratch = tmp.newFolder("scratch")
+        try {
+            com.novelfa.reader.parser.engine.CbzEngine.metadata(
+                cut, "Luminare Translations_Ch.33.cbz", scratch, null
+            )
+            fail("expected ZipException")
+        } catch (e: java.util.zip.ZipException) {
+            assertTrue(e.message!!.contains("zip END header not found"))
         }
     }
 }
