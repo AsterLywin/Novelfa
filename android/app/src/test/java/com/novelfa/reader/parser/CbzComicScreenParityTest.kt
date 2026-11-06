@@ -81,6 +81,9 @@ class CbzComicScreenParityTest {
         pages: Int = 5,
         descriptorStyle: DescriptorStyle = DescriptorStyle.NONE,
         cdSizeOverride: Long? = null,
+        cdOffsetOverride: Long? = null,
+        countOverride: Int? = null,
+        corruptCdFirstSignature: Boolean = false,
         trailingJunk: Int = 0
     ) {
         val out = ByteArrayOutputStream()
@@ -148,15 +151,20 @@ class CbzComicScreenParityTest {
         le.u32(0x06054b50L)
         le.u16(0)
         le.u16(0)
-        le.u16(ents.size)
-        le.u16(ents.size)
+        le.u16(countOverride ?: ents.size)
+        le.u16(countOverride ?: ents.size)
         le.u32(cdSizeOverride ?: cdSize)
-        le.u32(cdOffset)
+        le.u32(cdOffsetOverride ?: cdOffset)
         le.u16(0)
         if (trailingJunk > 0) {
             le.bytes(ByteArray(trailingJunk) { 0x5A })
         }
-        file.writeBytes(out.toByteArray())
+        val outBytes = out.toByteArray()
+        if (corruptCdFirstSignature) {
+            // Flip the first central-directory entry's signature.
+            outBytes[cdOffset.toInt()] = 0x00
+        }
+        file.writeBytes(outBytes)
     }
 
     /**
@@ -190,6 +198,7 @@ class CbzComicScreenParityTest {
         if (eocd < 0) return false
         val count = i16(eocd + 10)
         val cdOffset = i32(eocd + 16).toInt()
+        if (count <= 0 || cdOffset < 0 || cdOffset >= size) return false
         var pos = cdOffset
         repeat(count) {
             if (pos + 46 > size) return false
@@ -259,6 +268,31 @@ class CbzComicScreenParityTest {
             names
         )
         assertTrue(CbzBook.readEntryBytes(f, "004.jpg")!!.contentEquals(pageBytes(4)))
+    }
+
+    @Test
+    fun archiveKind_detectsMagicBytes() {
+        var n = 0
+        fun kindOf(bytes: ByteArray): String {
+            val f = tmp.newFile("kind${n++}.bin")
+            f.writeBytes(bytes)
+            return CbzBook.archiveKind(f)
+        }
+        // A real ZIP header.
+        assertEquals("ZIP", kindOf(byteArrayOf(0x50, 0x4B, 0x03, 0x04, 0, 0, 0, 0)))
+        // RAR4 and RAR5 both start with "Rar!".
+        assertEquals("RAR", kindOf(byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00, 0)))
+        assertEquals("RAR", kindOf(byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0)))
+        // 7z.
+        assertEquals("7Z", kindOf(byteArrayOf(0x37, 0x7A, 0xBC.toByte(), 0xAF.toByte(), 0x27, 0x1C, 0, 0)))
+        // PDF.
+        assertEquals("PDF", kindOf(byteArrayOf(0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x37)))
+        // GZIP and bzip2.
+        assertEquals("GZIP", kindOf(byteArrayOf(0x1F, 0x8B.toByte(), 0x08, 0, 0, 0, 0, 0)))
+        assertEquals("BZIP2", kindOf(byteArrayOf(0x42, 0x5A, 0x68, 0x39, 0, 0, 0, 0)))
+        // Random bytes and an empty file are UNKNOWN, never a crash.
+        assertEquals("UNKNOWN", kindOf(byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8)))
+        assertEquals("UNKNOWN", kindOf(byteArrayOf()))
     }
 
     @Test

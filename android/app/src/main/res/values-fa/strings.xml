@@ -50,6 +50,7 @@
     <string name="import_error_not_valid_epub">فایل انتخاب‌شده یک کتاب EPUB معتبر نیست.</string>
     <string name="import_error_bad_structure">ساختار داخلی کتاب آسیب دیده است.</string>
     <string name="import_error_incomplete_archive">به نظر می‌رسد این فایل ناقص است (دانلود نیمه‌کاره؟). دوباره دانلودش کنید و دوباره تلاش کنید.</string>
+    <string name="import_error_wrong_archive_type">این فایل یک آرشیو ZIP نیست (نوع فایل: %1$s). نولفا فقط فایل‌های CBZ (ZIP) را باز می‌کند.</string>
     <string name="import_error_old_format">این قالب قدیمی کتاب پشتیبانی نمی‌شود.</string>
     <string name="import_error_cannot_read">فایل خوانده نشد.</string>
     <string name="import_error_access_denied">دسترسی به فایل رد شد.</string>

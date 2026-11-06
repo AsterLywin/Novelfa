@@ -64,6 +64,59 @@ object CbzBook {
     }
 
     /**
+     * The file's real kind from its first bytes — the decisive
+     * fact when the archive will not list at all. A RAR, 7z or
+     * PDF wearing a .cbz name fails every ZIP reader with
+     * "zip END header not found", exactly like a truncated ZIP —
+     * but ComicScreen opens RARs natively, 7z through Commons
+     * Compress, and PDFs through its own engine, so it renders
+     * the same file easily. Without this check the user is told
+     * to re-download a file that is not broken, only misnamed.
+     * Returns "ZIP" for a real ZIP (any "PK" header signature),
+     * or the detected type ("RAR", "7Z", "PDF", "GZIP", "BZIP2",
+     * "UNKNOWN").
+     */
+    fun archiveKind(zipFile: File): String {
+        return try {
+            FileInputStream(zipFile).use { fis ->
+                val head = ByteArray(8)
+                var read = 0
+                while (read < head.size) {
+                    val n = fis.read(head, read, head.size - read)
+                    if (n < 0) break
+                    read += n
+                }
+                if (read >= 4 && head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte()) {
+                    "ZIP"
+                } else if (read >= 4 && head[0] == 'R'.code.toByte() && head[1] == 'a'.code.toByte() &&
+                    head[2] == 'r'.code.toByte() && head[3] == '!'.code.toByte()
+                ) {
+                    "RAR"
+                } else if (read >= 6 && head[0] == '7'.code.toByte() && head[1] == 'z'.code.toByte() &&
+                    head[2] == 0xBC.toByte() && head[3] == 0xAF.toByte() &&
+                    head[4] == 0x27.toByte() && head[5] == 0x1C.toByte()
+                ) {
+                    "7Z"
+                } else if (read >= 4 && head[0] == '%'.code.toByte() && head[1] == 'P'.code.toByte() &&
+                    head[2] == 'D'.code.toByte() && head[3] == 'F'.code.toByte()
+                ) {
+                    "PDF"
+                } else if (read >= 2 && head[0] == 0x1F.toByte() && head[1] == 0x8B.toByte()) {
+                    "GZIP"
+                } else if (read >= 3 && head[0] == 'B'.code.toByte() && head[1] == 'Z'.code.toByte() &&
+                    head[2] == 'h'.code.toByte()
+                ) {
+                    "BZIP2"
+                } else {
+                    "UNKNOWN"
+                }
+            }
+        } catch (e: Exception) {
+            "UNKNOWN"
+        }
+    }
+
+    /**
      * Sorted image entry names for [zipFile]. Throws on a corrupt
      * or non-ZIP file (the importer's generic catch turns that into
      * a localized import error); returns an empty list only when

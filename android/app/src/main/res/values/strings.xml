@@ -50,6 +50,7 @@
     <string name="import_error_not_valid_epub">The selected file is not a valid EPUB book.</string>
     <string name="import_error_bad_structure">The book\'s internal structure is damaged.</string>
     <string name="import_error_incomplete_archive">This file looks incomplete — it may be an interrupted download. Download it again and try once more.</string>
+    <string name="import_error_wrong_archive_type">This file is not a ZIP archive (file type: %1$s). Novelfa only opens CBZ (ZIP) files.</string>
     <string name="import_error_old_format">This old book format is not supported.</string>
     <string name="import_error_cannot_read">Couldn\'t read the file.</string>
     <string name="import_error_access_denied">File access was denied.</string>

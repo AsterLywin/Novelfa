@@ -15,6 +15,7 @@ import com.novelfa.reader.model.ParsedBook
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CacheStamp
 import com.novelfa.reader.parser.PdfParser
+import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.parser.engine.CbzEngine
 import com.novelfa.reader.parser.engine.DocxEngine
 import com.novelfa.reader.parser.engine.EpubEngine
@@ -702,12 +703,23 @@ class Importer(
                     // "zip END header not found".
                     val unreadable = generateSequence<Throwable>(e) { it.cause }
                         .any { it is ZipException }
+                    // The file's real kind, from its first bytes:
+                    // a RAR, 7z or PDF wearing a .cbz name fails
+                    // every ZIP reader exactly like a truncated
+                    // ZIP, but ComicScreen opens those natively —
+                    // so the user must be told what the file IS,
+                    // not told to re-download it.
+                    val kind = CbzBook.archiveKind(destFile)
+                    val messageFa = if (kind != "ZIP") {
+                        context.getString(R.string.import_error_wrong_archive_type, kind)
+                    } else if (unreadable) {
+                        context.getString(R.string.import_error_incomplete_archive)
+                    } else {
+                        context.getString(R.string.import_error_bad_structure)
+                    }
                     throw ImportException(
                         e.message ?: "invalid comic archive: $displayName",
-                        messageFa = context.getString(
-                            if (unreadable) R.string.import_error_incomplete_archive
-                            else R.string.import_error_bad_structure
-                        ),
+                        messageFa = messageFa,
                         cause = e
                     )
                 }
