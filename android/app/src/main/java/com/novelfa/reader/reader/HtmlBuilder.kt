@@ -145,7 +145,7 @@ object HtmlBuilder {
         sb.append("if(t>=o&&t<o+hh){ci=parseInt(chs[k].getAttribute('data-idx'),10);co=o;chh=hh;break;}}")
         sb.append("if(ci<0&&chs.length){var fq=chs[0],lq=chs[chs.length-1];")
         sb.append("if(t<(fq.offsetTop||0)){ci=parseInt(fq.getAttribute('data-idx'),10);co=fq.offsetTop;chh=fq.offsetHeight;}")
-        sb.append("else if(t>=(lq.offsetTop||0)){ci=parseInt(lq.getAttribute('data-idx'),10);co=lq.offsetTop;chh=lq.offsetHeight;}}catch(x){}")
+        sb.append("else if(t>=(lq.offsetTop||0)){ci=parseInt(lq.getAttribute('data-idx'),10);co=lq.offsetTop;chh=lq.offsetHeight;}}}catch(x){}")
         sb.append("if(ci!=lci){lci=ci;if(ci>=0){try{Android.onChapter(ci,window.__rdrGen);}catch(x){}}}")
         // In-section position: the fraction of the top chapter's height
         // above the viewport top (see SectionPosition.kt). Reported

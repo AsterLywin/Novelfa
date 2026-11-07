@@ -79,6 +79,33 @@ class HtmlBuilderTest {
     }
 
     @Test
+    fun build_scrollReporterScriptIsBalanced() {
+        // Regression (2026-11-07): the reporter had a missing `}` — the
+        // `try{var chs=...` block was never closed before `catch`, so the
+        // whole <script> was a syntax error and never ran. Vertical mode
+        // then never appended the next chapter and scrolling felt dead
+        // on every single-chapter page. A brace imbalance is exactly
+        // that bug; the block must be balanced (and it holds no string
+        // literal containing braces, so counting is exact here).
+        val html = build()
+        val start = html.indexOf("<script>(function(){var lt=-1")
+        assertTrue("reporter script present", start >= 0)
+        val end = html.indexOf("</script>", start)
+        assertTrue("reporter script closed", end > start)
+        val script = html.substring(start, end)
+        assertEquals(
+            "reporter braces balanced",
+            0, script.count { it == '{' } - script.count { it == '}' }
+        )
+        assertEquals(
+            "reporter parens balanced",
+            0, script.count { it == '(' } - script.count { it == ')' }
+        )
+        assertTrue(script.contains("Android.onScroll(t,h,c,window.__rdrGen)"))
+        assertTrue(script.contains("setInterval(r,200)"))
+    }
+
+    @Test
     fun divider_markup() {
         val div = ChapterDivider.divider("فصل 2", Themes.DARK)
         assertTrue(div.contains("فصل 2"))
