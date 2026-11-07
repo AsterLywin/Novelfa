@@ -2085,8 +2085,13 @@ object HtmlBuilder {
         window.__rdrFindCur = idx;
         var page = m.closest ? m.closest('.rdr-page') : null;
         if (page && window.rdrGoToPage) {
-            var strip = root.querySelector ? root.querySelector('.rdr-strip') : null;
-            var pages = strip ? strip.querySelectorAll('.rdr-page') : [];
+            // The pages are descendants of the search root itself
+            // (the .rdr-strip, or the chapter div before pagination):
+            // root.querySelector('.rdr-strip') would look for a
+            // strip INSIDE the strip and always miss, so the loop
+            // below used to run over zero pages and the strip
+            // never turned to the match's page.
+            var pages = root.querySelectorAll('.rdr-page');
             for (var p = 0; p < pages.length; p++) {
                 if (pages[p] === page) { window.rdrGoToPage(p); break; }
             }
@@ -2094,6 +2099,31 @@ object HtmlBuilder {
             try { m.scrollIntoView({ block: 'center' }); } catch (e) { m.scrollIntoView(); }
         }
         return 'ok';
+    };
+    // Page of every in-chapter match (document order, same order as
+    // rdrSearchAll's data-find numbering): 0-based page inside the
+    // chapter, or -1 when the match is not inside a paginated page
+    // (vertical mode has no .rdr-page elements, so every entry is
+    // -1 there). Lets the whole-book results list show the exact
+    // page of each hit in the loaded chapter.
+    window.rdrSearchPages = function (chap) {
+        var root = searchRoot(chap);
+        var marks = root.querySelectorAll('mark.rdr-find');
+        // Pages are descendants of the search root itself (see
+        // rdrSearchGo: root IS the .rdr-strip in paged mode).
+        var pageEls = root.querySelectorAll('.rdr-page');
+        var out = [];
+        for (var i = 0; i < marks.length; i++) {
+            var page = marks[i].closest ? marks[i].closest('.rdr-page') : null;
+            var p = -1;
+            if (page) {
+                for (var k = 0; k < pageEls.length; k++) {
+                    if (pageEls[k] === page) { p = k; break; }
+                }
+            }
+            out.push(p);
+        }
+        return JSON.stringify(out);
     };
     function offsetsForRange(range) {
         var node = range.startContainer;

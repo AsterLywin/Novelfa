@@ -62,4 +62,29 @@ class ReaderExtrasCodecTest {
         assertEquals(setOf(7), parsed.keys)
         assertTrue(parseCropRects("not a rect").isEmpty())
     }
+
+    @Test
+    fun searchHistory_roundTrip() {
+        val list = listOf("hello world", "a;b", "کتاب", "quote\"x", "semi;colon")
+        assertEquals(list, parseSearchHistory(serializeSearchHistory(list)))
+        assertEquals(emptyList<String>(), parseSearchHistory(null))
+        assertEquals(emptyList<String>(), parseSearchHistory(""))
+        assertEquals(emptyList<String>(), parseSearchHistory(";;;"))
+    }
+
+    @Test
+    fun searchHistory_addDedupesAndCaps() {
+        assertEquals(listOf("c", "b", "a"), addToSearchHistory(listOf("b", "a"), "c"))
+        // Case-insensitive duplicate moves to the top.
+        assertEquals(listOf("book", "x"), addToSearchHistory(listOf("Book", "x"), "book"))
+        // Blank queries are ignored; surrounding space is trimmed.
+        assertEquals(listOf("a"), addToSearchHistory(listOf("a"), "   "))
+        assertEquals(listOf("q", "a"), addToSearchHistory(listOf("a"), "  q  "))
+        // Capped at 10, newest first, oldest dropped.
+        val ten = (1..10).map { "q$it" }
+        assertEquals(
+            listOf("new") + ten.take(9),
+            addToSearchHistory(ten, "new")
+        )
+    }
 }

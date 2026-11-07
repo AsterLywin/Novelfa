@@ -129,6 +129,37 @@ internal fun serializeCropRects(rects: Map<Int, CropRect>): String {
     }
 }
 
+/**
+ * Pure search-history codec, unit-testable without DataStore.
+ * One entry per query, newest first, at most [MAX_SEARCH_HISTORY].
+ * Queries are URL-encoded (UTF-8) before the ';' join, so any
+ * text — ';', Persian, quotes, newlines — survives the round
+ * trip; a stored entry that fails to decode is dropped.
+ */
+internal const val MAX_SEARCH_HISTORY = 10
+
+internal fun parseSearchHistory(raw: String?): List<String> {
+    if (raw.isNullOrBlank()) return emptyList()
+    return raw.split(';').mapNotNull { entry ->
+        runCatching {
+            java.net.URLDecoder.decode(entry, "UTF-8")
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+    }.take(MAX_SEARCH_HISTORY)
+}
+
+internal fun serializeSearchHistory(history: List<String>): String {
+    return history.filter { it.isNotBlank() }.take(MAX_SEARCH_HISTORY)
+        .joinToString(";") { java.net.URLEncoder.encode(it, "UTF-8") }
+}
+
+/** New query on top, case-insensitive duplicate removed, capped at [MAX_SEARCH_HISTORY]. Blank queries are ignored. */
+internal fun addToSearchHistory(history: List<String>, query: String): List<String> {
+    val q = query.trim()
+    if (q.isEmpty()) return history
+    return (listOf(q) + history.filterNot { it.equals(q, ignoreCase = true) })
+        .take(MAX_SEARCH_HISTORY)
+}
+
 class ReaderExtrasStore(private val context: Context) {
 
     private fun bookmarksKey(bookId: String) = stringPreferencesKey("bm_$bookId")
@@ -206,6 +237,35 @@ class ReaderExtrasStore(private val context: Context) {
         }
     }
 
+    // In-book search history (ReadEra's recent-searches list):
+    // the last queries for this book, newest first. Recorded on
+    // submit, never on keystroke; the reader shows them under
+    // the search field while no results are shown.
+    private fun searchHistoryKey(bookId: String) = stringPreferencesKey("sh_$bookId")
+
+    fun searchHistory(bookId: String): Flow<List<String>> =
+        context.readerExtrasDataStore.data.map {
+            parseSearchHistory(it[searchHistoryKey(bookId)])
+        }
+
+    suspend fun addSearchHistory(bookId: String, query: String) {
+        context.readerExtrasDataStore.edit { prefs ->
+            val key = searchHistoryKey(bookId)
+            prefs[key] = serializeSearchHistory(
+                addToSearchHistory(parseSearchHistory(prefs[key]), query)
+            )
+        }
+    }
+
+    suspend fun removeSearchHistory(bookId: String, query: String) {
+        context.readerExtrasDataStore.edit { prefs ->
+            val key = searchHistoryKey(bookId)
+            prefs[key] = serializeSearchHistory(
+                parseSearchHistory(prefs[key]).filterNot { it.equals(query, ignoreCase = true) }
+            )
+        }
+    }
+
     /**
      * Exact in-section position for vertical (continuous) EPUB mode
      * (see SectionPosition.kt): "chapter|fraction". Unlike the pixel
@@ -252,6 +312,7 @@ class ReaderExtrasStore(private val context: Context) {
             prefs.remove(highlightsKey(bookId))
             prefs.remove(zoomKey(bookId))
             prefs.remove(cropRectsKey(bookId))
+            prefs.remove(searchHistoryKey(bookId))
             prefs.asMap().keys
                 .filter { it.name.endsWith("_$bookId") }
                 .forEach { prefs.remove(it) }

@@ -1,11 +1,13 @@
 package com.novelfa.reader.reader
 
 import android.util.Log
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,6 +62,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -149,7 +155,7 @@ private class SectionRestoreTracker {
     var appliedHeight: Int? = null
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ReaderScreen(
     bookId: String,
@@ -303,24 +309,61 @@ fun ReaderScreen(
     var fontOpen by remember { mutableStateOf(false) }
     // In-book text search + highlights (SEARCH_JS / SELECT_JS).
     val highlights by extrasStore.highlights(bookId).collectAsState(initial = emptyList())
+    // Recent searches for this book (ReadEra's history list):
+    // newest first, shown under the field while no results are
+    // shown; tap re-runs, long-press deletes one entry.
+    val searchHistory by extrasStore.searchHistory(bookId).collectAsState(initial = emptyList())
     var searchOpen by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var searchCount by remember { mutableIntStateOf(0) }
     var searchIndex by remember { mutableIntStateOf(-1) }
     var searchChap by remember { mutableIntStateOf(-1) }
     var searchBookBusy by remember { mutableStateOf(false) }
-    var searchBookResults by remember { mutableStateOf<List<Pair<Int, Int>>>(emptyList()) }
+    var searchBookResults by remember { mutableStateOf<List<SearchResult>>(emptyList()) }
     var searchBookShown by remember { mutableStateOf(false) }
     var pendingSearchQuery by remember { mutableStateOf<String?>(null) }
+    // Exact match to land on after a chapter jump from a results
+    // row (index inside that chapter); null means the first match.
+    var pendingSearchIndex by remember { mutableStateOf<Int?>(null) }
     var selectionActive by remember { mutableStateOf(false) }
     var tappedHighlightId by remember { mutableStateOf<String?>(null) }
+
+    /** Snippet with the match highlighted, same yellow as the in-page current match (#FFD400). */
+    fun annotatedSnippet(result: SearchResult): AnnotatedString = buildAnnotatedString {
+        append(result.snippet.substring(0, result.matchStart.coerceIn(0, result.snippet.length)))
+        val end = (result.matchStart + result.matchLength).coerceIn(0, result.snippet.length)
+        withStyle(SpanStyle(background = Color(0xFFFFD400), color = Color.Black)) {
+            append(result.snippet.substring(result.matchStart.coerceIn(0, result.snippet.length), end))
+        }
+        append(result.snippet.substring(end))
+    }
 
     fun highlightsJson(list: List<TextHighlight>): String =
         "[" + list.joinToString(",") {
             "{\"ch\":${it.chapter},\"s\":${it.start},\"e\":${it.end},\"c\":\"${it.color}\"}"
         } + "]"
 
-    fun runInChapterSearch(query: String) {
+    /**
+     * Asks the JS for the page of every in-chapter match and
+     * fills it into this chapter's result rows (1-based). Rows
+     * of other chapters keep no page until their chapter is
+     * loaded; in vertical mode every entry is -1, so every row
+     * keeps the chapter title instead.
+     */
+    fun querySearchPages(chap: Int) {
+        val wv = webView ?: return
+        wv.evaluateJavascript("window.rdrSearchPages($chap);") { raw ->
+            val pages = ReaderSearchText.parsePageList(raw)
+            if (pages.isEmpty()) return@evaluateJavascript
+            searchBookResults = searchBookResults.map { r ->
+                if (r.chapter != chap) return@map r
+                val p = pages.getOrNull(r.matchIndex) ?: return@map r
+                if (p >= 0) r.copy(page = p + 1) else r
+            }
+        }
+    }
+
+    fun runInChapterSearch(query: String, matchIndex: Int = 0, jumpToFirst: Boolean = true) {
         val v = vm ?: return
         val chap = v.index
         val wv = webView ?: return
@@ -339,8 +382,14 @@ fun ReaderScreen(
             val count = result?.trim()?.trim { it == '"' }?.toIntOrNull() ?: 0
             searchCount = count
             if (count > 0) {
-                searchIndex = 0
-                wv.evaluateJavascript("window.rdrSearchGo(0, $chap);", null)
+                // jumpToFirst=false only marks + counts (submitting
+                // a search lists results, it does not move the
+                // page); the exact jump happens on a row tap.
+                searchIndex = if (jumpToFirst) matchIndex.coerceIn(0, count - 1) else -1
+                if (jumpToFirst) {
+                    wv.evaluateJavascript("window.rdrSearchGo($searchIndex, $chap);", null)
+                }
+                querySearchPages(chap)
             } else {
                 searchIndex = -1
             }
@@ -362,23 +411,40 @@ fun ReaderScreen(
         searchChap = -1
         searchBookResults = emptyList()
         searchBookShown = false
+        pendingSearchIndex = null
     }
 
     fun searchWholeBook() {
         val v = vm ?: return
         val q = searchQuery.trim()
         if (q.isEmpty()) return
+        // Recorded on submit (like ReadEra), never on keystroke.
+        scope.launch { extrasStore.addSearchHistory(bookId, q) }
         searchBookBusy = true
         searchBookShown = true
         scope.launch {
-            val results = mutableListOf<Pair<Int, Int>>()
+            val results = mutableListOf<SearchResult>()
             for (i in v.chapters.indices) {
                 val text = runCatching { v.plainText(i) }.getOrNull() ?: continue
-                val n = ReaderSearchText.countOccurrences(text, q)
-                if (n > 0) results += i to n
+                val offsets = ReaderSearchText.findOccurrences(
+                    text, q, ReaderSearchText.MAX_SEARCH_RESULTS - results.size
+                )
+                for ((j, off) in offsets.withIndex()) {
+                    val (snippet, matchStart) = ReaderSearchText.snippetFor(text, off, q.length)
+                    results += SearchResult(i, j, snippet, matchStart, q.length)
+                    if (results.size >= ReaderSearchText.MAX_SEARCH_RESULTS) break
+                }
+                if (results.size >= ReaderSearchText.MAX_SEARCH_RESULTS) break
             }
             searchBookResults = results
             searchBookBusy = false
+            // Mark + count + page the open chapter's hits (no jump:
+            // submitting lists results, it does not move the page),
+            // so its rows show page numbers right away and
+            // prev/next work without a jump first.
+            if (results.any { it.chapter == v.index }) {
+                runInChapterSearch(q, jumpToFirst = false)
+            }
         }
     }
 
@@ -427,10 +493,16 @@ fun ReaderScreen(
             wv.evaluateJavascript("window.rdrSearchAll('${HtmlText.escapeForJs(q)}', $chap);") { result ->
                 val count = result?.trim()?.trim { it == '"' }?.toIntOrNull() ?: 0
                 searchCount = count
-                if (count > 0 && searchIndex >= 0) {
-                    wv.evaluateJavascript(
-                        "window.rdrSearchGo(${searchIndex.coerceIn(0, count - 1)}, $chap);", null
-                    )
+                if (count > 0) {
+                    if (searchIndex >= 0) {
+                        wv.evaluateJavascript(
+                            "window.rdrSearchGo(${searchIndex.coerceIn(0, count - 1)}, $chap);", null
+                        )
+                    }
+                    // Marks exist even with no current match
+                    // (fresh whole-book search): the page of each
+                    // hit is still reportable, so fill the rows.
+                    querySearchPages(chap)
                 }
             }
         }
@@ -1841,7 +1913,9 @@ fun ReaderScreen(
                             // the PAGER_JS hook once pages are built).
                             pendingSearchQuery?.let { q ->
                                 pendingSearchQuery = null
-                                runInChapterSearch(q)
+                                val idx = pendingSearchIndex
+                                pendingSearchIndex = null
+                                runInChapterSearch(q, idx ?: 0)
                             }
                             // Text-point restore for a same-chapter
                             // reload: hand the saved anchor to the
@@ -2012,10 +2086,12 @@ fun ReaderScreen(
                 }
                 // Whole-book search bar (top of the reading area, so it
                 // works in fullscreen too once opened): query field,
-                // chapter results below (tap one to jump there and
-                // search it), with prev/next matches inside the
-                // jumped chapter. There is no chapter-only scope:
-                // every search covers the whole book.
+                // recent searches below it while nothing is searched,
+                // then one row per occurrence (snippet with the match
+                // highlighted + page, or chapter title where there
+                // is no page) — tap a row to jump to that exact
+                // match. There is no chapter-only scope: every
+                // search covers the whole book.
                 if (searchOpen && vm != null && pageHtml.isNotEmpty()) {
                     Column(
                         modifier = Modifier
@@ -2027,7 +2103,15 @@ fun ReaderScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(
                                 value = searchQuery,
-                                onValueChange = { searchQuery = it },
+                                onValueChange = {
+                                    searchQuery = it
+                                    // The shown results belong to the
+                                    // old query: hide them while the
+                                    // user edits, so the list never
+                                    // disagrees with the field (the
+                                    // history shows again instead).
+                                    if (searchBookShown) searchBookShown = false
+                                },
                                 singleLine = true,
                                 placeholder = { Text(stringResource(R.string.search_hint)) },
                                 modifier = Modifier.weight(1f),
@@ -2080,28 +2164,94 @@ fun ReaderScreen(
                             } else {
                                 Column(
                                     modifier = Modifier
+                                        .heightIn(max = 320.dp)
+                                        .verticalScroll(rememberScrollState())
+                                ) {
+                                    searchBookResults.forEach { result ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    val vv = vm ?: return@clickable
+                                                    if (result.chapter == vv.index) {
+                                                        // Already there: the marks from
+                                                        // the submit are live, jump to
+                                                        // this exact match.
+                                                        runInChapterSearch(searchQuery, result.matchIndex)
+                                                    } else {
+                                                        scope.launch {
+                                                            pendingSearchQuery = searchQuery
+                                                            pendingSearchIndex = result.matchIndex
+                                                            gotoChapter(vv, result.chapter)
+                                                        }
+                                                    }
+                                                }
+                                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = annotatedSnippet(result),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            Text(
+                                                // Paged mode: the page inside
+                                                // the chapter (1-based). No
+                                                // page yet — or vertical mode,
+                                                // which has no pages — shows
+                                                // the chapter title instead.
+                                                text = result.page?.toString()
+                                                    ?: (vm?.chapters?.getOrNull(result.chapter)?.title ?: ""),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(start = 8.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // Recent searches for this book (newest
+                            // first, live-filtered by the field):
+                            // tap re-runs, long-press deletes one.
+                            val historyFiltered = if (searchQuery.isBlank()) {
+                                searchHistory
+                            } else {
+                                searchHistory.filter { it.contains(searchQuery, ignoreCase = true) }
+                            }
+                            if (historyFiltered.isNotEmpty()) {
+                                Column(
+                                    modifier = Modifier
                                         .heightIn(max = 200.dp)
                                         .verticalScroll(rememberScrollState())
                                 ) {
-                                    searchBookResults.forEach { (chapIdx, n) ->
-                                        TextButton(
-                                            onClick = {
-                                                val vv = vm ?: return@TextButton
-                                                scope.launch {
-                                                    pendingSearchQuery = searchQuery
-                                                    gotoChapter(vv, chapIdx)
-                                                }
-                                            },
-                                            modifier = Modifier.fillMaxWidth()
+                                    historyFiltered.forEach { past ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .combinedClickable(
+                                                    onClick = {
+                                                        searchQuery = past
+                                                        searchWholeBook()
+                                                    },
+                                                    onLongClick = {
+                                                        scope.launch {
+                                                            extrasStore.removeSearchHistory(bookId, past)
+                                                        }
+                                                    }
+                                                )
+                                                .padding(horizontal = 4.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
+                                            AppIcon(
+                                                AppIconKind.Clock,
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                size = 16.dp
+                                            )
                                             Text(
-                                                text = stringResource(
-                                                    R.string.search_book_row,
-                                                    vm?.chapters?.getOrNull(chapIdx)?.title ?: "",
-                                                    n
-                                                ),
-                                                modifier = Modifier.fillMaxWidth(),
-                                                textAlign = TextAlign.Start
+                                                text = past,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                modifier = Modifier.padding(start = 12.dp)
                                             )
                                         }
                                     }
