@@ -106,6 +106,38 @@ class HtmlBuilderTest {
     }
 
     @Test
+    fun build_scrollReporterUsesTrueContentHeight() {
+        // Regression (2026-11-08, Shinomonogatari II): the reporter
+        // measured h as max(documentElement.scrollHeight, body
+        // .scrollHeight). documentElement.scrollHeight floors at the
+        // viewport height, so a document shorter than the viewport
+        // never changed h (32px -> 193px of real growth still read
+        // as 891px) and the change gate never fired onScroll again —
+        // the append chain stalled after the first stitch and the
+        // book stuck on its one-line chapter 2 with maxScroll 0.
+        // The height must come from the body, which holds every
+        // chapter: its scrollHeight is the true content height.
+        val html = build()
+        val start = html.indexOf("<script>(function(){var lt=-1")
+        assertTrue("reporter script present", start >= 0)
+        val end = html.indexOf("</script>", start)
+        assertTrue("reporter script closed", end > start)
+        val script = html.substring(start, end)
+        assertTrue(script.contains("h=b.scrollHeight||d.scrollHeight||0"))
+        assertFalse(
+            "reporter must not use the viewport-floored max() height",
+            script.contains("Math.max(d.scrollHeight")
+        )
+        // Same true-height rule in the resize restore and in the
+        // prepend scroll-compensation measurement.
+        assertTrue(script.contains("var h=b.scrollHeight||d.scrollHeight||0"))
+        assertTrue(
+            HtmlBuilder.prependJs(1, "<p>x</p>", "<div>d</div>")
+                .contains("b.scrollHeight||d.scrollHeight||0")
+        )
+    }
+
+    @Test
     fun divider_markup() {
         val div = ChapterDivider.divider("فصل 2", Themes.DARK)
         assertTrue(div.contains("فصل 2"))

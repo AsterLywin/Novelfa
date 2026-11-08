@@ -207,6 +207,21 @@ class ReaderViewModelTest {
     }
 
     @Test
+    fun onScroll_shortDocument_appends() = runBlocking {
+        // Contract the JS fix (2026-11-08, Shinomonogatari II) relies
+        // on: a document shorter than the viewport must still append.
+        // top=0, height=193 (empty ch1 + one-line ch2 at 18sp),
+        // client=891 (Redmi 9 viewport): 0+891 >= 193-1200, so the
+        // 1200px prefetch trigger fires even though nothing scrolled.
+        val repo = FakeReaderRepo(listOf(book()))
+        val v = vm(repo, twoChapters())
+        v.readingMode = ReadingMode.CONTINUOUS_VERTICAL
+        v.loadChapter(0)
+        v.onScroll(top = 0, height = 193, client = 891)
+        assertEquals(1, v.contLast)
+    }
+
+    @Test
     fun onScroll_topZero_prepends() = runBlocking {
         val repo = FakeReaderRepo(listOf(book()))
         val v = vm(repo, twoChapters())

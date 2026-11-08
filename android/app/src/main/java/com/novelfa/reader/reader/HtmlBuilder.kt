@@ -132,9 +132,22 @@ object HtmlBuilder {
             .append(if (footnotePopup) "true" else "false").append(";</script>")
         sb.append("<script>(function(){")
         sb.append("var lt=-1,lh=-1,lc=-1,lr=-1,lci=-1,lpt=0,lfr=-1;")
+        // Height is the BODY's scrollHeight, NOT max(documentElement,
+        // body): documentElement.scrollHeight floors at the viewport
+        // height, so while the document is shorter than the viewport
+        // its growth is invisible (h stays == c) and the change gate
+        // below never fires onScroll again. The append chain then
+        // stalls after the first stitch: a book whose leading
+        // chapters are short (Shinomonogatari II: chapter 1 empty,
+        // chapter 2 one line, ~193px at 18sp vs a ~891px viewport)
+        // stuck on chapter 2 forever, with maxScroll 0 so no scroll
+        // event could ever rescue it. The body holds every chapter,
+        // so its scrollHeight IS the true content height — and once
+        // content exceeds the viewport it equals d.scrollHeight, so
+        // tall documents report exactly what they did before.
         sb.append("function r(){try{var d=document.documentElement,b=document.body;")
         sb.append("var t=Math.round(Math.max(d.scrollTop||0,b.scrollTop||0)),")
-        sb.append("h=Math.max(d.scrollHeight||0,b.scrollHeight||0),")
+        sb.append("h=b.scrollHeight||d.scrollHeight||0,")
         sb.append("c=d.clientHeight||b.clientHeight||0;")
         // Visible-chapter tracking: the chapter div whose span holds the
         // viewport top is the chapter being READ. Reported on change via
@@ -161,7 +174,7 @@ object HtmlBuilder {
         sb.append("try{Android.onScroll(t,h,c,window.__rdrGen);}catch(x){}}")
         sb.append("else if(h>c){lr=t/(h-c);}}catch(x){}}")
         sb.append("function z(){try{if(lr>=0){var d=document.documentElement,b=document.body;")
-        sb.append("var h=Math.max(d.scrollHeight||0,b.scrollHeight||0),")
+        sb.append("var h=b.scrollHeight||d.scrollHeight||0,")
         sb.append("c=d.clientHeight||b.clientHeight||0;")
         sb.append("var nt=Math.round(lr*Math.max(h-c,0));d.scrollTop=nt;b.scrollTop=nt;}}catch(x){}r();}")
         sb.append("window.addEventListener('scroll',r);window.addEventListener('resize',z);setInterval(r,200);")
@@ -386,7 +399,12 @@ object HtmlBuilder {
     fun prependJs(docGen: Int, chunk: String, divider: String): String =
         "(function(){if(window.__rdrGen!==$docGen)return 0;" +
             "var d=document.documentElement,b=document.body;" +
-            "function H(){return Math.max(d.scrollHeight||0,b.scrollHeight||0);}" +
+            // Same true-height rule as the scroll reporter (see r()):
+            // with the viewport-floored max(), prepending a short
+            // chapter above a short document measured ph-oh as 0, so
+            // the reading content jumped down by the inserted height
+            // instead of staying put.
+            "function H(){return b.scrollHeight||d.scrollHeight||0;}" +
             "function T(){return Math.max(d.scrollTop||0,b.scrollTop||0);}" +
             "function S(v){d.scrollTop=v;b.scrollTop=v;}" +
             "var cs=b.getElementsByTagName('div'),f=null;" +
