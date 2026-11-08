@@ -47,12 +47,15 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          api-level: 35
-          build-tools: 34.0.0
-          platform-tools: true
+      - name: Install Android SDK packages
+        # NOTE: do NOT use android-actions/setup-android here — v3
+        # unconditionally runs `sdkmanager tools`, and the obsolete
+        # `tools` package no longer exists, so the step fails
+        # (run #1, 2026-11-08). The runner image already ships the
+        # SDK + cmdline-tools; install only what AGP needs.
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;34.0.0" "platform-tools"
 
       - name: Set up Gradle 8.7
         uses: gradle/actions/setup-gradle@v3
