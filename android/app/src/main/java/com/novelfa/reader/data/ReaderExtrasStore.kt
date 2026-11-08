@@ -328,6 +328,26 @@ class ReaderExtrasStore(private val context: Context) {
         }
     }
 
+    // Strip restore anchor: the FIRST visible strip item at the
+    // last save. It is deliberately separate from the saved
+    // progress page (Book.lastChapterIndex): since the leading-edge
+    // fix the saved page is the furthest-reached page, and the
+    // stored scroll offset belongs to the first visible item, not
+    // to it — restoring to the progress page with the first
+    // visible item's offset would land up to a page too far down.
+    // Null = never saved (books last read before this fix, which
+    // saved the anchor as the progress page itself).
+    private fun stripAnchorKey(bookId: String) = intPreferencesKey("anc_$bookId")
+
+    fun stripAnchorPage(bookId: String): Flow<Int?> =
+        context.readerExtrasDataStore.data.map { it[stripAnchorKey(bookId)] }
+
+    suspend fun setStripAnchorPage(bookId: String, page: Int) {
+        context.readerExtrasDataStore.edit { prefs ->
+            prefs[stripAnchorKey(bookId)] = page.coerceAtLeast(0)
+        }
+    }
+
     // In-book search history (ReadEra's recent-searches list):
     // the last queries for this book, newest first. Recorded on
     // submit, never on keystroke; the reader shows them under

@@ -439,13 +439,20 @@ private fun ZipReaderRoute(
 
 /**
  * One pager item in dual-page mode (ComicScreen's 2p view).
- * [firstPage] is the page the bottom bar, progress save and XP
- * all track for this item — the pair's first page in reading
- * order, so bookkeeping stays in pages even though the pager
- * moves in pairs.
+ * [firstPage] is the pair's first page in reading order, so
+ * bookkeeping stays in pages even though the pager moves in
+ * pairs. Progress, the bottom bar and the slider track
+ * [lastPage] instead — the furthest page this item shows —
+ * because a pair whose first page is saved can never complete
+ * the book: the last spread of an even-page book would save
+ * page N-2 and stick at (N-1)/N percent (see PageProgress.kt).
+ * XP still uses both pages, one dwell clock each.
  */
 internal sealed interface DualPair {
     val firstPage: Int
+
+    /** Furthest page this item shows (see [spreadLastPage]). */
+    val lastPage: Int get() = spreadLastPage(firstPage, (this as? Pair)?.secondPage)
 
     /** The book's last page, alone (odd page count). */
     data class Single(override val firstPage: Int) : DualPair

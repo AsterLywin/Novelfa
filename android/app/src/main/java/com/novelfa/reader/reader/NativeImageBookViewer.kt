@@ -824,7 +824,20 @@ internal fun NativeImageBookViewer(
     val xpTrackerSecond = remember(book.id) { XpSessionTracker() }
     LaunchedEffect(currentPage, pageCount, dualPage, dualPairs) {
         if (pageCount <= 0) return@LaunchedEffect
-        xpTracker.enter(currentPage)?.let { xpCreditPage(it) }
+        // Dual: currentPage is the pair's LAST page (progress), but
+        // XP still needs a dwell clock per page — so the pair's
+        // first page goes through the first tracker and the second
+        // page through the second, exactly the old split, just
+        // keyed off the pair instead of currentPage. Entering the
+        // last page in the first tracker would leave the first
+        // page of every pair uncredited.
+        val xpFirst = if (dualPage && dualPairs != null) {
+            dualPairs!!.getOrNull(pairIndexForPage(dualPairs!!, currentPage))?.firstPage
+                ?: currentPage
+        } else {
+            currentPage
+        }
+        xpTracker.enter(xpFirst)?.let { xpCreditPage(it) }
         val second = if (dualPage && dualPairs != null) {
             val pair = dualPairs!!.getOrNull(pairIndexForPage(dualPairs!!, currentPage))
             (pair as? DualPair.Pair)?.secondPage
@@ -859,6 +872,7 @@ internal fun NativeImageBookViewer(
     var pendingModeTarget by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(pageCount, isPaged) {
         if (pageCount <= 0) return@LaunchedEffect
+        val hadPending = pendingModeTarget != null
         val target = pendingModeTarget?.also { pendingModeTarget = null }
             ?: if (!restoredPage) {
                 restoredPage = true
@@ -867,8 +881,8 @@ internal fun NativeImageBookViewer(
                 return@LaunchedEffect
             }
         if (target != 0) {
-            currentPage = target
             if (isPaged) {
+                currentPage = target
                 // Dual: the pager moves in pairs, so the restore
                 // target (a page) maps to its pair; when pairs
                 // are not computed yet the correction effect
@@ -885,11 +899,27 @@ internal fun NativeImageBookViewer(
                 // page offset): the strip lands where it was,
                 // not at the top of the page. An out-of-range
                 // pixel offset simply clamps, so a mode switch
-                // cannot break the landing.
+                // cannot break the landing. The landing item is
+                // the stored strip anchor (first visible item),
+                // NOT the saved progress page: since the
+                // leading-edge fix the saved page is the
+                // furthest-reached page, and the stored offset
+                // belongs to the first visible item — landing
+                // on the progress page with it would sit up to
+                // a page too far down. A mode-switch landing
+                // (pending target) uses the target itself, as
+                // before; a pre-fix book has no anchor, so it
+                // falls back to the target, which was its anchor.
+                val anchor = if (hadPending) null
+                    else runCatching {
+                        extras.stripAnchorPage(book.id).first()
+                    }.getOrNull()
+                val landing = (anchor ?: target).coerceIn(0, pageCount - 1)
+                currentPage = landing
                 val offset = runCatching {
                     extras.scrollOffset(book.id).first()
                 }.getOrDefault(0)
-                runCatching { listState.scrollToItem(target, offset) }
+                runCatching { listState.scrollToItem(landing, offset) }
             }
         }
     }
@@ -915,6 +945,16 @@ internal fun NativeImageBookViewer(
         }
     }
 
+    // Strip progress (leading edge, PageProgress.kt): the furthest
+    // page on screen in the direction of travel. Starts at the
+    // saved page; the tracking effect below keeps it current on
+    // every scroll emission, including the skipped first one, so
+    // the indicator is right from the landing, not from the first
+    // page turn.
+    var stripProgressPage by remember {
+        mutableIntStateOf(savedPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)))
+    }
+
     // Visible-page tracking, throttled like the EPUB reader's
     // saveProgress (500ms): scrolling through pages must not cost
     // a DB write per page. The effect restarts on a mode switch,
@@ -926,17 +966,30 @@ internal fun NativeImageBookViewer(
     // already holds it. Accepting it would, on a dual toggle,
     // save the transient pair index as a page number before the
     // correction effect below lands the pager on the right pair.
+    // (The strip's leading-edge display update below is NOT
+    // skipped: the landing position still has a leading edge.)
     LaunchedEffect(listState, pagerState, pageCount, isPaged, dualPage, dualPairs) {
         if (pageCount <= 0) return@LaunchedEffect
         var first = true
+        // Strip scroll direction, for the leading edge (see
+        // PageProgress.kt): reset on every restart, so a landing
+        // starts direction-less and reports the first visible item
+        // until the user actually scrolls.
+        var prevStripIndex = -1
+        var prevStripOffset = -1
+        var stripDown = false
         if (isPaged) {
             snapshotFlow { pagerState.currentPage }.collect { pagerIdx ->
                 if (first) {
                     first = false
                     return@collect
                 }
+                // Dual: progress is the spread's LAST page, so the
+                // last spread saves page N-1 and the book can
+                // complete; the anchor page (currentPage) stays
+                // the pair's first page for XP, chapters and crop.
                 val page = if (dualPage && dualPairs != null) {
-                    dualPairs!!.getOrNull(pagerIdx)?.firstPage ?: return@collect
+                    dualPairs!!.getOrNull(pagerIdx)?.lastPage ?: return@collect
                 } else {
                     pagerIdx
                 }
@@ -953,14 +1006,42 @@ internal fun NativeImageBookViewer(
             snapshotFlow {
                 listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
             }.collect { (page, offset) ->
+                // Leading edge (ComicScreen's scroll rule): the
+                // last visible item while scrolling down, the
+                // first visible item while scrolling up. The
+                // saved progress is the leading edge, so the last
+                // page counts the moment it comes on screen; the
+                // restore anchor stays the first visible item
+                // (saved separately below).
+                val lastVisible =
+                    listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index
+                if (prevStripIndex >= 0) {
+                    if (page > prevStripIndex ||
+                        (page == prevStripIndex && offset > prevStripOffset)
+                    ) {
+                        stripDown = true
+                    } else if (page < prevStripIndex ||
+                        (page == prevStripIndex && offset < prevStripOffset)
+                    ) {
+                        stripDown = false
+                    }
+                }
+                prevStripIndex = page
+                prevStripOffset = offset
+                val leading = stripLeadingPage(page, lastVisible, stripDown)
+                    .coerceIn(0, pageCount - 1)
+                stripProgressPage = leading
                 if (first) {
                     first = false
                     return@collect
                 }
                 if (page in 0 until pageCount) {
                     currentPage = page
-                    savePage(page)
-                    scope.launch { extras.setScrollOffset(book.id, offset) }
+                    savePage(leading)
+                    scope.launch {
+                        extras.setScrollOffset(book.id, offset)
+                        extras.setStripAnchorPage(book.id, page)
+                    }
                 }
             }
         }
@@ -1015,6 +1096,37 @@ internal fun NativeImageBookViewer(
         }
     }
 
+    // Progress page (PageProgress.kt): the FURTHEST page on
+    // screen, which is what the saved progress, the page
+    // indicator, the paged slider and the next arrow follow.
+    // In dual mode that is the spread's last page; in the strip
+    // it is the leading edge in the direction of travel; in
+    // single-page mode it is the page itself. currentPage keeps
+    // the anchor meaning (first page of the pair / first visible
+    // item) for restore, XP, chapters, bookmarks and crop.
+    val progressPage = if (isPaged) {
+        if (dualPage && dualPairs != null) {
+            dualPairs!!.getOrNull(pairIndexForPage(dualPairs!!, currentPage))?.lastPage
+                ?: currentPage
+        } else {
+            currentPage
+        }
+    } else {
+        stripProgressPage
+    }
+    // Arrow enablement follows the same two ends: previous exists
+    // when the anchor can step back (in dual mode, when the
+    // current spread is not the first — the anchor of the first
+    // spread is its second page, so currentPage > 0 alone would
+    // leave the button enabled-but-dead there), next exists while
+    // the furthest page on screen is not the last page.
+    val canPrev = if (isPaged && dualPage && dualPairs != null) {
+        pairIndexForPage(dualPairs!!, currentPage) > 0
+    } else {
+        currentPage > 0
+    }
+    val canNext = progressPage < pageCount - 1
+
     fun closeViewer() {
         scope.launch {
             // XP flush first, like ReaderScreen: the home celebration
@@ -1026,10 +1138,13 @@ internal fun NativeImageBookViewer(
                 val flushedSecond = xpTrackerSecond.flush()
                 if (flushedSecond != null) xpCreditPage(flushedSecond)
             }
-            savePage(currentPage, force = true)
+            savePage(progressPage, force = true)
             if (!isPaged) {
                 val offset = listState.firstVisibleItemScrollOffset
-                runCatching { extras.setScrollOffset(book.id, offset) }
+                runCatching {
+                    extras.setScrollOffset(book.id, offset)
+                    extras.setStripAnchorPage(book.id, listState.firstVisibleItemIndex)
+                }
             }
             onClose()
         }
@@ -1980,12 +2095,12 @@ internal fun NativeImageBookViewer(
                         // left-to-right flips both sides. The actions
                         // never change, only the sides they sit on.
                         IconButton(
-                            enabled = currentPage > 0,
+                            enabled = canPrev,
                             onClick = { stepTo(currentPage - 1) }
                         ) {
                             AppIcon(
                                 if (directionRtl) AppIconKind.ArrowForward else AppIconKind.ArrowBack,
-                                tint = if (currentPage > 0) {
+                                tint = if (canPrev) {
                                     LocalContentColor.current
                                 } else {
                                     LocalContentColor.current.copy(alpha = 0.38f)
@@ -2017,7 +2132,7 @@ internal fun NativeImageBookViewer(
                             Text(
                                 text = stringResource(
                                     R.string.page_indicator,
-                                    (preview ?: currentPage) + 1, pageCount
+                                    (preview ?: progressPage) + 1, pageCount
                                 ),
                                 // Tap the indicator for a direct page
                                 // jump (Windows parity: cur/tot input).
@@ -2036,7 +2151,7 @@ internal fun NativeImageBookViewer(
                             ) {
                                 Slider(
                                     value = sliderPreview?.toFloat()
-                                        ?: if (isPaged) currentPage.toFloat() else stripPosition,
+                                        ?: if (isPaged) progressPage.toFloat() else stripPosition,
                                     onValueChange = { v ->
                                         sliderPreview =
                                             v.toInt().coerceIn(0, pageCount - 1)
@@ -2109,12 +2224,12 @@ internal fun NativeImageBookViewer(
                             }
                         }
                         IconButton(
-                            enabled = currentPage < pageCount - 1,
+                            enabled = canNext,
                             onClick = { stepTo(currentPage + 1) }
                         ) {
                             AppIcon(
                                 if (directionRtl) AppIconKind.ArrowBack else AppIconKind.ArrowForward,
-                                tint = if (currentPage < pageCount - 1) {
+                                tint = if (canNext) {
                                     LocalContentColor.current
                                 } else {
                                     LocalContentColor.current.copy(alpha = 0.38f)
