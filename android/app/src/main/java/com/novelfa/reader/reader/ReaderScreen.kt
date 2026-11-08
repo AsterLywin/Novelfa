@@ -712,44 +712,6 @@ fun ReaderScreen(
         )
     }
 
-    /**
-     * Jumps to a bookmark: inside the already-loaded document it
-     * scrolls / turns in place (vertical: the chapter is in the
-     * stitched window; paged: it is the open chapter), otherwise
-     * the chapter loads and onPageFinished lands on the bookmark
-     * via [pendingBookmarkPos]. A failed load leaves no pending
-     * position behind — a stale one would fire on the next
-     * unrelated load of that chapter.
-     */
-    fun jumpToBookmark(bm: TextBookmark) {
-        val v = vm ?: return
-        bookmarksOpen = false
-        scope.launch {
-            // The dialog opens from the drawer: a jump must close
-            // the drawer too, or the landing stays hidden behind it.
-            drawerState.close()
-            val pos = SectionPosition(bm.chapter, bm.fraction)
-            if (v.readingMode == ReadingMode.CONTINUOUS_VERTICAL &&
-                bm.chapter in v.contFirst..v.contLast
-            ) {
-                // The saved position is what a height change
-                // re-applies: the user IS at the bookmark now, so
-                // it replaces the stale one until the next scroll
-                // report overwrites it.
-                sectionTracker.saved = pos
-                applySectionRestore(v.docGen, pos)
-                return@launch
-            }
-            if (v.readingMode == ReadingMode.PAGED_HORIZONTAL && bm.chapter == v.index) {
-                goToBookmarkPage(bm.fraction)
-                return@launch
-            }
-            pendingBookmarkPos = pos
-            gotoChapter(v, bm.chapter)
-            if (v.index != bm.chapter) pendingBookmarkPos = null
-        }
-    }
-
     fun createHighlight(color: String) {
         val wv = webView ?: return
         wv.evaluateJavascript("window.rdrHighlightSelection('$color');") { raw ->
@@ -1417,6 +1379,44 @@ fun ReaderScreen(
                 sectionTracker.appliedTop = y
                 sectionTracker.appliedHeight = null
             }
+        }
+    }
+
+    /**
+     * Jumps to a bookmark: inside the already-loaded document it
+     * scrolls / turns in place (vertical: the chapter is in the
+     * stitched window; paged: it is the open chapter), otherwise
+     * the chapter loads and onPageFinished lands on the bookmark
+     * via [pendingBookmarkPos]. A failed load leaves no pending
+     * position behind — a stale one would fire on the next
+     * unrelated load of that chapter.
+     */
+    fun jumpToBookmark(bm: TextBookmark) {
+        val v = vm ?: return
+        bookmarksOpen = false
+        scope.launch {
+            // The dialog opens from the drawer: a jump must close
+            // the drawer too, or the landing stays hidden behind it.
+            drawerState.close()
+            val pos = SectionPosition(bm.chapter, bm.fraction)
+            if (v.readingMode == ReadingMode.CONTINUOUS_VERTICAL &&
+                bm.chapter in v.contFirst..v.contLast
+            ) {
+                // The saved position is what a height change
+                // re-applies: the user IS at the bookmark now, so
+                // it replaces the stale one until the next scroll
+                // report overwrites it.
+                sectionTracker.saved = pos
+                applySectionRestore(v.docGen, pos)
+                return@launch
+            }
+            if (v.readingMode == ReadingMode.PAGED_HORIZONTAL && bm.chapter == v.index) {
+                goToBookmarkPage(bm.fraction)
+                return@launch
+            }
+            pendingBookmarkPos = pos
+            gotoChapter(v, bm.chapter)
+            if (v.index != bm.chapter) pendingBookmarkPos = null
         }
     }
 
@@ -2883,6 +2883,9 @@ fun ReaderScreen(
                                     },
                                     modifier = Modifier.weight(1f)
                                 )
+                                val removeBookmarkDesc = stringResource(
+                                    R.string.reader_bookmark_remove
+                                )
                                 IconButton(
                                     onClick = {
                                         scope.launch {
@@ -2890,9 +2893,7 @@ fun ReaderScreen(
                                         }
                                     },
                                     modifier = Modifier.semantics {
-                                        contentDescription = stringResource(
-                                            R.string.reader_bookmark_remove
-                                        )
+                                        contentDescription = removeBookmarkDesc
                                     }
                                 ) {
                                     AppIcon(
