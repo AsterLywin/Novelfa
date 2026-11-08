@@ -1381,7 +1381,6 @@ fun ReaderScreen(
             }
         }
     }
-
     /**
      * Jumps to a bookmark: inside the already-loaded document it
      * scrolls / turns in place (vertical: the chapter is in the
@@ -1419,6 +1418,7 @@ fun ReaderScreen(
             if (v.index != bm.chapter) pendingBookmarkPos = null
         }
     }
+
 
     val bridge = remember {
         ScrollBridge(
