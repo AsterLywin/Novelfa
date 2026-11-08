@@ -73,10 +73,14 @@ jobs:
           fi
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/novelfa-release.keystore"
 
+      # Run #3 (2026-11-08) died in :app:compileDebugKotlin with
+      # OutOfMemoryError: Java heap space — the Kotlin daemon's
+      # default heap is too small for this codebase. 4g fits the
+      # 7 GB runner (Gradle itself stays at its default heap).
       - name: Build debug APK
         if: ${{ inputs.variant == 'debug' }}
         working-directory: android
-        run: gradle :app:assembleDebug --no-daemon -Djava.net.preferIPv4Stack=true
+        run: gradle :app:assembleDebug --no-daemon -Djava.net.preferIPv4Stack=true -Pkotlin.daemon.jvmargs=-Xmx4g
 
       - name: Build signed release APK
         if: ${{ inputs.variant == 'release' }}
@@ -90,7 +94,7 @@ jobs:
           for v in NOVELFA_KEYSTORE_PASSWORD NOVELFA_KEY_ALIAS NOVELFA_KEY_PASSWORD; do
             if [ -z "${!v}" ]; then echo "::error::$v secret is missing."; exit 1; fi
           done
-          gradle :app:assembleRelease --no-daemon -Djava.net.preferIPv4Stack=true
+          gradle :app:assembleRelease --no-daemon -Djava.net.preferIPv4Stack=true -Pkotlin.daemon.jvmargs=-Xmx4g
 
       - name: Upload debug APK
         if: ${{ inputs.variant == 'debug' }}
