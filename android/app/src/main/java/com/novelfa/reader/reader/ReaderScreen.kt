@@ -122,6 +122,7 @@ import com.novelfa.reader.theme.ContrastIcon
 import com.novelfa.reader.theme.Themes
 import com.novelfa.reader.theme.hexToColor
 import com.novelfa.reader.theme.ThemePreviewCard
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -540,8 +541,8 @@ fun ReaderScreen(
         val v = vm ?: return ""
         val wv = webView ?: return ""
         val density = context.resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
-        val w = kotlin.math.roundToInt(wv.width / density)
-        val h = kotlin.math.roundToInt(wv.height / density)
+        val w = (wv.width / density).roundToInt()
+        val h = (wv.height / density).roundToInt()
         if (w <= 0 || h <= 0) return ""
         return v.layoutSettingsKey() + "|${w}x$h"
     }
