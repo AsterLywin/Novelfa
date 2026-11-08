@@ -169,7 +169,14 @@ internal suspend fun openParsed(
     if (!book.exists()) {
         throw IOException("book missing: " + book.absolutePath)
     }
-    val format = BookFormat.detect(book)
+    // Strong content signatures win over the extension: a
+    // mislabelled file (RAR named .cbz, DOCX named .pdf) must
+    // parse as what it IS — the same rule the importer uses
+    // (see BookFormat.detectStrongContent). In-place books keep
+    // their original file name, so the extension alone cannot
+    // be trusted here.
+    val format = BookFormat.detectStrongContent(book)
+        ?: BookFormat.detect(book)
         ?: throw IOException("unsupported book format: " + book.name)
     // Converted/extracted chapters live in filesDir, NOT cacheDir:
     // Android may evict cacheDir under storage pressure, and every

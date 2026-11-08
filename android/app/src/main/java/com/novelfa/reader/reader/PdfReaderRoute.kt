@@ -324,7 +324,15 @@ fun PdfReaderRoute(
                 book = book!!,
                 repo = repo,
                 onClose = onClose,
-                sourceFactory = { pw -> CbzNativeSource(bookFile, pw) },
+                sourceFactory = { pw ->
+                    // A RAR wearing a .cbz name (in-place books keep
+                    // their original name, so the extension cannot be
+                    // trusted): open it as the RAR it is instead of
+                    // failing it as a corrupt ZIP. Mirror of the
+                    // ZIP-wearing-.cbr fallback in the CBR branch.
+                    if (CbzBook.archiveKind(bookFile) == "RAR") RarNativeSource(bookFile, pw)
+                    else CbzNativeSource(bookFile, pw)
+                },
                 loadingRes = R.string.cbz_native_loading,
                 errorRes = R.string.cbz_native_error,
                 resolvedFile = bookFile

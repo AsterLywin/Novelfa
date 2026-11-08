@@ -219,4 +219,52 @@ class RarBookTest {
             assertTrue(e.message!!.contains("unavailable"))
         }
     }
+
+    // --- Misnamed files: the content decides, not the name ---
+    // A RAR renamed to .cbz (seen in the wild) must still be
+    // detected as a RAR: the import sniffs it, but the open
+    // paths re-detect from the file, and in-place books keep
+    // their original name — so detection must work on content
+    // alone. BookFormat.detect() itself stays extension-first
+    // by design; the open paths use detectStrongContent /
+    // archiveKind instead (see PdfReaderRoute, openParsed).
+
+    @Test
+    fun misnamed_rar4WearingCbz_isDetectedAsCbr() {
+        val f = rarFile("comic.cbz", 0)
+        assertEquals(BookFormat.CBR, BookFormat.detectStrongContent(f))
+        assertEquals("RAR", CbzBook.archiveKind(f))
+        assertEquals(4, BookFormat.rarVersion(f))
+    }
+
+    @Test
+    fun misnamed_rar5WearingCbz_isDetectedAsCbr() {
+        val f = rarFile("comic.cbz", 1)
+        assertEquals(BookFormat.CBR, BookFormat.detectStrongContent(f))
+        assertEquals("RAR", CbzBook.archiveKind(f))
+        assertEquals(5, BookFormat.rarVersion(f))
+    }
+
+    @Test
+    fun misnamed_zipWearingCbr_isZipByArchiveKind() {
+        val f = tempFolder.newFile("comic.cbr")
+        f.writeBytes(
+            byteArrayOf(
+                'P'.code.toByte(), 'K'.code.toByte(), 0x03, 0x04, 0, 0, 0, 0
+            )
+        )
+        assertEquals("ZIP", CbzBook.archiveKind(f))
+        // A plain ZIP has no strong content claim: the open path
+        // decides by archiveKind, not by sniffing.
+        assertNull(BookFormat.detectStrongContent(f))
+    }
+
+    @Test
+    fun detect_misnamedRar_stillExtensionFirst() {
+        // Locks in detect()'s documented order: extension first.
+        // The open paths must NOT rely on detect() alone for a
+        // possibly-misnamed file.
+        val f = rarFile("comic.cbz", 0)
+        assertEquals(BookFormat.CBZ, BookFormat.detect(f))
+    }
 }

@@ -43,7 +43,10 @@ object BookConverter {
         // is cancelled.
         val ctx = currentCoroutineContext()
         val cancelCheck = { ctx.ensureActive() }
-        return when (BookFormat.detect(source)) {
+        // Strong content first: a mislabelled file must convert
+        // as what it IS, not fail as what its name claims — the
+        // same rule the importer uses.
+        return when (BookFormat.detectStrongContent(source) ?: BookFormat.detect(source)) {
             BookFormat.TXT -> TextBookParser.parseText(
                 source.readBytes(), fallbackName, outDir, chapterFallback
             )
