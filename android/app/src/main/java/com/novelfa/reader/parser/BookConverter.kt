@@ -52,6 +52,12 @@ object BookConverter {
             )
             BookFormat.PDF -> parsePdf(source, outDir, chapterFallback, fallbackName, onProgress, cancelCheck)
             BookFormat.DOCX -> DocxParser.parseFile(source, outDir, chapterFallback, fallbackName, cancelCheck)
+            BookFormat.FB2, BookFormat.FBZ -> Fb2Parser.parseFile(
+                source, outDir, chapterFallback, fallbackName, cancelCheck
+            )
+            BookFormat.RTF -> RtfParser.parse(
+                source.readBytes(), fallbackName, outDir, chapterFallback
+            )
             else -> throw IllegalArgumentException(
                 "Unsupported book format: ${source.name}"
             )

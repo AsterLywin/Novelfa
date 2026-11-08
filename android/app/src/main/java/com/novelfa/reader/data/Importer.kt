@@ -16,9 +16,12 @@ import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CacheStamp
 import com.novelfa.reader.parser.PdfParser
 import com.novelfa.reader.parser.CbzBook
+import com.novelfa.reader.parser.Fb2Parser
 import com.novelfa.reader.parser.engine.CbzEngine
 import com.novelfa.reader.parser.engine.DocxEngine
 import com.novelfa.reader.parser.engine.EpubEngine
+import com.novelfa.reader.parser.engine.Fb2Engine
+import com.novelfa.reader.parser.engine.RtfEngine
 import com.novelfa.reader.parser.engine.TxtEngine
 import com.novelfa.reader.parser.engine.ZipEngine
 import com.novelfa.reader.parser.engine.ZipKind
@@ -63,7 +66,13 @@ val SUPPORTED_BOOK_MIME_TYPES = arrayOf(
     "application/zip",
     "application/x-zip-compressed",
     "application/x-cbz",
-    "application/vnd.comicbook+zip"
+    "application/vnd.comicbook+zip",
+    // FictionBook and RTF: the common MIME types file managers
+    // and providers report for .fb2/.fbz/.rtf picks.
+    "application/x-fictionbook+xml",
+    "application/x-fictionbook",
+    "application/rtf",
+    "text/rtf"
 )
 
 class ImportException(
@@ -339,12 +348,12 @@ class Importer(
 
     /**
      * Imports one book in any supported format (EPUB, TXT, PDF, Markdown,
-     * DOCX, CBZ, ZIP). Every format is imported through its own
-     * rendering engine (see parser/engine): EPUB, DOCX and book-carrying
-     * ZIPs contribute metadata only at import (title, a chapter count
-     * carried by the container, a single-entry cover) and are fully
-     * parsed at first open; TXT/Markdown are parsed here because their
-     * single-pass text parse IS the reader's open cache; PDF and
+     * DOCX, FB2/FBZ, RTF, CBZ, ZIP). Every format is imported through its own
+     * rendering engine (see parser/engine): EPUB, DOCX, FB2/FBZ and
+     * book-carrying ZIPs contribute metadata only at import (title, a
+     * chapter count carried by the container, a single-entry cover) and
+     * are fully parsed at first open; TXT/Markdown/RTF are parsed here
+     * because their single-pass parse IS the reader's open cache; PDF and
      * image archives were already lazy. The ORIGINAL file is what
      * gets stored, with its real extension, so backups and re-opens keep
      * working from the source format, not from a lossy conversion.
@@ -773,8 +782,29 @@ class Importer(
                 }
                 metadataChapterCount = meta.chapterCount
                 ParsedBook(title = meta.title, chapters = emptyList(), coverFile = null)
+            } else if (format == BookFormat.FB2 || format == BookFormat.FBZ) {
+                // Engine metadata only, like EPUB/DOCX: title, an
+                // exact top-level section count and the coverpage
+                // image, from a tag scan over the raw XML — no DOM
+                // is built and no other binary is decoded at import.
+                // The full parse happens at first open and corrects
+                // the row then.
+                reportStage("parse")
+                val meta = try {
+                    Fb2Engine.metadata(destFile, displayName, openCacheDir) {
+                        ioCtx.ensureActive()
+                    }
+                } catch (e: Exception) {
+                    throw ImportException(
+                        e.message ?: "parse failed",
+                        messageFa = context.getString(parseErrorMessageRes(e)),
+                        cause = e
+                    )
+                }
+                metadataChapterCount = meta.chapterCount
+                ParsedBook(title = meta.title, chapters = emptyList(), coverFile = meta.coverFile)
             } else {
-                // TXT/Markdown through their engine: a single-pass
+                // TXT/Markdown/RTF through their engine: a single-pass
                 // text parse whose output IS the reader's open
                 // cache, so parsing here is not double work.
                 // Cancellation must NOT be wrapped into an import
@@ -783,7 +813,11 @@ class Importer(
                 // just stopping the import.
                 reportStage("parse")
                 try {
-                    TxtEngine.open(destFile, openCacheDir, chapterFallback, displayName)
+                    if (format == BookFormat.RTF) {
+                        RtfEngine.open(destFile, openCacheDir, chapterFallback, displayName)
+                    } else {
+                        TxtEngine.open(destFile, openCacheDir, chapterFallback, displayName)
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -796,13 +830,14 @@ class Importer(
             }
             // Lazy PDFs, native image books and metadata-only books
             // deliberately have no chapters yet (PDFs and EPUB/DOCX/
-            // book-ZIPs are built on first open; image books never
+            // FB2/book-ZIPs are built on first open; image books never
             // have chapters, their pages ARE the book). Only the
-            // TXT/Markdown path must have parsed chapters here.
+            // TXT/Markdown/RTF path must have parsed chapters here.
             val isNativeBook = format == BookFormat.PDF ||
                 format == BookFormat.CBZ || format == BookFormat.ZIP
             val isMetadataOnly = format == BookFormat.EPUB ||
-                format == BookFormat.DOCX || zipIsBook
+                format == BookFormat.DOCX || format == BookFormat.FB2 ||
+                format == BookFormat.FBZ || zipIsBook
             if (!isNativeBook && !isMetadataOnly && parsed.chapters.isEmpty()) {
                 throw ImportException(
                     "Book has no readable chapters",
@@ -899,7 +934,7 @@ class Importer(
                     }
                 }
             }
-            // Only TXT/Markdown have a complete converted cache at
+            // Only TXT/Markdown/RTF have a complete converted cache at
             // import: stamp it so the first open trusts it instead of
             // re-parsing. Every other format is lazy at import — the
             // missing stamp is exactly what makes the first open
@@ -907,7 +942,9 @@ class Importer(
             // were stamped here because they were fully parsed at
             // import; stamping their metadata-only cache would make
             // the first open trust an empty cache and fail.)
-            if (format == BookFormat.TXT || format == BookFormat.MARKDOWN) {
+            if (format == BookFormat.TXT || format == BookFormat.MARKDOWN ||
+                format == BookFormat.RTF
+            ) {
                 CacheStamp.writeStamp(openCacheDir, destFile)
             }
             timer.finish()
@@ -966,6 +1003,26 @@ class Importer(
             BookFormat.PDF -> CoverBackfill.pdfFirstPageCoverForUri(
                 context, sourceUri, scratchDir
             )
+            BookFormat.FB2, BookFormat.FBZ -> {
+                // The cover is base64 inside the document: read the
+                // file (bounded — a cover past 64 MiB is not worth
+                // a full read) and let the FB2 scan find it. RTF
+                // has no cover: null here means the generated cover.
+                val bytes = context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                    val out = java.io.ByteArrayOutputStream()
+                    val buf = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > 64L * 1024 * 1024) return@runCatching null
+                        out.write(buf, 0, n)
+                    }
+                    out.toByteArray()
+                } ?: return@runCatching null
+                Fb2Parser.extractCover(bytes, scratchDir)
+            }
             BookFormat.CBZ, BookFormat.ZIP -> {
                 SeekableZip.openFromUri(context, sourceUri)?.use { seekable ->
                     if (format == BookFormat.ZIP) {
@@ -981,7 +1038,8 @@ class Importer(
                             it.substringAfterLast('.', "").lowercase() in
                                 setOf(
                                     "epub", "docx", "pdf", "txt", "text",
-                                    "md", "markdown", "mdown"
+                                    "md", "markdown", "mdown",
+                                    "fb2", "fbz", "rtf"
                                 )
                         }
                         if (hasBook) return@runCatching null

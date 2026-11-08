@@ -162,6 +162,8 @@
     <string name="import_format_word">Word</string>
     <string name="import_format_cbz">CBZ</string>
     <string name="import_format_zip">ZIP</string>
+    <string name="import_format_fb2">FB2</string>
+    <string name="import_format_rtf">RTF</string>
         <string name="import_large_files_note">Large files may take a moment; you can stop the import with Cancel.</string>
     <string name="apply_custom_color">Apply</string>
     <string name="invalid_hex">Invalid color code</string>
@@ -369,6 +371,28 @@
     <string name="comic_bookmark">Bookmark</string>
     <string name="comic_bookmarks">Bookmarks</string>
     <string name="comic_no_bookmarks">No bookmarks yet</string>
+    <string name="reader_bookmark_add">Add bookmark</string>
+    <string name="reader_bookmark_remove">Remove bookmark</string>
+    <string name="reader_bookmarks">Bookmarks</string>
+    <string name="reader_no_bookmarks">No bookmarks yet</string>
+    <!-- Read-aloud (TTS). "Listen aloud" is also the notification
+         channel name. A book chapter is a "chapter" here, never a
+         "section" — the reader calls it a chapter in English. -->
+    <string name="tts_listen">Listen aloud</string>
+    <string name="tts_pause">Pause</string>
+    <string name="tts_resume">Resume</string>
+    <string name="tts_stop">Stop</string>
+    <string name="tts_speed">Speed</string>
+    <string name="tts_sleep_timer">Sleep timer</string>
+    <string name="tts_sleep_off">Off</string>
+    <string name="tts_sleep_minutes">%1$d min</string>
+    <string name="tts_no_engine">No text-to-speech engine is installed</string>
+    <string name="tts_missing_data">Voice data for this language is missing</string>
+    <string name="tts_lang_not_supported">This book\'s language is not supported by text-to-speech</string>
+    <string name="tts_failed">Could not start listening</string>
+    <string name="tts_empty">There is no text to read in this chapter</string>
+    <string name="tts_finished">Finished reading this book</string>
+    <string name="tts_install_data">Install voice data</string>
     <string name="comic_capture">Save page</string>
     <string name="comic_page_saved">Page saved: %1$s</string>
     <string name="comic_save_failed">Could not save the page</string>
@@ -385,6 +409,7 @@
     <string name="search_no_match">No match</string>
     <string name="search_prev">Previous</string>
     <string name="search_next">Next</string>
+    <string name="pdf_search_unavailable">Search is not available for this book</string>
     <string name="highlight_label">Highlight:</string>
     <string name="highlight_title">Highlight</string>
     <string name="highlight_change_color">Change color</string>

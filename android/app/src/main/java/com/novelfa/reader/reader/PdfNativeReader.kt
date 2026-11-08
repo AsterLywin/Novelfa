@@ -707,3 +707,147 @@ internal class CbzNativeSource(
     }
 }
 
+/** One whole-document PDF search hit: the page and the char range on it. */
+data class PdfSearchHit(val page: Int, val start: Int, val count: Int)
+
+/** Whole-document search result cap, same as the text reader's [ReaderSearchText.MAX_SEARCH_RESULTS]. */
+internal const val PDF_SEARCH_MAX_HITS = 500
+
+/**
+ * Pure next/prev navigation over an ordered hit list (document
+ * order: page, then char offset). No wrapping — the ends clamp,
+ * like the text reader's prev/next buttons, which disable at the
+ * ends instead of cycling. Unit-testable without the native
+ * library: it never touches JNI.
+ */
+data class PdfSearchState(
+    val hits: List<PdfSearchHit>,
+    val index: Int = -1
+) {
+    /** Hit count (0 = no search, or no match). */
+    val count: Int get() = hits.size
+
+    /** The hit the viewer highlights, or null before the first next(). */
+    val current: PdfSearchHit? get() = hits.getOrNull(index)
+
+    fun next(): PdfSearchState {
+        if (hits.isEmpty() || index >= hits.size - 1) return this
+        return copy(index = index + 1)
+    }
+
+    fun prev(): PdfSearchState {
+        if (hits.isEmpty() || index <= 0) return this
+        return copy(index = index - 1)
+    }
+}
+
+/**
+ * Whole-document text search over a PDF file through the FPDFText
+ * bridge ([PdfiumText]) — the engine half of PDF search (task 4b).
+ * It opens its own bridge document (the same second-document
+ * pattern [PdfiumNativeSource.pageWords] uses), so it works from
+ * the file alone and never touches the render document; the
+ * viewer constructs it from the book's resolved file plus the
+ * session password (both already in the viewer) and calls
+ * [searchAll] on IO — it walks every page, so it must never run
+ * on the main thread. [hitRects] maps a hit onto the rendered
+ * bitmap for the highlight overlay.
+ *
+ * When the native library is absent ([PdfiumText.available] is
+ * false — the .so files are committed from the PC, not by the
+ * connector) or the file cannot be opened, [available] is false
+ * and every search returns empty: the viewer then shows search
+ * disabled, never a crash and never a fake result list.
+ *
+ * CBZ/image books deliberately have no searcher: their pages are
+ * decoded images ([CbzNativeSource]) with no text layer anywhere
+ * in [CbzBook]/[CbzEngine] — there is nothing to search, so no
+ * search UI is offered for them.
+ *
+ * Text selection/copy is NOT built on this class: the bridge
+ * primitives exist ([PdfiumText.charIndexAtPos] + [rangeRects]),
+ * but selection needs a new gesture layer — long-press to
+ * anchor, drag to extend, a selection overlay distinct from
+ * pinch-zoom/pan, and a copy action — on a viewer whose touch
+ * handling is already layered (tap-to-hide, pinch, pan, pager).
+ * That is a separate gesture feature, not a bridge call.
+ */
+class PdfTextSearcher(pdfFile: File, password: CharArray? = null) : Closeable {
+
+    // Transient String for the bridge only, never stored — the
+    // same contract as PdfiumNativeSource's password handling.
+    private val doc: Long = runCatching {
+        PdfiumText.openDocument(
+            pdfFile.absolutePath,
+            password?.let { String(it) }
+        )
+    }.getOrDefault(0L)
+
+    /** False when the bridge is absent or the file would not open. */
+    val available: Boolean get() = doc != 0L
+
+    /** Page count, or 0 when unavailable. */
+    val pageCount: Int
+        get() = if (doc != 0L) {
+            runCatching { PdfiumText.pageCount(doc) }.getOrDefault(0)
+        } else {
+            0
+        }
+
+    /**
+     * Every match of [query] in the whole document, in page then
+     * char order, capped at [maxHits]. Case-insensitive (the
+     * bridge default, same as the text reader). A page that fails
+     * to read contributes nothing — one bad page must not kill
+     * a whole-document search.
+     */
+    fun searchAll(query: String, maxHits: Int = PDF_SEARCH_MAX_HITS): List<PdfSearchHit> {
+        if (doc == 0L || query.isBlank()) return emptyList()
+        val out = ArrayList<PdfSearchHit>()
+        val count = runCatching { PdfiumText.pageCount(doc) }.getOrDefault(0)
+        for (page in 0 until count) {
+            if (out.size >= maxHits) break
+            val hits = runCatching {
+                PdfiumText.findAll(doc, page, query)
+            }.getOrDefault(emptyList())
+            for (hit in hits) {
+                if (out.size >= maxHits) break
+                out += PdfSearchHit(page, hit.start, hit.count)
+            }
+        }
+        return out
+    }
+
+    /**
+     * Highlight rects for [hit], mapped onto a rendered bitmap of
+     * [bitmapWidth] x [bitmapHeight] (y-down pixels, ready to draw
+     * over the page). Empty when unavailable, when the page has no
+     * size, or when the hit covers no area.
+     */
+    fun hitRects(
+        hit: PdfSearchHit,
+        bitmapWidth: Int,
+        bitmapHeight: Int
+    ): List<PdfiumText.MappedRect> {
+        if (doc == 0L) return emptyList()
+        val size = runCatching { PdfiumText.pageSize(doc, hit.page) }.getOrNull()
+            ?: return emptyList()
+        return runCatching {
+            PdfiumText.rangeRects(doc, hit.page, hit.start, hit.count)
+        }.getOrDefault(emptyList())
+            .map { r ->
+                PdfiumText.mapRectToBitmap(
+                    r.left, r.top, r.right, r.bottom,
+                    size.first, size.second, bitmapWidth, bitmapHeight
+                )
+            }
+            .filter { it.right > it.left && it.bottom > it.top }
+    }
+
+    override fun close() {
+        if (doc != 0L) {
+            runCatching { PdfiumText.closeDocument(doc) }
+        }
+    }
+}
+

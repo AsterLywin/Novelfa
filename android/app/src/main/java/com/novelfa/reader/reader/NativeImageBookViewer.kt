@@ -9,6 +9,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,6 +17,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -47,9 +50,11 @@ import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -80,8 +85,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.input.key.Key
@@ -347,6 +355,67 @@ private fun Modifier.stripPinchDetector(
     }
 }
 
+/**
+ * One PDF search hit's highlight geometry: the hit's rects in
+ * the page's own point space (the effect in the viewer calls
+ * hitRects with the page size, so the rects come back in
+ * points), plus that page size for the scale and the aspect
+ * ratio. One value, so the rects and the size they were mapped
+ * against can never disagree.
+ */
+private data class PdfHitGeom(
+    val rects: List<PdfiumText.MappedRect>,
+    val pageWidth: Float,
+    val pageHeight: Float
+)
+
+/**
+ * Yellow highlight for the current PDF search hit, drawn over
+ * the rendered page bitmap. The caller must size this Canvas
+ * exactly like the displayed page (same width and aspect
+ * ratio, same centering) — the rects are scaled from point
+ * space onto the Canvas size, so any size mismatch moves the
+ * highlight off the text. The overlay takes no pointer input:
+ * it is purely visual, so taps still reach the page below.
+ *
+ * Where it is exact, and where it is not (stated, not hidden):
+ * exact at 1x zoom on landing — every next/prev jump lands
+ * the page at 1x with its vertical scroll at the top, and the
+ * overlay reproduces the item's own fit-width layout. It does
+ * NOT track a pinch zoom/pan or a vertical scroll of a tall
+ * page afterwards: those transforms live inside the page item
+ * (ZoomablePageContainer / its scroll Column), which this
+ * viewer-level overlay cannot see. It is therefore only drawn
+ * on the plain fit-width path — no manual/auto crop, no view
+ * rotation, no split half — where the displayed ratio is the
+ * page ratio; on any other path the jump still lands, only the
+ * yellow rect is skipped, which is honest where a drawn rect
+ * would point at the wrong text.
+ */
+@Composable
+private fun PdfSearchHighlightOverlay(
+    geom: PdfHitGeom,
+    modifier: Modifier = Modifier
+) {
+    if (geom.rects.isEmpty()) return
+    Canvas(modifier) {
+        val sx = size.width / geom.pageWidth
+        val sy = size.height / geom.pageHeight
+        for (r in geom.rects) {
+            drawRect(
+                // The text reader's match yellow (#FFD400),
+                // translucent so the text stays readable.
+                color = Color(0xFFFFD400).copy(alpha = 0.45f),
+                topLeft = Offset(r.left * sx, r.top * sy),
+                size = Size(
+                    (r.right - r.left) * sx,
+                    (r.bottom - r.top) * sy
+                )
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun NativeImageBookViewer(
@@ -484,6 +553,83 @@ internal fun NativeImageBookViewer(
         // A throw inside onDispose kills the app, so closing a
         // source that is already half-dead must never throw out.
         onDispose { runCatching { toClose?.close() } }
+    }
+
+    // PDF text search (task 4b): the engine ([PdfTextSearcher],
+    // see PdfNativeReader.kt) opens its own bridge document over
+    // the resolved file, so it needs the file + the session
+    // password — both already in scope here. It is built on IO
+    // (opening parses the file header) and rebuilt when the
+    // password arrives; the dispose effect owns closing it,
+    // exactly like the page source above. CBZ and image books
+    // have no text layer, so no searcher is built for them;
+    // the direct routes have no File, so search stays off
+    // there too. When the bridge .so is absent
+    // ([PdfiumText.available] is false) the searcher reports
+    // available=false and the search entry point says so
+    // through the snackbar instead of pretending search works.
+    var pdfSearcher by remember { mutableStateOf<PdfTextSearcher?>(null) }
+    LaunchedEffect(isPdf, resolvedFile, bookPassword) {
+        // Drop the old searcher first: the dispose effect below
+        // closes exactly the searcher it started with, so the
+        // old bridge document is freed before the new one opens.
+        pdfSearcher = null
+        if (!isPdf) return@LaunchedEffect
+        val file = resolvedFile ?: return@LaunchedEffect
+        if (!file.isFile) return@LaunchedEffect
+        pdfSearcher = withContext(Dispatchers.IO) {
+            PdfTextSearcher(file, bookPassword)
+        }
+    }
+    DisposableEffect(pdfSearcher) {
+        val toClose = pdfSearcher
+        onDispose { runCatching { toClose?.close() } }
+    }
+    // False until the searcher is built AND its bridge document
+    // opened: the search entry point reads this, never the
+    // searcher's presence alone.
+    val pdfSearchAvailable = pdfSearcher?.available == true
+
+    // Search UI state (mirrors the text reader's search bar in
+    // ReaderScreen: query field, "N of M" count, prev/next that
+    // clamp at the ends). pdfSearchRan is the "a search ran"
+    // signal for the "no match" text — a blank query is not a
+    // no-match. pdfHitGeom is the current hit's highlight
+    // geometry (see the overlay note above); the effect below
+    // recomputes it whenever the current hit changes.
+    var searchOpen by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var pdfSearch by remember { mutableStateOf(PdfSearchState(emptyList())) }
+    var pdfSearchBusy by remember { mutableStateOf(false) }
+    var pdfSearchRan by remember { mutableStateOf(false) }
+    var pdfHitGeom by remember { mutableStateOf<PdfHitGeom?>(null) }
+    LaunchedEffect(pdfSearch.current, pdfSearcher, source) {
+        val hit = pdfSearch.current
+        val searcher = pdfSearcher
+        val src = source
+        if (hit == null || searcher == null || src == null) {
+            pdfHitGeom = null
+            return@LaunchedEffect
+        }
+        pdfHitGeom = withContext(Dispatchers.IO) {
+            // The page size is the ratio the overlay lays out
+            // by, and the nominal size the rects are mapped
+            // against: hitRects maps points to bitmap pixels
+            // linearly, so calling it with the page size itself
+            // returns the rects in point space, and the overlay
+            // scales them onto the displayed page.
+            val size = runCatching { src.nativePageSize(hit.page) }.getOrNull()
+                ?.takeIf { it.first > 0 && it.second > 0 }
+                ?: return@withContext null
+            val rects = runCatching {
+                searcher.hitRects(hit, size.first, size.second)
+            }.getOrDefault(emptyList())
+            if (rects.isEmpty()) {
+                null
+            } else {
+                PdfHitGeom(rects, size.first.toFloat(), size.second.toFloat())
+            }
+        }
     }
 
     val pageCount = source?.pageCount ?: 0
@@ -975,6 +1121,50 @@ internal fun NativeImageBookViewer(
         }
     }
 
+    // PDF search actions (task 4b). searchAll walks every page,
+    // so it runs on IO; the landing mirrors the text reader —
+    // the first hit becomes current and the viewer jumps to its
+    // page. Next/prev step through PdfSearchState (clamped at
+    // the ends, no wrap) and jump to the new current hit's page;
+    // a jump to the page the viewer already shows is a no-op
+    // landing, so stepping between two hits on one page still
+    // moves the highlight. Closing the bar clears the query,
+    // the results and the highlight, like the text reader's
+    // clearSearch.
+    fun runPdfSearch() {
+        val searcher = pdfSearcher ?: return
+        val q = searchQuery.trim()
+        if (q.isEmpty()) {
+            pdfSearch = PdfSearchState(emptyList())
+            pdfSearchRan = false
+            return
+        }
+        scope.launch {
+            pdfSearchBusy = true
+            val hits = withContext(Dispatchers.IO) {
+                runCatching { searcher.searchAll(q) }.getOrDefault(emptyList())
+            }
+            pdfSearchBusy = false
+            pdfSearchRan = true
+            val landed = PdfSearchState(hits).next()
+            pdfSearch = landed
+            landed.current?.let { jumpTo(it.page) }
+        }
+    }
+
+    fun stepPdfSearch(dir: Int) {
+        val stepped = if (dir > 0) pdfSearch.next() else pdfSearch.prev()
+        if (stepped.index == pdfSearch.index) return
+        pdfSearch = stepped
+        stepped.current?.let { jumpTo(it.page) }
+    }
+
+    fun clearPdfSearch() {
+        searchQuery = ""
+        pdfSearch = PdfSearchState(emptyList())
+        pdfSearchRan = false
+    }
+
     val density = LocalDensity.current
     val screenWidthPx = with(density) {
         LocalConfiguration.current.screenWidthDp.dp.toPx().toInt()
@@ -1311,37 +1501,74 @@ internal fun NativeImageBookViewer(
                     // is which page(s) the item shows.
                     @Composable
                     fun singleItem(page: Int, halfSide: Int = 0) {
-                        NativePageItem(
-                            source = activeSource,
-                            page = page,
-                            renderWidthPx = renderWidthPx,
-                            paged = true,
-                            zoomFactor = zoomFactors[zoomIndex],
-                            cropMargin = cutMargin,
-                            cropPadH = cropPadH,
-                            cropPadV = cropPadV,
-                            paddingRatio = paddingRatio,
-                            pageBg = pageBg,
-                            screenWidthPx = screenWidthPx,
-                            screenHeightPx = screenHeightPx,
-                            fitMode = fitMode,
-                            sharpen = sharpen,
-                            sharpenLevel = sharpenLevel,
-                            upscaleMode = upscaleMode,
-                            filterGray = filterGray,
-                            filterContrast = filterContrast,
-                            filterInvert = filterInvert,
-                            viewRotation = viewRotation,
-                            manualCropRect = manualCropRects[page],
-                            halfSide = halfSide,
-                            onTap = { handlePageTap() },
-                            onDoubleTap = { tapSuppress = true },
-                            sessionKey = book.id,
-                            slotKey = pagerIdx,
-                            activeSlotKey = pagerState.currentPage,
-                            zoomPageId = "pager-$pagerIdx-page-$page-half-$halfSide",
-                            bitmapCache = pageBitmapCache
-                        )
+                        Box(Modifier.fillMaxSize()) {
+                            NativePageItem(
+                                source = activeSource,
+                                page = page,
+                                renderWidthPx = renderWidthPx,
+                                paged = true,
+                                zoomFactor = zoomFactors[zoomIndex],
+                                cropMargin = cutMargin,
+                                cropPadH = cropPadH,
+                                cropPadV = cropPadV,
+                                paddingRatio = paddingRatio,
+                                pageBg = pageBg,
+                                screenWidthPx = screenWidthPx,
+                                screenHeightPx = screenHeightPx,
+                                fitMode = fitMode,
+                                sharpen = sharpen,
+                                sharpenLevel = sharpenLevel,
+                                upscaleMode = upscaleMode,
+                                filterGray = filterGray,
+                                filterContrast = filterContrast,
+                                filterInvert = filterInvert,
+                                viewRotation = viewRotation,
+                                manualCropRect = manualCropRects[page],
+                                halfSide = halfSide,
+                                onTap = { handlePageTap() },
+                                onDoubleTap = { tapSuppress = true },
+                                sessionKey = book.id,
+                                slotKey = pagerIdx,
+                                activeSlotKey = pagerState.currentPage,
+                                zoomPageId = "pager-$pagerIdx-page-$page-half-$halfSide",
+                                bitmapCache = pageBitmapCache
+                            )
+                            // PDF search highlight (task 4b): the
+                            // overlay reproduces this item's own
+                            // fit-width layout — full width x the
+                            // padding shrink, the page's aspect,
+                            // centered in a viewport-tall box (see
+                            // the overlay note for the paths where
+                            // it is skipped). It sits inside the
+                            // turn box, so it tilts with the page
+                            // on a turn; it takes no pointer input,
+                            // so taps still reach the page.
+                            val geom = pdfHitGeom
+                            if (geom != null && pdfSearch.current?.page == page &&
+                                halfSide == 0 &&
+                                fitMode != "height" && fitMode != "original" &&
+                                fitMode != "stretch" &&
+                                viewRotation == 0 && !cutMargin &&
+                                manualCropRects[page] == null
+                            ) {
+                                val ratio = geom.pageWidth / geom.pageHeight
+                                BoxWithConstraints(Modifier.fillMaxSize()) {
+                                    val viewportHeight = maxHeight
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth()
+                                            .heightIn(min = viewportHeight),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        PdfSearchHighlightOverlay(
+                                            geom = geom,
+                                            modifier = Modifier
+                                                .fillMaxWidth(paddingShrink(paddingRatio))
+                                                .aspectRatio(ratio)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                     // Page-turn transition: a plain pager slide reads
                     // flat, so each page tilts in 3D, shrinks slightly
@@ -1454,37 +1681,69 @@ internal fun NativeImageBookViewer(
                     verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
                     items(pageCount) { page ->
-                        NativePageItem(
-                            source = activeSource,
-                            page = page,
-                            renderWidthPx = renderWidthPx,
-                            paged = false,
-                            zoomFactor = zoomFactors[zoomIndex],
-                            cropMargin = cutMargin,
-                            cropPadH = cropPadH,
-                            cropPadV = cropPadV,
-                            paddingRatio = paddingRatio,
-                            pageBg = pageBg,
-                            screenWidthPx = screenWidthPx,
-                            screenHeightPx = screenHeightPx,
-                            fitMode = fitMode,
-                            sharpen = sharpen,
-                            sharpenLevel = sharpenLevel,
-                            upscaleMode = upscaleMode,
-                            filterGray = filterGray,
-                            filterContrast = filterContrast,
-                            filterInvert = filterInvert,
-                            viewRotation = viewRotation,
-                            manualCropRect = manualCropRects[page],
-                            onTap = { handlePageTap() },
-                            onDoubleTap = { tapSuppress = true },
-                            sessionKey = book.id,
-                            zoomPageId = "strip-$page",
-                            externalZoomState = stripZoomState,
-                            externalSettledZoom = stripSettledZoom,
-                            stripHost = stripHost,
-                            bitmapCache = pageBitmapCache
-                        )
+                        Box {
+                            NativePageItem(
+                                source = activeSource,
+                                page = page,
+                                renderWidthPx = renderWidthPx,
+                                paged = false,
+                                zoomFactor = zoomFactors[zoomIndex],
+                                cropMargin = cutMargin,
+                                cropPadH = cropPadH,
+                                cropPadV = cropPadV,
+                                paddingRatio = paddingRatio,
+                                pageBg = pageBg,
+                                screenWidthPx = screenWidthPx,
+                                screenHeightPx = screenHeightPx,
+                                fitMode = fitMode,
+                                sharpen = sharpen,
+                                sharpenLevel = sharpenLevel,
+                                upscaleMode = upscaleMode,
+                                filterGray = filterGray,
+                                filterContrast = filterContrast,
+                                filterInvert = filterInvert,
+                                viewRotation = viewRotation,
+                                manualCropRect = manualCropRects[page],
+                                onTap = { handlePageTap() },
+                                onDoubleTap = { tapSuppress = true },
+                                sessionKey = book.id,
+                                zoomPageId = "strip-$page",
+                                externalZoomState = stripZoomState,
+                                externalSettledZoom = stripSettledZoom,
+                                stripHost = stripHost,
+                                bitmapCache = pageBitmapCache
+                            )
+                            // PDF search highlight (task 4b): the
+                            // strip item IS the page (required
+                            // width x the page's aspect), so the
+                            // overlay takes the same size and rides
+                            // the list scroll with it. Same plain
+                            // path gate as the paged overlay (see
+                            // the overlay note); the strip's pinch
+                            // scale is in the width, but a
+                            // cross-axis pan is not tracked, like
+                            // the paged pinch.
+                            val geom = pdfHitGeom
+                            if (geom != null && pdfSearch.current?.page == page &&
+                                viewRotation == 0 && !cutMargin &&
+                                manualCropRects[page] == null
+                            ) {
+                                val ratio = geom.pageWidth / geom.pageHeight
+                                val crossDp = with(density) {
+                                    stripItemCrossPx(
+                                        screenWidthPx.toFloat(),
+                                        stripFitFraction,
+                                        stripZoomState.value.scale
+                                    ).toDp()
+                                }
+                                PdfSearchHighlightOverlay(
+                                    geom = geom,
+                                    modifier = Modifier
+                                        .requiredWidth(crossDp)
+                                        .aspectRatio(ratio)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1649,6 +1908,42 @@ internal fun NativeImageBookViewer(
                                         } else {
                                             LocalContentColor.current
                                         },
+                                        size = 19.dp
+                                    )
+                                }
+                            }
+                            // PDF text search (task 4b): PDFs only —
+                            // CBZ/image pages have no text layer to
+                            // search. The icon is the entry point;
+                            // when the searcher is unavailable (the
+                            // direct route has no File, or the text
+                            // bridge .so is absent) the tap says so
+                            // through the snackbar instead of opening
+                            // a field that cannot work.
+                            if (isPdf) {
+                                val searchDescription =
+                                    stringResource(R.string.search_hint)
+                                IconButton(
+                                    onClick = {
+                                        if (pdfSearchAvailable) {
+                                            searchOpen = true
+                                        } else {
+                                            scope.launch {
+                                                snackbar.showSnackbar(
+                                                    context.getString(
+                                                        R.string.pdf_search_unavailable
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = searchDescription
+                                    }
+                                ) {
+                                    AppIcon(
+                                        AppIconKind.Search,
+                                        tint = LocalContentColor.current,
                                         size = 19.dp
                                     )
                                 }
@@ -1827,6 +2122,102 @@ internal fun NativeImageBookViewer(
                         }
                     }
                 }
+        }
+        // PDF search bar (task 4b): the text reader's bar in
+        // ReaderScreen, as an overlay at the top of the reading
+        // area, so it works in fullscreen too once opened. It
+        // paints above the top bar (it is a later child of this
+        // outer Box) and swallows its own taps like the chrome
+        // bars, so a tap on the bar never reaches the page. The
+        // field is gated on the searcher: it only ever opens
+        // when available, and the enabled flags below are the
+        // second gate. Prev/next clamp at the ends (no wrap);
+        // the count reads "N of M" while there are hits and
+        // "No match" once a search ran with none.
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            AnimatedVisibility(
+                visible = searchOpen,
+                modifier = Modifier.fillMaxWidth()
+                    .clickable(interactionSource = chromeTapSource, indication = null) {},
+                enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
+                        .padding(8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = {
+                                searchQuery = it
+                                // The shown results belong to the
+                                // old query: clear them while the
+                                // user edits, so the count never
+                                // disagrees with the field.
+                                if (pdfSearch.count > 0 || pdfSearchRan) {
+                                    pdfSearch = PdfSearchState(emptyList())
+                                    pdfSearchRan = false
+                                }
+                            },
+                            singleLine = true,
+                            enabled = pdfSearchAvailable,
+                            placeholder = { Text(stringResource(R.string.search_hint)) },
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(
+                                onSearch = { runPdfSearch() }
+                            )
+                        )
+                        IconButton(
+                            onClick = { runPdfSearch() },
+                            enabled = pdfSearchAvailable
+                        ) {
+                            AppIcon(AppIconKind.Search, tint = LocalContentColor.current, size = 18.dp)
+                        }
+                        IconButton(onClick = { clearPdfSearch(); searchOpen = false }) {
+                            AppIcon(AppIconKind.Close, tint = LocalContentColor.current, size = 16.dp)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (pdfSearch.count > 0) {
+                                stringResource(
+                                    R.string.search_count,
+                                    pdfSearch.index + 1, pdfSearch.count
+                                )
+                            } else if (pdfSearchRan) {
+                                stringResource(R.string.search_no_match)
+                            } else {
+                                ""
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            onClick = { stepPdfSearch(-1) },
+                            enabled = pdfSearch.index > 0
+                        ) {
+                            Text(stringResource(R.string.search_prev))
+                        }
+                        TextButton(
+                            onClick = { stepPdfSearch(1) },
+                            enabled = pdfSearch.index >= 0 &&
+                                pdfSearch.index < pdfSearch.count - 1
+                        ) {
+                            Text(stringResource(R.string.search_next))
+                        }
+                    }
+                    if (pdfSearchBusy) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            }
         }
         Box(
             modifier = Modifier.fillMaxSize(),

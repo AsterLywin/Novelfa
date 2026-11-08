@@ -20,7 +20,12 @@ class BookFormatTest {
         assertEquals(BookFormat.PDF, BookFormat.fromExtension("paper.pdf"))
         assertEquals(BookFormat.DOCX, BookFormat.fromExtension("report.docx"))
         assertEquals(BookFormat.ZIP, BookFormat.fromExtension("archive.zip"))
+        assertEquals(BookFormat.FB2, BookFormat.fromExtension("book.fb2"))
+        assertEquals(BookFormat.FBZ, BookFormat.fromExtension("book.FBZ"))
+        assertEquals(BookFormat.RTF, BookFormat.fromExtension("book.rtf"))
         assertNull(BookFormat.fromExtension("noext"))
+        assertNull(BookFormat.fromExtension("book.cbr"))
+        assertNull(BookFormat.fromExtension("book.cb7"))
     }
 
     @Test
@@ -48,6 +53,56 @@ class BookFormatTest {
         val renamed = File(tempFolder.root, "mystery")
         f.renameTo(renamed)
         assertEquals(BookFormat.DOCX, BookFormat.detect(renamed))
+    }
+
+    @Test
+    fun sniff_extensionlessFb2() {
+        val f = tempFolder.newFile("mystery")
+        f.writeText(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
+                "<FictionBook xmlns=\"http://www.gribuser.ru/xml/fictionbook/2.0\">" +
+                "<description><title-info><book-title>T</book-title>" +
+                "</title-info></description><body><section><p>x</p>" +
+                "</section></body></FictionBook>",
+            Charsets.UTF_8
+        )
+        assertEquals(BookFormat.FB2, BookFormat.detect(f))
+        assertEquals(BookFormat.FB2, BookFormat.detectStrongContent(f))
+    }
+
+    @Test
+    fun sniff_extensionlessRtf() {
+        val f = tempFolder.newFile("mystery")
+        f.writeText("{\\rtf1\\ansi\\deff0 Hello world}", Charsets.UTF_8)
+        assertEquals(BookFormat.RTF, BookFormat.detect(f))
+        assertEquals(BookFormat.RTF, BookFormat.detectStrongContent(f))
+    }
+
+    @Test
+    fun sniff_extensionlessFbz() {
+        val f = tempFolder.newFile("mystery")
+        java.util.zip.ZipOutputStream(f.outputStream()).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("book.fb2"))
+            zos.write("<FictionBook/>".toByteArray())
+            zos.closeEntry()
+        }
+        assertEquals(BookFormat.FBZ, BookFormat.detect(f))
+        assertEquals(BookFormat.FBZ, BookFormat.detectStrongContent(f))
+    }
+
+    @Test
+    fun strongContent_fb2OverrulesWrongExtension() {
+        // An FB2 misnamed .txt must sniff as FB2, not TXT.
+        val f = tempFolder.newFile("book.txt")
+        f.writeText(
+            "<?xml version=\"1.0\"?><FictionBook><body/></FictionBook>",
+            Charsets.UTF_8
+        )
+        assertEquals(BookFormat.FB2, BookFormat.detectStrongContent(f))
+        // An RTF misnamed .txt must sniff as RTF.
+        val g = tempFolder.newFile("notes.txt")
+        g.writeText("{\\rtf1 Hello}", Charsets.UTF_8)
+        assertEquals(BookFormat.RTF, BookFormat.detectStrongContent(g))
     }
 
     @Test

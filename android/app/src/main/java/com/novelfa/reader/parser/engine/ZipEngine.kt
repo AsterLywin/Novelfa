@@ -77,6 +77,9 @@ object ZipEngine : BookEngine {
                 "pdf" -> BookFormat.PDF
                 "txt", "text" -> BookFormat.TXT
                 "md", "markdown", "mdown" -> BookFormat.MARKDOWN
+                "fb2" -> BookFormat.FB2
+                "fbz" -> BookFormat.FBZ
+                "rtf" -> BookFormat.RTF
                 else -> return@mapNotNull null
             }
             ArchiveCandidate(name, format, name.substringAfterLast('/'))

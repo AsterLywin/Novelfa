@@ -812,6 +812,20 @@ class ReaderViewModel(
     suspend fun plainText(i: Int): String =
         withContext(Dispatchers.IO) { ReaderSearchText.plainText(readPrepared(i)) }
 
+    /**
+     * Read-aloud chunks for chapter [i]: the same prepared body the
+     * document renders, split by [TtsChunker] into speakable
+     * utterances (footnotes skipped, sentence-ended). Cached through
+     * [readPrepared], so starting playback never re-reads the book
+     * file — the chapter file is read once, like search.
+     */
+    suspend fun ttsChunks(i: Int): List<String> =
+        withContext(Dispatchers.IO) { TtsChunker.chunkHtml(readPrepared(i)) }
+
+    /** Chapter title for the TTS notification (book data, not UI text). */
+    fun chapterTitle(i: Int): String =
+        if (i in chapters.indices) chapters[i].title else ""
+
     private fun readPrepared(i: Int): String {
         preparedCache[i]?.let { return it }
         val file = chapters[i].file

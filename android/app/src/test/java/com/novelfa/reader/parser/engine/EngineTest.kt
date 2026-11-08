@@ -38,6 +38,10 @@ class EngineTest {
         assertTrue(EngineRegistry.engineFor(BookFormat.PDF) === PdfEngine)
         assertTrue(EngineRegistry.engineFor(BookFormat.CBZ) === CbzEngine)
         assertTrue(EngineRegistry.engineFor(BookFormat.ZIP) === ZipEngine)
+        assertTrue(EngineRegistry.engineFor(BookFormat.FB2) === Fb2Engine)
+        // FBZ is the zipped FB2; it shares the FictionBook engine.
+        assertTrue(EngineRegistry.engineFor(BookFormat.FBZ) === Fb2Engine)
+        assertTrue(EngineRegistry.engineFor(BookFormat.RTF) === RtfEngine)
         // TXT and Markdown share the text engine, by design.
         assertTrue(EngineRegistry.engineFor(BookFormat.TXT) === TxtEngine)
         assertTrue(EngineRegistry.engineFor(BookFormat.MARKDOWN) === TxtEngine)
@@ -72,6 +76,24 @@ class EngineTest {
         val kind = ZipEngine.classify(zip)
         assertTrue(kind is ZipKind.SingleBook)
         assertEquals(BookFormat.EPUB, (kind as ZipKind.SingleBook).candidate.format)
+    }
+
+    @Test
+    fun zip_fb2AndRtf_areBookCandidates() {
+        val fb2 = zipFile(
+            "fb2.zip",
+            mapOf("novel.fb2" to "<FictionBook/>".toByteArray())
+        )
+        val fb2Kind = ZipEngine.classify(fb2)
+        assertTrue(fb2Kind is ZipKind.SingleBook)
+        assertEquals(BookFormat.FB2, (fb2Kind as ZipKind.SingleBook).candidate.format)
+        val rtf = zipFile(
+            "rtf.zip",
+            mapOf("doc.rtf" to "{\\rtf1 hello}".toByteArray())
+        )
+        val rtfKind = ZipEngine.classify(rtf)
+        assertTrue(rtfKind is ZipKind.SingleBook)
+        assertEquals(BookFormat.RTF, (rtfKind as ZipKind.SingleBook).candidate.format)
     }
 
     @Test
@@ -193,6 +215,120 @@ class EngineTest {
         )
         val meta = DocxEngine.metadata(docx, "cover.docx", tempFolder.newFolder("scratch3"), null)
         assertEquals("BBB", meta.coverFile!!.readText())
+    }
+
+    // --- FB2 metadata: title + section count + cover, no DOM parse ---
+
+    private val tinyPngBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+    private fun sampleFb2File(name: String): File {
+        val f = tempFolder.newFile(name)
+        f.writeText(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
+                "<FictionBook xmlns=\"http://www.gribuser.ru/xml/fictionbook/2.0\" " +
+                "xmlns:l=\"http://www.w3.org/1999/xlink\">\n" +
+                "<description><title-info><book-title>عنوان کتاب</book-title>" +
+                "<coverpage><image l:href=\"#cover\"/></coverpage>" +
+                "</title-info></description>\n" +
+                "<body><section><title><p>یک</p></title><p>متن</p>" +
+                "<section><title><p>تو در تو</p></title><p>زیر</p></section>" +
+                "</section>" +
+                "<section><title><p>دو</p></title><p>متن</p></section></body>\n" +
+                "<binary id=\"cover\" content-type=\"image/png\">$tinyPngBase64</binary>\n" +
+                "</FictionBook>\n",
+            Charsets.UTF_8
+        )
+        return f
+    }
+
+    @Test
+    fun fb2_metadata_readsTitleSectionCountAndCoverWithoutDom() {
+        val fb2 = sampleFb2File("book.fb2")
+        val scratch = tempFolder.newFolder("scratch-fb2")
+        val meta = Fb2Engine.metadata(fb2, "book.fb2", scratch, null)
+        assertEquals("عنوان کتاب", meta.title)
+        // Two top-level sections; the nested one is NOT counted.
+        assertEquals(2, meta.chapterCount)
+        assertTrue(meta.coverFile?.exists() == true)
+        // The scratch dir holds at most the cover: no chapter files.
+        assertEquals(
+            listOf(meta.coverFile!!.name),
+            scratch.listFiles()!!.map { it.name }
+        )
+    }
+
+    @Test
+    fun fb2_metadata_fallsBackToFileName() {
+        val f = tempFolder.newFile("noname.fb2")
+        f.writeText(
+            "<?xml version=\"1.0\"?><FictionBook>" +
+                "<description><title-info></title-info></description>" +
+                "<body><section><p>x</p></section></body></FictionBook>",
+            Charsets.UTF_8
+        )
+        val meta = Fb2Engine.metadata(f, "noname.fb2", tempFolder.newFolder("scratch-fb2b"), null)
+        assertEquals("noname", meta.title)
+        assertEquals(1, meta.chapterCount)
+        assertTrue(meta.coverFile == null)
+    }
+
+    @Test
+    fun fb2_open_parsesChaptersThroughEngine() = runBlocking {
+        val fb2 = sampleFb2File("open.fb2")
+        val outDir = tempFolder.newFolder("open-fb2")
+        val book = Fb2Engine.open(fb2, outDir, { n -> "Section $n" }, "open.fb2", null, null)
+        assertEquals("عنوان کتاب", book.title)
+        assertEquals(2, book.chapters.size)
+        assertTrue(book.coverFile?.exists() == true)
+    }
+
+    @Test
+    fun fbz_open_unwrapsZipEntryThroughEngine() = runBlocking {
+        val fbz = zipFile(
+            "book.fbz",
+            mapOf("book.fb2" to sampleFb2Bytes())
+        )
+        val outDir = tempFolder.newFolder("open-fbz")
+        val book = Fb2Engine.open(fbz, outDir, { n -> "Section $n" }, "book.fbz", null, null)
+        assertEquals("عنوان کتاب", book.title)
+        assertEquals(2, book.chapters.size)
+    }
+
+    private fun sampleFb2Bytes(): ByteArray {
+        val f = sampleFb2File("tmp.fb2")
+        return f.readBytes()
+    }
+
+    // --- RTF: parse at import (the TXT rule), title from {\info} ---
+
+    @Test
+    fun rtf_open_parsesThroughEngine() = runBlocking {
+        val rtf = tempFolder.newFile("doc.rtf")
+        rtf.writeText(
+            "{\\rtf1\\ansi{\\info{\\title RTF Title}}" +
+                "\\pard Hello \\b bold\\b0.\\par\\sect Second.\\par}",
+            Charsets.ISO_8859_1
+        )
+        val outDir = tempFolder.newFolder("open-rtf")
+        val book = RtfEngine.open(rtf, outDir, { n -> "Section $n" }, "doc.rtf", null, null)
+        assertEquals("RTF Title", book.title)
+        assertEquals(2, book.chapters.size)
+        assertTrue(book.chapters[0].file.readText().contains("<strong>bold</strong>"))
+    }
+
+    @Test
+    fun rtf_metadata_titleOnly() {
+        val rtf = tempFolder.newFile("meta.rtf")
+        rtf.writeText(
+            "{\\rtf1\\ansi{\\info{\\title RTF Title}}Hello\\par}",
+            Charsets.ISO_8859_1
+        )
+        val meta = RtfEngine.metadata(rtf, "meta.rtf", tempFolder.newFolder("scratch-rtf"), null)
+        assertEquals("RTF Title", meta.title)
+        // Unknown until the parse: null, never zero.
+        assertEquals(null, meta.chapterCount)
+        assertEquals(null, meta.coverFile)
     }
 
     // --- Text decoding: Persian 1256 wins only on Arabic evidence ---

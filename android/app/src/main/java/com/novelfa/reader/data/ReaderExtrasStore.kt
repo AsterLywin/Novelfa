@@ -86,6 +86,67 @@ internal fun serializeBookmarkPages(pages: Set<Int>): String {
 }
 
 /**
+ * One text-reader bookmark: the chapter plus the in-section
+ * fraction inside it — a [SectionPosition], not a page number.
+ *
+ * Identity decision (task 4a): the native viewer's `bm_` store
+ * keys by page Int because a PDF/CBZ page IS a fixed original
+ * page — a stable identity. In the text reader a paged-mode page
+ * number is a pagination artifact: it moves with every font /
+ * margin / spacing change, so it cannot identify a position.
+ * (chapter, fraction) is the identity the vertical restore
+ * already uses ([SectionPosition]) and survives reflow, so the
+ * text reader bookmarks that — one bookmark per chapter (the
+ * toggle's unit, like the native viewer's per-page toggle).
+ * The `bm_` page store is untouched: native bookmark semantics
+ * do not change.
+ */
+data class TextBookmark(val chapter: Int, val fraction: Float)
+
+/**
+ * Pure text-bookmark codec, unit-testable without DataStore.
+ * Format: "chapter|fraction;…" — one [SectionPosition] per
+ * entry, ';' separated like the highlight codec. Malformed
+ * entries are dropped, never guessed; the list sorts by
+ * chapter, so the dialog reads in book order.
+ */
+internal fun parseTextBookmarks(raw: String?): List<TextBookmark> {
+    if (raw.isNullOrBlank()) return emptyList()
+    return raw.split(';')
+        .mapNotNull { parseSectionPosition(it.trim()) }
+        .map { TextBookmark(it.chapter, it.fraction) }
+        .sortedBy { it.chapter }
+}
+
+internal fun serializeTextBookmarks(bookmarks: List<TextBookmark>): String {
+    return bookmarks.sortedBy { it.chapter }
+        .joinToString(";") {
+            serializeSectionPosition(SectionPosition(it.chapter, it.fraction))
+        }
+}
+
+/**
+ * Pure toggle over a bookmark list, one bookmark per chapter:
+ * toggling a chapter that already has one removes it (wherever
+ * the user now is inside that chapter); otherwise the current
+ * position is added. An invalid (chapter, fraction) is ignored
+ * — a toggle must never store a position that cannot restore.
+ */
+internal fun toggleTextBookmark(
+    bookmarks: List<TextBookmark>,
+    chapter: Int,
+    fraction: Float
+): List<TextBookmark> {
+    if (bookmarks.any { it.chapter == chapter }) {
+        return bookmarks.filterNot { it.chapter == chapter }
+    }
+    val pos = runCatching { SectionPosition(chapter, fraction) }.getOrNull()
+        ?: return bookmarks
+    return (bookmarks + TextBookmark(pos.chapter, pos.fraction))
+        .sortedBy { it.chapter }
+}
+
+/**
  * A manual crop rect, in fractions of the displayed page.
  * A plain data class on purpose — not android.graphics.RectF
  * — so the codec below stays unit-testable on the JVM (local
@@ -204,6 +265,36 @@ class ReaderExtrasStore(private val context: Context) {
         }
     }
 
+    // Text-reader bookmarks (chapter + in-section fraction, see
+    // TextBookmark above): a separate key from the native viewer's
+    // page bookmarks — the two identities must never share a
+    // codec. One bookmark per chapter; toggling a chapter that
+    // already has one removes it.
+    private fun textBookmarksKey(bookId: String) = stringPreferencesKey("tbm_$bookId")
+
+    fun textBookmarks(bookId: String): Flow<List<TextBookmark>> =
+        context.readerExtrasDataStore.data.map {
+            parseTextBookmarks(it[textBookmarksKey(bookId)])
+        }
+
+    suspend fun toggleTextBookmark(bookId: String, chapter: Int, fraction: Float) {
+        context.readerExtrasDataStore.edit { prefs ->
+            val key = textBookmarksKey(bookId)
+            prefs[key] = serializeTextBookmarks(
+                toggleTextBookmark(parseTextBookmarks(prefs[key]), chapter, fraction)
+            )
+        }
+    }
+
+    suspend fun removeTextBookmark(bookId: String, chapter: Int) {
+        context.readerExtrasDataStore.edit { prefs ->
+            val key = textBookmarksKey(bookId)
+            prefs[key] = serializeTextBookmarks(
+                parseTextBookmarks(prefs[key]).filterNot { it.chapter == chapter }
+            )
+        }
+    }
+
     // Manual crop rects (ComicScreen's CropActivity, persisted:
     // there the rect lives only as a tag on the page's view and
     // dies with the session; here it is stored, so a page the
@@ -308,6 +399,7 @@ class ReaderExtrasStore(private val context: Context) {
     suspend fun clearBook(bookId: String) {
         context.readerExtrasDataStore.edit { prefs ->
             prefs.remove(bookmarksKey(bookId))
+            prefs.remove(textBookmarksKey(bookId))
             prefs.remove(scrollOffsetKey(bookId))
             prefs.remove(highlightsKey(bookId))
             prefs.remove(zoomKey(bookId))

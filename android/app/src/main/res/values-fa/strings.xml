@@ -162,6 +162,8 @@
     <string name="import_format_word">Word</string>
     <string name="import_format_cbz">CBZ</string>
     <string name="import_format_zip">ZIP</string>
+    <string name="import_format_fb2">FB2</string>
+    <string name="import_format_rtf">RTF</string>
         <string name="import_large_files_note">برای فایل‌های بزرگ ممکن است کمی طول بکشد؛ با «انصراف» می‌توانید ایمپورت را متوقف کنید.</string>
     <string name="apply_custom_color">اعمال</string>
     <string name="invalid_hex">کد رنگ معتبر نیست</string>
@@ -369,6 +371,26 @@
     <string name="comic_bookmark">نشانک</string>
     <string name="comic_bookmarks">نشانک‌ها</string>
     <string name="comic_no_bookmarks">هنوز نشانکی نیست</string>
+    <string name="reader_bookmark_add">افزودن نشانک</string>
+    <string name="reader_bookmark_remove">حذف نشانک</string>
+    <string name="reader_bookmarks">نشانک‌ها</string>
+    <string name="reader_no_bookmarks">هنوز نشانکی نیست</string>
+    <!-- خواندن با صدا (TTS). «بخش» در فارسی همان فصل کتاب است. -->
+    <string name="tts_listen">خواندن با صدا</string>
+    <string name="tts_pause">مکث</string>
+    <string name="tts_resume">ادامه</string>
+    <string name="tts_stop">توقف</string>
+    <string name="tts_speed">سرعت</string>
+    <string name="tts_sleep_timer">تایمر خواب</string>
+    <string name="tts_sleep_off">خاموش</string>
+    <string name="tts_sleep_minutes">%1$d دقیقه</string>
+    <string name="tts_no_engine">موتور تبدیل متن به گفتار نصب نیست</string>
+    <string name="tts_missing_data">داده‌ی صوتی این زبان موجود نیست</string>
+    <string name="tts_lang_not_supported">زبان این کتاب در تبدیل متن به گفتار پشتیبانی نمی‌شود</string>
+    <string name="tts_failed">شروع خواندن با صدا ممکن نشد</string>
+    <string name="tts_empty">در این بخش متنی برای خواندن نیست</string>
+    <string name="tts_finished">خواندن این کتاب تمام شد</string>
+    <string name="tts_install_data">نصب داده‌ی صوتی</string>
     <string name="comic_capture">ذخیره‌ی صفحه</string>
     <string name="comic_page_saved">صفحه ذخیره شد: %1$s</string>
     <string name="comic_save_failed">ذخیره‌ی صفحه ممکن نشد</string>
@@ -385,6 +407,7 @@
     <string name="search_no_match">یافت نشد</string>
     <string name="search_prev">قبلی</string>
     <string name="search_next">بعدی</string>
+    <string name="pdf_search_unavailable">جستجو در این کتاب در دسترس نیست</string>
     <string name="highlight_label">هایلایت:</string>
     <string name="highlight_title">هایلایت</string>
     <string name="highlight_change_color">تغییر رنگ</string>

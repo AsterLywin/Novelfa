@@ -1,6 +1,17 @@
 package com.novelfa.reader.reader
 
+import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.IBinder
+import android.speech.tts.TextToSpeech
 import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -43,6 +54,8 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Slider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,6 +65,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -71,12 +85,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.novelfa.reader.R
@@ -84,6 +101,7 @@ import com.novelfa.reader.data.BookRepository
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.ReaderExtrasStore
+import com.novelfa.reader.data.TextBookmark
 import com.novelfa.reader.data.TextHighlight
 import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.parser.BookFormat
@@ -112,6 +130,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.util.Locale
 import androidx.compose.material3.rememberDrawerState
 import coil.compose.AsyncImage
 import com.novelfa.reader.domain.CharacterThemes
@@ -212,7 +231,190 @@ fun ReaderScreen(
         val pos = sectionTracker.lastReported ?: return
         extrasStore.setSectionPosition(bookId, pos.chapter, pos.fraction)
     }
+    // ---- Read-aloud (TTS) ----
+    // The engine lives in TtsService (foreground, mediaPlayback), so
+    // playback survives screen-off; this screen only binds it, feeds
+    // it one chapter's chunks at a time, and stops it on close.
+    // No notification-permission flow existed in the app before this:
+    // starting playback requests POST_NOTIFICATIONS on Android 13+
+    // (see startTts); a denial still plays — only the notification
+    // is hidden — and stopping stays possible from this screen.
+    var ttsService by remember { mutableStateOf<TtsService?>(null) }
+    var ttsBound by remember { mutableStateOf(false) }
+    var ttsState by remember { mutableStateOf(TtsState.IDLE) }
+    var ttsDialogOpen by remember { mutableStateOf(false) }
+    var ttsSleepMinutes by remember { mutableStateOf<Int?>(null) }
+    // Chapter the service is currently reading (may lag vm.index
+    // while the advance effect below loads the next chapter).
+    var ttsChapter by remember { mutableIntStateOf(-1) }
+    // Chapter-advance request from the service listener: the next
+    // chapter index when a chapter finishes. A LaunchedEffect
+    // (defined after gotoChapter, which it calls) consumes it. State,
+    // not a direct call, because the listener fires from the service
+    // binder thread and gotoChapter is a screen-local function.
+    var ttsAdvanceTo by remember { mutableIntStateOf(-1) }
+    // True while the advance effect drives gotoChapter: gotoChapter
+    // stops playback on a USER chapter jump, but not on this one.
+    var ttsAutoAdvancing by remember { mutableStateOf(false) }
+    // Pending queue while the service binds (binding is async).
+    var ttsPendingChunks by remember { mutableStateOf<List<String>?>(null) }
+    var ttsPendingTitle by remember { mutableStateOf("") }
+    var ttsPendingChapterTitle by remember { mutableStateOf("") }
+    val ttsSpeed by prefs.ttsSpeed.collectAsState(initial = TtsSpeed.DEFAULT)
+    val ttsListenMsg = stringResource(R.string.tts_listen)
+    val ttsNoEngineMsg = stringResource(R.string.tts_no_engine)
+    val ttsMissingDataMsg = stringResource(R.string.tts_missing_data)
+    val ttsLangNotSupportedMsg = stringResource(R.string.tts_lang_not_supported)
+    val ttsFailedMsg = stringResource(R.string.tts_failed)
+    val ttsEmptyMsg = stringResource(R.string.tts_empty)
+    val ttsFinishedMsg = stringResource(R.string.tts_finished)
+    val ttsInstallDataMsg = stringResource(R.string.tts_install_data)
+
+    fun ttsShowError(error: TtsError) {
+        scope.launch {
+            when (error) {
+                TtsError.NO_ENGINE -> snackbar.showSnackbar(ttsNoEngineMsg)
+                TtsError.MISSING_DATA -> {
+                    // The one real remedy: the system's voice-data
+                    // installer (a stock Android action, not a fake).
+                    val result = snackbar.showSnackbar(
+                        ttsMissingDataMsg, ttsInstallDataMsg
+                    )
+                    if (result == SnackbarResult.ActionPerformed) {
+                        runCatching {
+                            context.startActivity(
+                                Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA)
+                            )
+                        }
+                    }
+                }
+                TtsError.LANGUAGE_NOT_SUPPORTED ->
+                    snackbar.showSnackbar(ttsLangNotSupportedMsg)
+                else -> snackbar.showSnackbar(ttsFailedMsg)
+            }
+        }
+    }
+
+    val ttsConnection = remember {
+        object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                val service = (binder as? TtsService.LocalBinder)?.service() ?: return
+                service.listener = object : TtsService.TtsListener {
+                    override fun onStateChanged(state: TtsState) {
+                        ttsState = state
+                    }
+
+                    override fun onChapterFinished() {
+                        ttsAdvanceTo = ttsChapter + 1
+                    }
+
+                    override fun onError(error: TtsError) {
+                        ttsState = TtsState.IDLE
+                        ttsShowError(error)
+                    }
+                }
+                ttsService = service
+                ttsBound = true
+                val pending = ttsPendingChunks
+                if (pending != null) {
+                    ttsPendingChunks = null
+                    service.startReading(
+                        pending, vm?.isEnglish == true, ttsSpeed,
+                        ttsPendingTitle, ttsPendingChapterTitle
+                    )
+                }
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                ttsService = null
+                ttsBound = false
+                ttsState = TtsState.IDLE
+            }
+        }
+    }
+
+    fun startTtsNow() {
+        val v = vm ?: return
+        scope.launch {
+            val chunks = v.ttsChunks(v.index)
+            if (chunks.isEmpty()) {
+                snackbar.showSnackbar(ttsEmptyMsg)
+                return@launch
+            }
+            val title = runCatching {
+                withContext(Dispatchers.IO) { repo.book(bookId)?.title }
+            }.getOrNull() ?: ""
+            ttsChapter = v.index
+            val bound = ttsService
+            if (bound != null) {
+                bound.startReading(
+                    chunks, v.isEnglish, ttsSpeed,
+                    title, v.chapterTitle(v.index)
+                )
+            } else {
+                ttsPendingChunks = chunks
+                ttsPendingTitle = title
+                ttsPendingChapterTitle = v.chapterTitle(v.index)
+                context.startService(TtsService.intent(context))
+                context.bindService(
+                    TtsService.intent(context), ttsConnection,
+                    Context.BIND_AUTO_CREATE
+                )
+            }
+        }
+    }
+
+    val ttsPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        // Granted or denied, playback starts: on Android 13+ a denial
+        // only hides the foreground notification, and the reader's own
+        // controls can still stop playback.
+        startTtsNow()
+    }
+
+    fun startTts() {
+        if (ttsState == TtsState.PLAYING || ttsState == TtsState.PAUSED) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ttsPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            startTtsNow()
+        }
+    }
+
+    fun stopTts() {
+        ttsPendingChunks = null
+        ttsSleepMinutes = null
+        ttsAdvanceTo = -1
+        ttsService?.stop()
+        if (ttsBound) {
+            runCatching { context.unbindService(ttsConnection) }
+            ttsBound = false
+        }
+        if (ttsService != null) {
+            context.stopService(TtsService.intent(context))
+        }
+        ttsService = null
+        ttsState = TtsState.IDLE
+        ttsChapter = -1
+    }
+
+    fun ttsToggle() {
+        when (ttsState) {
+            TtsState.PLAYING -> ttsService?.pause()
+            TtsState.PAUSED -> ttsService?.resume()
+            else -> startTts()
+        }
+    }
+
     fun closeReader() {
+        // Read-aloud belongs to this reader: closing it stops
+        // playback (the service is not left speaking to nobody).
+        stopTts()
         scope.launch {
             runCatching { vm?.xpFlush() }
             // The paged anchor is throttled (500ms) on turns; a close
@@ -232,6 +434,9 @@ fun ReaderScreen(
                 runCatching { v.flushPagedAnchor() }
                 runCatching { flushSectionPosition() }
             }
+            // System-back/gesture exit: same rule as closeReader —
+            // the service stops with the reader.
+            stopTts()
         }
     }
     var loadError by remember { mutableStateOf(false) }
@@ -325,6 +530,17 @@ fun ReaderScreen(
     // Exact match to land on after a chapter jump from a results
     // row (index inside that chapter); null means the first match.
     var pendingSearchIndex by remember { mutableStateOf<Int?>(null) }
+    // Text-reader bookmarks (chapter + in-section fraction, see
+    // TextBookmark): the toggle in the top bar marks the current
+    // chapter, the list lives in the section drawer. One bookmark
+    // per chapter — toggling a chapter that already has one
+    // removes it.
+    val textBookmarks by extrasStore.textBookmarks(bookId).collectAsState(initial = emptyList())
+    var bookmarksOpen by remember { mutableStateOf(false) }
+    // Bookmark to land on after its chapter loads (set by
+    // jumpToBookmark, consumed and cleared by onPageFinished);
+    // a jump inside the already-loaded document never sets it.
+    var pendingBookmarkPos by remember { mutableStateOf<SectionPosition?>(null) }
     var selectionActive by remember { mutableStateOf(false) }
     var tappedHighlightId by remember { mutableStateOf<String?>(null) }
 
@@ -445,6 +661,92 @@ fun ReaderScreen(
             if (results.any { it.chapter == v.index }) {
                 runInChapterSearch(q, jumpToFirst = false)
             }
+        }
+    }
+
+    /**
+     * The current reading position as a bookmark identity
+     * (chapter + fraction): vertical mode reads the scroll
+     * reporter's latest position (chapter top when nothing has
+     * been reported yet); paged mode derives the fraction from
+     * the current paged page — (page - 1) / pageCount, the top
+     * of that page inside its chapter. Null only before the book
+     * is open.
+     */
+    fun currentBookmarkPosition(): SectionPosition? {
+        val v = vm ?: return null
+        return if (v.readingMode == ReadingMode.CONTINUOUS_VERTICAL) {
+            sectionTracker.lastReported ?: SectionPosition(v.index, 0f)
+        } else {
+            val frac = if (pagedPageCount > 0 && pagedPage in 1..pagedPageCount) {
+                (pagedPage - 1).toFloat() / pagedPageCount
+            } else {
+                0f
+            }
+            SectionPosition(v.index, frac)
+        }
+    }
+
+    fun toggleCurrentBookmark() {
+        val pos = currentBookmarkPosition() ?: return
+        scope.launch {
+            extrasStore.toggleTextBookmark(bookId, pos.chapter, pos.fraction)
+        }
+    }
+
+    /**
+     * Asks the live pager to show the page the fraction names
+     * (0-based): the pager computes the count itself, so this
+     * works while it is still building (rdrGoToPage's building
+     * branch shows directly) and after it is ready alike.
+     */
+    fun goToBookmarkPage(fraction: Float) {
+        val wv = webView ?: return
+        val frac = "%.4f".format(Locale.US, fraction.coerceIn(0f, 0.999f))
+        wv.evaluateJavascript(
+            "(function(){try{if(window.rdrPageCount&&window.rdrGoToPage)" +
+                "{var c=window.rdrPageCount();if(c>0)" +
+                "{window.rdrGoToPage(Math.min(c-1,Math.floor($frac*c)));return 'ok';}}" +
+                "return 'no';}catch(e){return 'err';}})();",
+            null
+        )
+    }
+
+    /**
+     * Jumps to a bookmark: inside the already-loaded document it
+     * scrolls / turns in place (vertical: the chapter is in the
+     * stitched window; paged: it is the open chapter), otherwise
+     * the chapter loads and onPageFinished lands on the bookmark
+     * via [pendingBookmarkPos]. A failed load leaves no pending
+     * position behind — a stale one would fire on the next
+     * unrelated load of that chapter.
+     */
+    fun jumpToBookmark(bm: TextBookmark) {
+        val v = vm ?: return
+        bookmarksOpen = false
+        scope.launch {
+            // The dialog opens from the drawer: a jump must close
+            // the drawer too, or the landing stays hidden behind it.
+            drawerState.close()
+            val pos = SectionPosition(bm.chapter, bm.fraction)
+            if (v.readingMode == ReadingMode.CONTINUOUS_VERTICAL &&
+                bm.chapter in v.contFirst..v.contLast
+            ) {
+                // The saved position is what a height change
+                // re-applies: the user IS at the bookmark now, so
+                // it replaces the stale one until the next scroll
+                // report overwrites it.
+                sectionTracker.saved = pos
+                applySectionRestore(v.docGen, pos)
+                return@launch
+            }
+            if (v.readingMode == ReadingMode.PAGED_HORIZONTAL && bm.chapter == v.index) {
+                goToBookmarkPage(bm.fraction)
+                return@launch
+            }
+            pendingBookmarkPos = pos
+            gotoChapter(v, bm.chapter)
+            if (v.index != bm.chapter) pendingBookmarkPos = null
         }
     }
 
@@ -812,6 +1114,12 @@ fun ReaderScreen(
     }
 
     suspend fun gotoChapter(v: ReaderViewModel, i: Int) {
+        // A manual chapter jump ends read-aloud of the old chapter
+        // (its chunks belong to that chapter). The TTS advance effect
+        // below sets ttsAutoAdvancing, so its own jumps are exempt.
+        if (i != v.index && !ttsAutoAdvancing) {
+            stopTts()
+        }
         // A real chapter change re-arms pager recovery; a same-chapter
         // reload (the recovery itself, a mode switch) must not, or a
         // permanently torn-down chapter would reload-loop on every tap.
@@ -835,6 +1143,55 @@ fun ReaderScreen(
             rev++
         } else {
             showVmError(v)
+        }
+    }
+
+    // Read-aloud chapter advance: the service reports a finished
+    // chapter by setting ttsAdvanceTo (see the TTS listener above);
+    // this effect is the only place that calls gotoChapter for TTS.
+    // It loads the next chapter, feeds its chunks to the service and
+    // keeps reading — or stops at the book's end and says so.
+    LaunchedEffect(ttsAdvanceTo) {
+        val next = ttsAdvanceTo
+        if (next < 0) return@LaunchedEffect
+        ttsAdvanceTo = -1
+        val v = vm ?: return@LaunchedEffect
+        val service = ttsService ?: run {
+            ttsState = TtsState.IDLE
+            return@LaunchedEffect
+        }
+        val decision = TtsPlaybackPlan.afterChapterEnd(ttsChapter, v.chapters.size)
+        when (decision) {
+            is TtsPlaybackPlan.Next.Finished -> {
+                stopTts()
+                snackbar.showSnackbar(ttsFinishedMsg)
+            }
+            is TtsPlaybackPlan.Next.Chapter -> {
+                ttsAutoAdvancing = true
+                try {
+                    gotoChapter(v, decision.index)
+                    val chunks = v.ttsChunks(decision.index)
+                    if (chunks.isEmpty()) {
+                        // An empty chapter (cover / image-only): skip
+                        // ahead instead of going silent — the next
+                        // finish advances again, or ends the book.
+                        ttsChapter = decision.index
+                        ttsAdvanceTo = decision.index + 1
+                        return@LaunchedEffect
+                    }
+                    ttsChapter = decision.index
+                    service.startReading(
+                        chunks, v.isEnglish, ttsSpeed,
+                        service.bookTitle, v.chapterTitle(decision.index)
+                    )
+                } finally {
+                    ttsAutoAdvancing = false
+                }
+            }
+            is TtsPlaybackPlan.Next.Chunk -> {
+                // Unreachable: chunkIndex is past the last chunk by
+                // construction (see the afterChapter call above).
+            }
         }
     }
 
@@ -1520,6 +1877,33 @@ fun ReaderScreen(
                         )
                     }
                 }
+                // Bookmarks entry: the list lives in a dialog (same
+                // shape as the native viewer's), opened from here —
+                // the drawer is where section navigation lives, and
+                // the top bar already carries the toggle. The count
+                // shows at a glance whether there is anything to open.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { bookmarksOpen = true }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AppIcon(AppIconKind.Bookmark, tint = LocalContentColor.current, size = 18.dp)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = stringResource(R.string.reader_bookmarks),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    if (textBookmarks.isNotEmpty()) {
+                        Text(
+                            text = textBookmarks.size.toString(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 val v = vm
                 if (v == null) {
                     Text(
@@ -1643,6 +2027,13 @@ fun ReaderScreen(
                 val v = vm
                 @Suppress("UNUSED_EXPRESSION")
                 rev
+                val bookmarked = v?.index?.let { idx ->
+                    textBookmarks.any { it.chapter == idx }
+                } == true
+                val bookmarkDescription = stringResource(
+                    if (bookmarked) R.string.reader_bookmark_remove
+                    else R.string.reader_bookmark_add
+                )
                 TopAppBar(
                     // No title text: with six action icons in the bar
                     // the "section X of Y" label was squeezed into an
@@ -1673,6 +2064,57 @@ fun ReaderScreen(
                         }
                         TextButton(onClick = { searchOpen = true }, enabled = vm != null) {
                             AppIcon(AppIconKind.Search, tint = LocalContentColor.current, size = 18.dp)
+                        }
+                        // Read-aloud (TTS): tap toggles play/pause for
+                        // the current chapter; long-press opens the
+                        // speed + sleep-timer dialog. The Play icon is
+                        // tinted while speaking (the app icon set has
+                        // no Pause icon, so the dialog's text buttons
+                        // name the pause/resume actions instead).
+                        Box(
+                            modifier = Modifier
+                                .combinedClickable(
+                                    onClick = { ttsToggle() },
+                                    onLongClick = { if (vm != null) ttsDialogOpen = true }
+                                )
+                                .semantics { contentDescription = ttsListenMsg }
+                                .padding(10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AppIcon(
+                                AppIconKind.Play,
+                                tint = if (ttsState == TtsState.PLAYING) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    LocalContentColor.current
+                                },
+                                size = 18.dp
+                            )
+                        }
+                        // Bookmark toggle for the current chapter
+                        // (native viewer parity: filled when this
+                        // chapter is bookmarked, outline+plus
+                        // otherwise). One tap toggles; the list lives
+                        // in the section drawer. The description
+                        // names the action the tap will do, like the
+                        // viewer's bookmark button.
+                        TextButton(
+                            onClick = { toggleCurrentBookmark() },
+                            enabled = vm != null,
+                            modifier = Modifier.semantics {
+                                contentDescription = bookmarkDescription
+                            }
+                        ) {
+                            AppIcon(
+                                if (bookmarked) AppIconKind.Bookmark
+                                else AppIconKind.BookmarkAdd,
+                                tint = if (bookmarked) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    LocalContentColor.current
+                                },
+                                size = 18.dp
+                            )
                         }
                         TextButton(onClick = { fullscreenUi = true }, enabled = vm != null) {
                             AppIcon(AppIconKind.Fullscreen, tint = LocalContentColor.current, size = 17.dp)
@@ -1917,6 +2359,22 @@ fun ReaderScreen(
                                 pendingSearchIndex = null
                                 runInChapterSearch(q, idx ?: 0)
                             }
+                            // Bookmark landing (paged mode): the chapter
+                            // just loaded, so turn to the page the
+                            // bookmark's fraction names. The chapter
+                            // check drops a stale pending (a failed
+                            // load, or a load that raced a newer one)
+                            // instead of turning a different chapter;
+                            // in vertical mode the pending is left for
+                            // the restore block below.
+                            pendingBookmarkPos?.let { pos ->
+                                if (modeNow == ReadingMode.PAGED_HORIZONTAL) {
+                                    pendingBookmarkPos = null
+                                    if (vm?.index == pos.chapter) {
+                                        goToBookmarkPage(pos.fraction)
+                                    }
+                                }
+                            }
                             // Text-point restore for a same-chapter
                             // reload: hand the saved anchor to the
                             // pager. At onPageFinished the pager is
@@ -1962,12 +2420,29 @@ fun ReaderScreen(
                             // never a wrong chapter.
                             val vv = vm
                             if (modeNow == ReadingMode.CONTINUOUS_VERTICAL && vv != null) {
-                                val pos = sectionTracker.saved
-                                if (pos != null && sectionTracker.restoredGen != vv.docGen &&
-                                    sectionTracker.scrolledGen != vv.docGen
-                                ) {
-                                    sectionTracker.restoredGen = vv.docGen
-                                    applySectionRestore(vv.docGen, pos)
+                                val bmPos = pendingBookmarkPos
+                                if (bmPos != null) {
+                                    // Bookmark landing beats the saved
+                                    // reading position: the tap is an
+                                    // explicit jump, not a resume — so,
+                                    // unlike the saved restore below, it
+                                    // does not yield to a scroll during
+                                    // the load. A stale pending (chapter
+                                    // mismatch) is dropped, not applied.
+                                    pendingBookmarkPos = null
+                                    if (bmPos.chapter == vv.index) {
+                                        sectionTracker.restoredGen = vv.docGen
+                                        sectionTracker.saved = bmPos
+                                        applySectionRestore(vv.docGen, bmPos)
+                                    }
+                                } else {
+                                    val pos = sectionTracker.saved
+                                    if (pos != null && sectionTracker.restoredGen != vv.docGen &&
+                                        sectionTracker.scrolledGen != vv.docGen
+                                    ) {
+                                        sectionTracker.restoredGen = vv.docGen
+                                        applySectionRestore(vv.docGen, pos)
+                                    }
                                 }
                             }
                         },
@@ -2363,6 +2838,82 @@ fun ReaderScreen(
         )
     }
 
+    // Bookmarks: the per-chapter marks from the top-bar toggle,
+    // same dialog shape as the native viewer's list. Tapping a
+    // row jumps to that position (jumpToBookmark closes the
+    // drawer too); the trash button deletes that one bookmark.
+    // The current chapter's row is accented, like the drawer.
+    // An empty list states it plainly instead of showing a
+    // blank dialog.
+    if (bookmarksOpen) {
+        AlertDialog(
+            onDismissRequest = { bookmarksOpen = false },
+            title = { Text(stringResource(R.string.reader_bookmarks)) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (textBookmarks.isEmpty()) {
+                        Text(stringResource(R.string.reader_no_bookmarks))
+                    } else {
+                        textBookmarks.forEach { bm ->
+                            val isCurrent = bm.chapter == vm?.index
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { jumpToBookmark(bm) }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = vm?.chapters?.getOrNull(bm.chapter)?.title
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?: stringResource(
+                                            R.string.chapter_fallback, bm.chapter + 1
+                                        ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = if (isCurrent) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        LocalContentColor.current
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            extrasStore.removeTextBookmark(bookId, bm.chapter)
+                                        }
+                                    },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = stringResource(
+                                            R.string.reader_bookmark_remove
+                                        )
+                                    }
+                                ) {
+                                    AppIcon(
+                                        AppIconKind.Trash,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        size = 18.dp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { bookmarksOpen = false }) {
+                    Text(stringResource(R.string.close))
+                }
+            }
+        )
+    }
+
     if (spacingOpen) {
         val v = vm
         if (v != null) {
@@ -2418,6 +2969,30 @@ fun ReaderScreen(
 
     if (supportOpen) {
         SupportDialog(onDismiss = { supportOpen = false })
+    }
+
+    // Read-aloud controls: play/pause + stop, speed (persisted) and
+    // a session-only sleep timer. Opened by long-pressing the top-bar
+    // play button (a tap there toggles play/pause directly).
+    if (ttsDialogOpen) {
+        TtsDialog(
+            state = ttsState,
+            speed = ttsSpeed,
+            sleepMinutes = ttsSleepMinutes,
+            onToggle = { ttsToggle() },
+            onStop = { stopTts() },
+            onSpeedChange = { newSpeed ->
+                scope.launch {
+                    prefs.setTtsSpeed(newSpeed)
+                    ttsService?.setSpeed(newSpeed)
+                }
+            },
+            onSleepChange = { minutes ->
+                ttsSleepMinutes = minutes
+                ttsService?.setSleepTimerMinutes(minutes)
+            },
+            onDismiss = { ttsDialogOpen = false }
+        )
     }
 
     // Archive choice for a ZIP holding several books (ReadEra's
@@ -2723,3 +3298,96 @@ fun ReaderScreen(
         } // Close particle Box
 } // Close ReaderScr
 
+
+/**
+ * Read-aloud (TTS) dialog: play/pause + stop, playback speed and a
+ * sleep timer. Speed is 0.5x–2.0x in 0.25x steps (persisted in
+ * PrefsStore on release, not on every drag tick); the timer is
+ * session-only and stops playback when it fires (Off clears it).
+ * No paragraph highlight: the reader document has no per-paragraph
+ * ids to target (only .rdr-chap[data-idx] and the pager's internal
+ * anchors), and adding them would be a HtmlBuilder rework — the
+ * dialog says nothing about highlighting, and playback works
+ * without it.
+ */
+@Composable
+private fun TtsDialog(
+    state: TtsState,
+    speed: Float,
+    sleepMinutes: Int?,
+    onToggle: () -> Unit,
+    onStop: () -> Unit,
+    onSpeedChange: (Float) -> Unit,
+    onSleepChange: (Int?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var sliderSpeed by remember { mutableFloatStateOf(speed) }
+    val sleepOptions: List<Pair<String, Int?>> = listOf(
+        stringResource(R.string.tts_sleep_off) to null,
+        stringResource(R.string.tts_sleep_minutes, 15) to 15,
+        stringResource(R.string.tts_sleep_minutes, 30) to 30,
+        stringResource(R.string.tts_sleep_minutes, 60) to 60
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.close))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { onStop(); onDismiss() }) {
+                Text(stringResource(R.string.tts_stop))
+            }
+        },
+        title = { Text(stringResource(R.string.tts_listen)) },
+        text = {
+            Column {
+                Row {
+                    TextButton(onClick = onToggle) {
+                        Text(
+                            stringResource(
+                                if (state == TtsState.PLAYING) R.string.tts_pause
+                                else R.string.tts_resume
+                            )
+                        )
+                    }
+                }
+                Text(stringResource(R.string.tts_speed) + ": " + formatTtsSpeed(sliderSpeed))
+                Slider(
+                    value = sliderSpeed,
+                    onValueChange = { sliderSpeed = it },
+                    onValueChangeFinished = { onSpeedChange(sliderSpeed) },
+                    valueRange = TtsSpeed.MIN..TtsSpeed.MAX,
+                    steps = 5
+                )
+                Text(stringResource(R.string.tts_sleep_timer))
+                Row {
+                    for ((label, minutes) in sleepOptions) {
+                        TextButton(onClick = { onSleepChange(minutes) }) {
+                            Text(
+                                label,
+                                color = if (sleepMinutes == minutes) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    LocalContentColor.current
+                                },
+                                fontWeight = if (sleepMinutes == minutes) {
+                                    FontWeight.Bold
+                                } else {
+                                    FontWeight.Normal
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    )
+}
+
+/** "1.25×" / "1×" / "0.5×": the × is a unit glyph, not a word. */
+private fun formatTtsSpeed(speed: Float): String {
+    val text = "%.2f".format(Locale.US, speed).trimEnd('0').trimEnd('.')
+    return text + "×"
+}
