@@ -470,6 +470,16 @@ fun ReaderScreen(
     // chapter, and refreshed on page-finish and on every turn.
     var pagedPage by remember { mutableIntStateOf(0) }
     var pagedPageCount by remember { mutableIntStateOf(0) }
+    // Vertical-mode page indicator: the current screen and the
+    // loaded document's screen count, from scroll geometry (see
+    // the onScroll NOTE below — this is legitimate here because
+    // the vertical document IS a flow document; the masquerade
+    // was a torn PAGED document feeding the PAGED pill). 0/0 =
+    // unknown. The total grows as chapters append (the document
+    // only holds the chapters loaded so far); the book-wide
+    // count is phase 2's job.
+    var verticalPage by remember { mutableIntStateOf(0) }
+    var verticalPageCount by remember { mutableIntStateOf(0) }
     // True once the live document has finished loading. A turn that
     // finds rdrTurn missing WHILE the page is still loading must wait
     // (like a 'busy' turn), not recover: recovery reloads the chapter,
@@ -1200,6 +1210,17 @@ fun ReaderScreen(
                     if (parts[2].isNotEmpty()) lastPagerError = parts[2]
                     return@evaluateJavascript
                 }
+                if (state == "building") {
+                    // Same final-only rule as report(): while the
+                    // pager is still building, rdrPageCount is a
+                    // growing partial total, not the chapter's page
+                    // count — adopting it would hand the pill (and
+                    // the bookmark fraction below) a climbing total.
+                    // The finished build reports the true total
+                    // through onPagerReport; the "preparing" pill
+                    // stays until then.
+                    return@evaluateJavascript
+                }
                 val nums = parts[0].split("/")
                 if (nums.size == 2) {
                     val p = nums[0].toIntOrNull()
@@ -1447,6 +1468,26 @@ fun ReaderScreen(
                 // they were pages. Page numbers now come only from
                 // onPagerReport below, which a flow document can
                 // never fire.
+                // Vertical-mode page pill (the NOTE above is about
+                // the PAGED pill): in vertical mode the document
+                // is a flow document by design, so screens of
+                // scroll are legitimate page numbers — ReadEra's
+                // scroll mode counts the same way. Gated on the
+                // reading MODE, never on the torn flag: a torn
+                // paged document must never feed any pill.
+                if (v.readingMode == ReadingMode.CONTINUOUS_VERTICAL) {
+                    val wv = webView
+                    val density = context.resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
+                    val viewportCssH = if (wv != null && wv.height > 0) wv.height / density else 0f
+                    if (viewportCssH > 0f && h > 0) {
+                        val page = (t / viewportCssH).toInt() + 1
+                        val total = kotlin.math.ceil(h / viewportCssH).toInt().coerceAtLeast(1)
+                        if (page in 1..total) {
+                            verticalPage = page
+                            verticalPageCount = total
+                        }
+                    }
+                }
                 applyIncrementalJs(v, last, first)
                 rev++
                 // Vertical in-section tracking (see SectionPosition.kt):
@@ -2333,6 +2374,8 @@ fun ReaderScreen(
                             pagerTornDown = false
                             pagedPage = 0
                             pagedPageCount = 0
+                            verticalPage = 0
+                            verticalPageCount = 0
                             // A new document's pager has no error yet:
                             // the previous document's teardown reason
                             // must not linger into the new document's
@@ -2551,6 +2594,26 @@ fun ReaderScreen(
                 ) {
                     Text(
                         text = stringResource(R.string.pager_building),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 8.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                            )
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+                // Vertical mode: same pill, from scroll screens (see
+                // the onScroll computation). Hidden while the counts
+                // are unknown and in fullscreen, like the paged pill.
+                if (modeNow == ReadingMode.CONTINUOUS_VERTICAL && !fullscreenUi &&
+                    verticalPageCount > 0 && verticalPage in 1..verticalPageCount
+                ) {
+                    Text(
+                        text = stringResource(R.string.page_indicator, verticalPage, verticalPageCount),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier

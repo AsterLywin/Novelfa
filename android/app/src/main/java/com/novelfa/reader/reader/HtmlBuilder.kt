@@ -1228,8 +1228,16 @@ object HtmlBuilder {
             // and a torn document's scroll geometry (screens tall)
             // used to masquerade as page numbers in the native pill
             // once the native torn flag was missed.
+            // The total is final-only: during a progressive build
+            // pages.length is still growing (refreshBuiltGeometry
+            // shows each slice as it finalizes), so a report sent
+            // mid-build would hand the pill a climbing total — the
+            // count looking like it cannot identify the chapter.
+            // While building, send total 0: the native side drops
+            // it and keeps the "preparing" pill until onBuilt
+            // shows the finished strip and reports the true total.
             if (window.Android && Android.onPagerReport) {
-                Android.onPagerReport(cur + 1, pages.length);
+                Android.onPagerReport(cur + 1, building ? 0 : pages.length);
             }
         } catch (e) { }
     }
