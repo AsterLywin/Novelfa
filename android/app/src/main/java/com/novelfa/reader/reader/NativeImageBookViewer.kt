@@ -115,6 +115,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import android.view.ViewTreeObserver
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.unit.dp
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookRepository
@@ -1367,6 +1371,41 @@ internal fun NativeImageBookViewer(
             if (!tapSuppress) chromeVisible = !chromeVisible
             tapSuppress = false
             pendingTapMs = null
+        }
+    }
+    // System bars follow the chrome: hiding the app's bars also
+    // hides the status bar and the navigation buttons, and showing
+    // them brings the system bars back. Same recipe as the text
+    // reader (ReaderScreen): the transient behavior is the
+    // load-bearing half — without it the platform default shows
+    // the bars again on the first touch and leaves them up, so the
+    // hide would only last until the next tap. The focus listener
+    // re-applies the hide when the window regains focus
+    // (notification shade, recents). MainActivity already calls
+    // enableEdgeToEdge, so hiding resizes nothing. onDispose
+    // restores the bars when the viewer closes.
+    val activity = context as? android.app.Activity
+    DisposableEffect(chromeVisible) {
+        val window = activity?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        val decorView = window?.decorView
+        val focusListener = ViewTreeObserver.OnWindowFocusChangeListener { hasFocus ->
+            if (hasFocus && !chromeVisible) {
+                controller?.hide(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        decorView?.viewTreeObserver?.addOnWindowFocusChangeListener(focusListener)
+        if (!chromeVisible) {
+            controller?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller?.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose {
+            decorView?.viewTreeObserver?.removeOnWindowFocusChangeListener(focusListener)
+            controller?.show(WindowInsetsCompat.Type.systemBars())
         }
     }
     // Tap on a page itself toggles the chrome, ComicScreen-style:
