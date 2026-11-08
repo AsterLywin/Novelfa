@@ -2485,7 +2485,14 @@ fun ReaderScreen(
                             if (v != null && v.readingMode == ReadingMode.PAGED_HORIZONTAL) {
                                 turnPage(v, forward = v.isEnglish)
                             }
-                        }
+                        },
+                        // Middle tap (both modes, native-viewer parity):
+                        // toggles fullscreen — the top/bottom bars and
+                        // the system bars hide or come back, exactly as
+                        // the top-bar fullscreen button does. The
+                        // floating exit button stays as the other way
+                        // out while fullscreen is on.
+                        onTapMiddle = { fullscreenUi = !fullscreenUi }
                     )
                 }
                 // Paged mode: ComicScreen-style page-move preview,

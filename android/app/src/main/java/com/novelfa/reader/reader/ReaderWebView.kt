@@ -181,6 +181,13 @@ fun ReaderWebView(
     // WebView needs it to start its own scroll sequence for tall pages.
     onTapLeftEdge: () -> Unit = {},
     onTapRightEdge: () -> Unit = {},
+    // Middle tap (both modes): toggles fullscreen. The caller flips
+    // its fullscreen state; links, images and highlights keep owning
+    // their tap (hit-tested first below), and a live text selection
+    // keeps owning the gesture, so a middle tap never steals a link
+    // or clears a selection. Native-viewer parity: the comic viewer
+    // hides/shows its bars on a page tap the same way.
+    onTapMiddle: () -> Unit = {},
     // Paged (horizontal) mode: the page turn is fully programmatic
     // (rdrTurn); the fling must be consumed so the WebView doesn't also
     // fling-scroll natively and fight the turn animation.
@@ -208,6 +215,7 @@ fun ReaderWebView(
     val pagedNow = rememberUpdatedState(paged)
     val onImageTapNow = rememberUpdatedState(onImageTap)
     val onHighlightTapNow = rememberUpdatedState(onHighlightTap)
+    val onTapMiddleNow = rememberUpdatedState(onTapMiddle)
     val selectionActiveNow = rememberUpdatedState(selectionActive)
     // Tracks the mode the WebView settings below were last applied for.
     // These settings only take full effect on page load / when changed,
@@ -322,23 +330,30 @@ fun ReaderWebView(
                         }
 
                         /**
-                         * Native paged-mode tap. Fires only in paged mode;
-                         * in vertical mode it returns false so the WebView
-                         * keeps its own tap/click handling (and LINK_JS).
-                         * In paged mode this consumes ACTION_UP, so the
-                         * WebView never fires its own document click for
-                         * the tap — this is the tap path. (ACTION_DOWN is
-                         * deliberately given to the WebView too, so its
-                         * tall-page scrolling can start; see the listener
-                         * below. That does not re-enable JS tap zones,
-                         * because UP is still consumed here.)
+                         * Native tap. In paged mode this consumes
+                         * ACTION_UP, so the WebView never fires its own
+                         * document click for the tap — this is the tap
+                         * path. (ACTION_DOWN is deliberately given to
+                         * the WebView too, so its tall-page scrolling
+                         * can start; see the listener below. That does
+                         * not re-enable JS tap zones, because UP is
+                         * still consumed here.) In vertical mode it
+                         * returns false, so the WebView keeps its own
+                         * tap/click handling (and LINK_JS) — the hit
+                         * test below only reads the tap point, and only
+                         * a middle tap on plain text gains anything
+                         * (the fullscreen toggle).
                          * Link safety: the tap point is hit-tested in JS
                          * first (CSS coords = view px / density, paged
-                         * scale is 1). A link tap gets a synthetic
-                         * click on the hit element, which LINK_JS
-                         * intercepts exactly like a real tap; a non-link
-                         * tap on an outer quarter turns, a middle tap
-                         * does nothing (same zones as the JS tap code).
+                         * scale is 1). In paged mode a link tap gets a
+                         * synthetic click on the hit element, which
+                         * LINK_JS intercepts exactly like a real tap; a
+                         * non-link tap on an outer quarter turns, a
+                         * middle tap toggles fullscreen (same zones as
+                         * the JS tap code, except the middle now acts).
+                         * In vertical mode links, images and highlights
+                         * stay native — only a middle tap that hit none
+                         * of them toggles fullscreen.
                          */
                         override fun onSingleTapUp(e: MotionEvent): Boolean {
                             // A live text selection owns the gesture:
@@ -347,7 +362,7 @@ fun ReaderWebView(
                             // instead of turning the page and sending
                             // the CANCEL that would kill the selection.
                             if (selectionActiveNow.value) return false
-                            if (!pagedNow.value) return false
+                            val paged = pagedNow.value
                             val w = host.width
                             if (w <= 0) {
                                 Log.d("NovelfaTouch", "tap ignored w=0")
@@ -364,9 +379,9 @@ fun ReaderWebView(
                             Log.d("NovelfaTouch", "tap x=${e.x} w=$w zone=$zone css=$cssX,$cssY")
                             // The listener deliberately does NOT consume
                             // ACTION_DOWN (tall-page scrolling needs
-                            // it), and this tap consumes ACTION_UP — so
-                            // without a cancel the WebView is left with
-                            // a DOWN and no UP, and its long-press
+                            // it), and a paged tap consumes ACTION_UP —
+                            // so without a cancel the WebView is left
+                            // with a DOWN and no UP, and its long-press
                             // timer turns that dangling gesture into a
                             // text SELECTION on the page the turn just
                             // revealed (same coordinates, new content).
@@ -376,13 +391,18 @@ fun ReaderWebView(
                             // gesture cleanly; the turn itself is
                             // programmatic and unaffected. Swipes never
                             // showed this because their UP reaches the
-                            // WebView normally.
-                            val cancel = MotionEvent.obtain(
-                                e.downTime, e.eventTime,
-                                MotionEvent.ACTION_CANCEL, e.x, e.y, 0
-                            )
-                            host.onTouchEvent(cancel)
-                            cancel.recycle()
+                            // WebView normally. Vertical mode skips the
+                            // CANCEL: its UP is not consumed (the tap
+                            // returns false below), so the WebView's
+                            // gesture ends normally on its own.
+                            if (paged) {
+                                val cancel = MotionEvent.obtain(
+                                    e.downTime, e.eventTime,
+                                    MotionEvent.ACTION_CANCEL, e.x, e.y, 0
+                                )
+                                host.onTouchEvent(cancel)
+                                cancel.recycle()
+                            }
                             host.evaluateJavascript(
                                 "(function(){var el=document.elementFromPoint($cssX,$cssY);" +
                                     "if(!el) return 'none';" +
@@ -401,8 +421,23 @@ fun ReaderWebView(
                                     "return a?'link':'notlink';})();"
                             ) { result ->
                                 val hit = result?.trim()?.trim { it == '"' } ?: ""
-                                Log.d("NovelfaTouch", "tap hit=$hit zone=$zone")
-                                if (hit.startsWith("image:")) {
+                                Log.d("NovelfaTouch", "tap hit=$hit zone=$zone paged=$paged")
+                                if (!paged) {
+                                    // Vertical mode: the WebView handles
+                                    // links, images and highlights
+                                    // natively (this tap was not
+                                    // consumed), so only a middle tap
+                                    // that hit none of them toggles
+                                    // fullscreen. Left/right taps stay
+                                    // inert — there is no page to turn
+                                    // to in a scrolling document.
+                                    val ownsTap = hit == "link" ||
+                                        hit.startsWith("image:") ||
+                                        hit.startsWith("hl:")
+                                    if (zone == "middle" && !ownsTap) {
+                                        onTapMiddleNow.value()
+                                    }
+                                } else if (hit.startsWith("image:")) {
                                     val src = hit.removePrefix("image:")
                                     if (src.isNotEmpty()) onImageTapNow.value(src)
                                 } else if (hit.startsWith("hl:")) {
@@ -421,10 +456,14 @@ fun ReaderWebView(
                                     onTapLeftEdge()
                                 } else if (zone == "right") {
                                     onTapRightEdge()
+                                } else if (zone == "middle") {
+                                    onTapMiddleNow.value()
                                 }
-                                // Middle non-link taps are inert by design.
                             }
-                            return true
+                            // Paged taps are consumed (the WebView's own
+                            // click must not fire); vertical taps are
+                            // not — the WebView handles them natively.
+                            return paged
                         }
                     })
                 setOnTouchListener { _, event ->
