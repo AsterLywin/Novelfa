@@ -96,6 +96,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import android.view.ViewTreeObserver
 import com.novelfa.reader.R
 import com.novelfa.reader.data.BookRepository
 import com.novelfa.reader.data.FontStore
@@ -1826,17 +1828,41 @@ fun ReaderScreen(
         }
     }
 
-    // Fullscreen reading: hide system bars while on, always restore on exit.
+    // Fullscreen reading: hide the system bars (status + navigation)
+    // while on, always restore on exit. The behavior flag is the
+    // load-bearing half: without BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    // the platform default shows the bars again on the first touch
+    // and leaves them up, so the hide below only lasted until the
+    // next tap (page turn, middle tap, anything) — the bars looked
+    // like they never hid at all. With the transient behavior a
+    // touch never shows them; only an edge swipe reveals them
+    // briefly and they hide again on their own. The focus listener
+    // re-applies the hide when the window regains focus (notification
+    // shade, recents): the system clears the flags there, and nothing
+    // else would re-hide them while fullscreenUi stays on.
+    // MainActivity already calls enableEdgeToEdge, so the content
+    // lays out under the bars and hiding them resizes nothing.
     val activity = context as? android.app.Activity
     DisposableEffect(fullscreenUi) {
         val window = activity?.window
         val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        val decorView = window?.decorView
+        val focusListener = ViewTreeObserver.OnWindowFocusChangeListener { hasFocus ->
+            if (hasFocus && fullscreenUi) {
+                controller?.hide(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        decorView?.viewTreeObserver?.addOnWindowFocusChangeListener(focusListener)
         if (fullscreenUi) {
+            controller?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller?.hide(WindowInsetsCompat.Type.systemBars())
         } else {
+            controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
             controller?.show(WindowInsetsCompat.Type.systemBars())
         }
         onDispose {
+            decorView?.viewTreeObserver?.removeOnWindowFocusChangeListener(focusListener)
             controller?.show(WindowInsetsCompat.Type.systemBars())
         }
     }
