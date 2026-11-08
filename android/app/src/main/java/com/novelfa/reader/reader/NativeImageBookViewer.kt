@@ -524,6 +524,8 @@ internal fun NativeImageBookViewer(
             // screen (see the dialog's onDismissRequest).
             val probeOk = if (opened is CbzNativeSource) {
                 withContext(Dispatchers.IO) { opened.probePassword() }
+            } else if (opened is RarNativeSource) {
+                withContext(Dispatchers.IO) { opened.probePassword() }
             } else {
                 true
             }

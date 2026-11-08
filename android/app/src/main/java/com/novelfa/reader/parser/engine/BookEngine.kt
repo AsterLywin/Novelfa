@@ -76,9 +76,10 @@ object EngineRegistry {
         CbzEngine,
         ZipEngine,
         Fb2Engine,
-        RtfEngine
+        RtfEngine,
+        RarEngine
     ).associateBy { it.format } + (BookFormat.MARKDOWN to TxtEngine) +
-        (BookFormat.FBZ to Fb2Engine)
+        (BookFormat.FBZ to Fb2Engine) + (BookFormat.RAR to RarEngine)
 
     fun engineFor(format: BookFormat): BookEngine =
         engines[format] ?: throw IllegalArgumentException(

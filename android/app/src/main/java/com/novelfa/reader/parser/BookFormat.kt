@@ -17,7 +17,11 @@ import java.util.zip.ZipFile
  * report) and falls back to content sniffing for extension-less files.
  * A .zip that actually carries an EPUB or DOCX is still claimed by
  * strong sniffing first (see the importer, which checks sniffing
- * before extension); a plain .zip of images is an image book.
+ * before extension); a plain .zip of images is an image book. A RAR
+ * is the same shape as a CBZ — an archive of page images — served
+ * by the native unrar bridge ([RarNative]); .cbr and .rar are the
+ * same format under two extensions, kept apart only so the stored
+ * file keeps the extension the user picked.
  */
 enum class BookFormat(val extension: String) {
     EPUB("epub"),
@@ -29,7 +33,9 @@ enum class BookFormat(val extension: String) {
     ZIP("zip"),
     FB2("fb2"),
     FBZ("fbz"),
-    RTF("rtf");
+    RTF("rtf"),
+    CBR("cbr"),
+    RAR("rar");
 
     companion object {
         fun fromExtension(fileName: String): BookFormat? {
@@ -45,6 +51,8 @@ enum class BookFormat(val extension: String) {
                 "fb2" -> FB2
                 "fbz" -> FBZ
                 "rtf" -> RTF
+                "cbr" -> CBR
+                "rar" -> RAR
                 else -> null
             }
         }
@@ -52,13 +60,14 @@ enum class BookFormat(val extension: String) {
         /**
          * Strong content sniffing, IGNORING the file extension: a PDF
          * magic header, an RTF `{\rtf` header, an FB2 `<FictionBook>`
-         * root, or a zip carrying word/document.xml (DOCX), a package
-         * document (EPUB) or a .fb2 entry (FBZ). Only these have a
-         * signature strong enough to overrule an extension — plain
-         * text has none, so a .md file full of plain text must never
-         * be reclassified as TXT by sniffing. Null when nothing
-         * strong matches. Callers that must not trust a possibly-wrong
-         * extension (importer, reader open path) check this FIRST.
+         * root, a RAR `Rar!\x1a\x07` magic, or a zip carrying
+         * word/document.xml (DOCX), a package document (EPUB) or a
+         * .fb2 entry (FBZ). Only these have a signature strong enough
+         * to overrule an extension — plain text has none, so a .md
+         * file full of plain text must never be reclassified as TXT
+         * by sniffing. Null when nothing strong matches. Callers
+         * that must not trust a possibly-wrong extension (importer,
+         * reader open path) check this FIRST.
          */
         fun detectStrongContent(file: File): BookFormat? {
             if (!file.isFile) return null
@@ -73,6 +82,18 @@ enum class BookFormat(val extension: String) {
                     head[3] == 'F'.code.toByte()
                 ) {
                     return@runCatching PDF
+                }
+                // RAR magic `Rar!\x1a\x07`: the version byte after
+                // it (offset 6) is 0 for RAR4, 1 for RAR5 — the
+                // same byte [rarVersion] reads. The extension
+                // decides between CBR and RAR so a .rar keeps its
+                // extension; an extension-less or misnamed RAR is
+                // claimed as CBR, the comic name for the format.
+                if (isRarMagic(head, read)) {
+                    return@runCatching when (fromExtension(file.name)) {
+                        RAR -> RAR
+                        else -> CBR
+                    }
                 }
                 if (read >= 5 && head[0] == '{'.code.toByte() &&
                     head[1] == '\\'.code.toByte() && head[2] == 'r'.code.toByte() &&
@@ -111,6 +132,43 @@ enum class BookFormat(val extension: String) {
                 }
                 null
             }.getOrNull()
+        }
+
+        /**
+         * True when [head] (at least [read] bytes) starts with the
+         * RAR magic `Rar!\x1a\x07` (6 bytes). The version byte
+         * after the magic is NOT part of this check: a RAR4 file
+         * carries 0 there, a RAR5 file 1 — [rarVersion] sorts
+         * out which.
+         */
+        fun isRarMagic(head: ByteArray, read: Int): Boolean {
+            return read >= 6 && head[0] == 'R'.code.toByte() &&
+                head[1] == 'a'.code.toByte() && head[2] == 'r'.code.toByte() &&
+                head[3] == '!'.code.toByte() && head[4] == 0x1A.toByte() &&
+                head[5] == 0x07.toByte()
+        }
+
+        /**
+         * RAR version of [file] from its header bytes alone — no
+         * native call, safe on JVM tests: 4 when the byte after
+         * the magic is 0 (RAR4), 5 when it is 1 (RAR5), 0 when
+         * the file is not a RAR at all (or too short to tell).
+         * A hand-built header (magic + version byte) is all the
+         * detection tests need; the native bridge reports the
+         * same version from the real archive ([RarNative]).
+         */
+        fun rarVersion(file: File): Int {
+            if (!file.isFile) return 0
+            return runCatching {
+                val head = ByteArray(8)
+                val read = file.inputStream().use { it.read(head) }
+                if (!isRarMagic(head, read) || read < 7) return@runCatching 0
+                when (head[6].toInt() and 0xFF) {
+                    0 -> 4
+                    1 -> 5
+                    else -> 0
+                }
+            }.getOrDefault(0)
         }
 
         /**

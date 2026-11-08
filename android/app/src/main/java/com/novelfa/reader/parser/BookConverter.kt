@@ -58,6 +58,13 @@ object BookConverter {
             BookFormat.RTF -> RtfParser.parse(
                 source.readBytes(), fallbackName, outDir, chapterFallback
             )
+            // CBZ/ZIP/CBR/RAR never convert to HTML: they are
+            // native image books whose pages ARE the book, opened
+            // in the native viewer through their own engine.
+            BookFormat.CBZ, BookFormat.ZIP,
+            BookFormat.CBR, BookFormat.RAR -> throw IllegalStateException(
+                "Image books open in the native image viewer, not through the HTML reader"
+            )
             else -> throw IllegalArgumentException(
                 "Unsupported book format: ${source.name}"
             )

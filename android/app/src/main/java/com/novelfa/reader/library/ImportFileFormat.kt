@@ -16,6 +16,8 @@ enum class ImportFileFormat {
     WORD,
     CBZ,
     ZIP,
+    CBR,
+    RAR,
     FB2,
     RTF,
     UNKNOWN
@@ -36,6 +38,8 @@ fun importFormatOfFileName(name: String?): ImportFileFormat {
         "docx" -> ImportFileFormat.WORD
         "cbz" -> ImportFileFormat.CBZ
         "zip" -> ImportFileFormat.ZIP
+        "cbr" -> ImportFileFormat.CBR
+        "rar" -> ImportFileFormat.RAR
         "fb2", "fbz" -> ImportFileFormat.FB2
         "rtf" -> ImportFileFormat.RTF
         else -> ImportFileFormat.UNKNOWN

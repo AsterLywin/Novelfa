@@ -106,6 +106,8 @@ fun ImportProgressDialog(
                         ImportFileFormat.WORD -> R.string.import_format_word
                         ImportFileFormat.CBZ -> R.string.import_format_cbz
                         ImportFileFormat.ZIP -> R.string.import_format_zip
+                        ImportFileFormat.CBR -> R.string.import_format_cbr
+                        ImportFileFormat.RAR -> R.string.import_format_rar
                         ImportFileFormat.FB2 -> R.string.import_format_fb2
                         ImportFileFormat.RTF -> R.string.import_format_rtf
                         ImportFileFormat.UNKNOWN -> null

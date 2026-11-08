@@ -22,6 +22,9 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.flow.first
 import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.parser.CbzBook.CbzChapter
+import com.novelfa.reader.parser.RarEntry
+import com.novelfa.reader.parser.RarNative
+import com.novelfa.reader.parser.engine.RarEngine
 import java.io.Closeable
 import java.io.File
 import net.lingala.zip4j.ZipFile
@@ -704,6 +707,125 @@ internal class CbzNativeSource(
     companion object {
         private const val MAX_DECODE_HEIGHT = 16384
         private const val MAX_DECODE_WIDTH = 8192
+    }
+}
+
+/**
+ * RAR entry backend for the comic viewer: one entry's bytes come
+ * from the native unrar bridge ([RarEngine.readEntryBytes]),
+ * served as a stream so [CbzNativeSource]'s decode pipeline
+ * never learns the container is a RAR. The store holds the
+ * listing the source already made, so no second native listing
+ * is paid per page. No persistent handle exists to close.
+ */
+internal class RarEntryStore(
+    private val archiveFile: File,
+    private val entriesByName: Map<String, RarEntry>,
+    private val password: String?
+) : CbzEntryStore {
+    override fun openEntry(name: String): InputStream? {
+        val entry = entriesByName[name] ?: return null
+        val bytes = RarEngine.readEntryBytes(archiveFile, entry, password)
+            ?: return null
+        return ByteArrayInputStream(bytes)
+    }
+
+    // A RAR listing carries no per-entry encryption flag, so
+    // there is no encrypted entry to name: the password case is
+    // handled by [RarNativeSource.probePassword], not here.
+    override fun firstEncryptedName(): String? = null
+
+    override fun close() {
+        // No-op on purpose: the bridge opens the archive per
+        // call and holds no handle.
+    }
+}
+
+/**
+ * CBR/RAR page source: the same book shape as CBZ, through the
+ * native unrar bridge. The page list, natural order, chapters,
+ * EXIF rotation, AVIF branch, animated pages, thumbnails and
+ * dual-page split are all [CbzNativeSource]'s — this class only
+ * supplies the RAR entry store and the password probe, so a RAR
+ * page decodes exactly like the same image in a CBZ.
+ *
+ * The password is session-only: the viewer holds the CharArray
+ * for one open and this source converts it to a transient
+ * String per native call, never stored — the same contract as
+ * the PDF bridge. A password-protected archive imported without
+ * one gets its password here, at open.
+ */
+internal class RarNativeSource(
+    private val archiveFile: File,
+    password: CharArray?
+) : NativePageSource {
+    private val passwordString: String? = password?.let { String(it) }
+    private val pageNames: List<String>
+    private val entriesByName: Map<String, RarEntry>
+    private val delegate: CbzNativeSource
+
+    init {
+        if (!RarNative.available) {
+            throw IllegalStateException("RAR engine unavailable")
+        }
+        val listed = RarEngine.listEntries(archiveFile)
+            ?: throw IllegalArgumentException(
+                "Cannot list RAR archive: ${archiveFile.name}"
+            )
+        pageNames = RarEngine.imageEntryNames(listed)
+        if (pageNames.isEmpty()) {
+            throw IllegalArgumentException(
+                "RAR archive has no readable images: ${archiveFile.name}"
+            )
+        }
+        entriesByName = listed.associateBy { it.name }
+        delegate = CbzNativeSource(
+            RarEntryStore(archiveFile, entriesByName, passwordString),
+            pageNames
+        )
+    }
+
+    /**
+     * Validates the password by extracting the first readable
+     * page: a wrong or missing password makes the bridge return
+     * null, so a null here means "ask", not "corrupt". The
+     * first TWO pages are tried — a poisoned first page must
+     * not ask for a password the book does not have. Called on
+     * IO by the viewer before the source is shown, exactly like
+     * [CbzNativeSource.probePassword].
+     */
+    fun probePassword(): Boolean {
+        for (name in pageNames.take(2)) {
+            val entry = entriesByName[name] ?: continue
+            val bytes = RarEngine.readEntryBytes(archiveFile, entry, passwordString)
+            if (bytes != null && bytes.isNotEmpty()) return true
+        }
+        return false
+    }
+
+    override val pageCount: Int
+        get() = delegate.pageCount
+
+    override val chapters: List<CbzChapter>
+        get() = delegate.chapters
+
+    override fun renderPage(index: Int, targetWidthPx: Int): Bitmap =
+        delegate.renderPage(index, targetWidthPx)
+
+    override fun animatedDrawable(index: Int): Drawable? =
+        delegate.animatedDrawable(index)
+
+    override fun isAnimatedPage(index: Int): Boolean =
+        delegate.isAnimatedPage(index)
+
+    override fun nativePageSize(index: Int): Pair<Int, Int>? =
+        delegate.nativePageSize(index)
+
+    override fun thumbnail(index: Int, targetWidthPx: Int): Bitmap? =
+        delegate.thumbnail(index, targetWidthPx)
+
+    override fun close() {
+        runCatching { delegate.close() }
     }
 }
 

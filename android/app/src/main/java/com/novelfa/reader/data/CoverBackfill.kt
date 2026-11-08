@@ -7,6 +7,7 @@ import android.os.ParcelFileDescriptor
 import com.novelfa.reader.parser.BookFormat
 import com.shockwave.pdfium.PdfiumCore
 import com.novelfa.reader.parser.engine.CbzEngine
+import com.novelfa.reader.parser.engine.RarEngine
 import com.novelfa.reader.parser.engine.DocxEngine
 import com.novelfa.reader.parser.engine.EpubEngine
 import com.novelfa.reader.parser.engine.ZipEngine
@@ -74,6 +75,9 @@ object CoverBackfill {
                     }.getOrNull()
                     BookFormat.CBZ -> runCatching {
                         CbzEngine.metadata(resolvedFile, current.title, scratchDir) {}.coverFile
+                    }.getOrNull()
+                    BookFormat.CBR, BookFormat.RAR -> runCatching {
+                        RarEngine.metadata(resolvedFile, current.title, scratchDir) {}.coverFile
                     }.getOrNull()
                     BookFormat.PDF -> runCatching {
                         val pfd = ParcelFileDescriptor.open(

@@ -23,8 +23,11 @@ class BookFormatTest {
         assertEquals(BookFormat.FB2, BookFormat.fromExtension("book.fb2"))
         assertEquals(BookFormat.FBZ, BookFormat.fromExtension("book.FBZ"))
         assertEquals(BookFormat.RTF, BookFormat.fromExtension("book.rtf"))
+        assertEquals(BookFormat.CBR, BookFormat.fromExtension("book.cbr"))
+        assertEquals(BookFormat.CBR, BookFormat.fromExtension("book.CBR"))
+        assertEquals(BookFormat.RAR, BookFormat.fromExtension("book.rar"))
+        assertEquals(BookFormat.RAR, BookFormat.fromExtension("book.RAR"))
         assertNull(BookFormat.fromExtension("noext"))
-        assertNull(BookFormat.fromExtension("book.cbr"))
         assertNull(BookFormat.fromExtension("book.cb7"))
     }
 

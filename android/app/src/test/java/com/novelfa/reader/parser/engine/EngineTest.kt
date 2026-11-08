@@ -42,6 +42,10 @@ class EngineTest {
         // FBZ is the zipped FB2; it shares the FictionBook engine.
         assertTrue(EngineRegistry.engineFor(BookFormat.FBZ) === Fb2Engine)
         assertTrue(EngineRegistry.engineFor(BookFormat.RTF) === RtfEngine)
+        // CBR and RAR are the same RAR comic under two extensions;
+        // both share the RAR engine.
+        assertTrue(EngineRegistry.engineFor(BookFormat.CBR) === RarEngine)
+        assertTrue(EngineRegistry.engineFor(BookFormat.RAR) === RarEngine)
         // TXT and Markdown share the text engine, by design.
         assertTrue(EngineRegistry.engineFor(BookFormat.TXT) === TxtEngine)
         assertTrue(EngineRegistry.engineFor(BookFormat.MARKDOWN) === TxtEngine)

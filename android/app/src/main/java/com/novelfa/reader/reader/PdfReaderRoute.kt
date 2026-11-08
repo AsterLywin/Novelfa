@@ -33,6 +33,7 @@ import com.novelfa.reader.domain.Book
 import android.net.Uri
 import com.novelfa.reader.data.InPlaceSource
 import java.io.IOException
+import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.engine.ZipEngine
 import com.novelfa.reader.parser.engine.ZipKind
@@ -201,6 +202,7 @@ fun PdfReaderRoute(
         if (found.importMode != "IN_PLACE") return@LaunchedEffect
         val format = BookFormat.detect(file) ?: return@LaunchedEffect
         if (format != BookFormat.PDF && format != BookFormat.CBZ &&
+            format != BookFormat.CBR && format != BookFormat.RAR &&
             format != BookFormat.ZIP
         ) return@LaunchedEffect
         repo.backfillCover(context, found, file)
@@ -323,6 +325,27 @@ fun PdfReaderRoute(
                 repo = repo,
                 onClose = onClose,
                 sourceFactory = { pw -> CbzNativeSource(bookFile, pw) },
+                loadingRes = R.string.cbz_native_loading,
+                errorRes = R.string.cbz_native_error,
+                resolvedFile = bookFile
+            )
+        }
+        BookFormat.detect(resolvedFile!!) == BookFormat.CBR ||
+            BookFormat.detect(resolvedFile!!) == BookFormat.RAR -> {
+            val bookFile = resolvedFile!!
+            NativeImageBookViewer(
+                book = book!!,
+                repo = repo,
+                onClose = onClose,
+                sourceFactory = { pw ->
+                    // A ZIP wearing a .cbr name (import rejects
+                    // it with the rename message, but a file
+                    // opened directly by ACTION_VIEW can still
+                    // arrive here): open it as the CBZ it is
+                    // instead of failing it as a corrupt RAR.
+                    if (CbzBook.archiveKind(bookFile) == "ZIP") CbzNativeSource(bookFile, pw)
+                    else RarNativeSource(bookFile, pw)
+                },
                 loadingRes = R.string.cbz_native_loading,
                 errorRes = R.string.cbz_native_error,
                 resolvedFile = bookFile

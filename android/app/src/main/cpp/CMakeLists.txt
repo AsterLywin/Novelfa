@@ -115,3 +115,105 @@ add_library(novelfa_avif SHARED
 # lock/unlock. log/android: linked for completeness with the
 # NDK bitmap API (no logging calls are made today).
 target_link_libraries(novelfa_avif PRIVATE avif jnigraphics log android)
+
+# The project() line above enables C only (the AVIF engine is C);
+# unrar is C++, so enable CXX here without touching that line.
+enable_language(CXX)
+
+# --- RAR/CBR reading: unrar (decode only) ---
+# Vendored RARLAB unrar source (unrarsrc-7.3.2.tar.gz, see
+# unrar/license.txt) built as its own shared library,
+# libnovelfa_rar.so. Only the DLL build of unrar is compiled:
+# the makefile's RARDLL set (OBJECTS + LIB_OBJ with -DRARDLL),
+# i.e. the 48 .cpp files listed below; the remaining .cpp files
+# in unrar/ are pulled in via #include by those translation
+# units (unpack15/20/30/50, crypt1/2/3/5, ...). Windows-only
+# (win32acl/win32lnk) and CLI-only (recvol, rs, isnt, motw,
+# rarpch) files are NOT vendored: the two win32 files are
+# #included only under _WIN_ALL, the rest only by the CLI.
+#
+# This target is independent of the AVIF recipe above: it needs
+# no FetchContent and no third-party library. Gradle does NOT
+# build this file — the app packages prebuilt .so files from
+# src/main/jniLibs/<abi>/, and this file is the manual rebuild
+# recipe (NDK 28.2.13676358, android-29, Release). Configure
+# with -DFETCHCONTENT_SOURCE_DIR_AOM / _LIBAVIF pointing at
+# local copies if the AVIF fetch is unwanted; the rar target
+# itself does not need them.
+#
+# The JNI surface is exactly five functions in
+# novelfa_rar_jni.cpp (RarNative): nListEntries,
+# nExtractEntryBytes, nExtractEntryToFile, nGetRarVersion,
+# nGetVersion. See that file for the contract notes (stateless
+# API, sequential scan for solid archives, headerOffset unused
+# because the unrar DLL API exposes no header offset).
+#
+# License: unrar is free for unarchiving but forbids building a
+# RAR archiver from it — this bridge only reads archives.
+add_library(novelfa_rar SHARED
+    novelfa_rar_jni.cpp
+    unrar/rar.cpp
+    unrar/strlist.cpp
+    unrar/strfn.cpp
+    unrar/pathfn.cpp
+    unrar/smallfn.cpp
+    unrar/global.cpp
+    unrar/file.cpp
+    unrar/filefn.cpp
+    unrar/filcreat.cpp
+    unrar/archive.cpp
+    unrar/arcread.cpp
+    unrar/unicode.cpp
+    unrar/system.cpp
+    unrar/crypt.cpp
+    unrar/crc.cpp
+    unrar/rawread.cpp
+    unrar/encname.cpp
+    unrar/resource.cpp
+    unrar/match.cpp
+    unrar/timefn.cpp
+    unrar/rdwrfn.cpp
+    unrar/consio.cpp
+    unrar/options.cpp
+    unrar/errhnd.cpp
+    unrar/rarvm.cpp
+    unrar/secpassword.cpp
+    unrar/rijndael.cpp
+    unrar/getbits.cpp
+    unrar/sha1.cpp
+    unrar/sha256.cpp
+    unrar/blake2s.cpp
+    unrar/hash.cpp
+    unrar/extinfo.cpp
+    unrar/extract.cpp
+    unrar/volume.cpp
+    unrar/list.cpp
+    unrar/find.cpp
+    unrar/unpack.cpp
+    unrar/headers.cpp
+    unrar/threadpool.cpp
+    unrar/rs16.cpp
+    unrar/cmddata.cpp
+    unrar/ui.cpp
+    unrar/largepage.cpp
+    unrar/filestr.cpp
+    unrar/scantree.cpp
+    unrar/dll.cpp
+    unrar/qopen.cpp
+)
+# Same defines as the unrar makefile's lib target:
+# -DRARDLL (DLL build: silent UI, dll.hpp API),
+# -DRAR_SMP (multithreaded RAR5 unpack), large-file defines.
+target_compile_definitions(novelfa_rar PRIVATE
+    _FILE_OFFSET_BITS=64
+    _LARGEFILE_SOURCE
+    RAR_SMP
+    RARDLL
+)
+# The makefile silences the same three warnings.
+target_compile_options(novelfa_rar PRIVATE
+    -Wno-logical-op-parentheses
+    -Wno-switch
+    -Wno-dangling-else
+)
+target_link_libraries(novelfa_rar PRIVATE log android)

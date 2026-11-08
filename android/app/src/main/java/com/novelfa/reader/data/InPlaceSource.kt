@@ -93,6 +93,11 @@ object InPlaceSource {
         ) {
             return BookFormat.PDF
         }
+        if (BookFormat.isRarMagic(head, headLen)) {
+            return BookFormat.fromExtension(displayName)
+                ?.takeIf { it == BookFormat.CBR || it == BookFormat.RAR }
+                ?: BookFormat.CBR
+        }
         if (headLen >= 2 && head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte()) {
             return BookFormat.fromExtension(displayName) ?: BookFormat.ZIP
         }

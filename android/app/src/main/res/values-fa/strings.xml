@@ -51,6 +51,8 @@
     <string name="import_error_bad_structure">ساختار داخلی کتاب آسیب دیده است.</string>
     <string name="import_error_incomplete_archive">به نظر می‌رسد این فایل ناقص است (دانلود نیمه‌کاره؟). دوباره دانلودش کنید و دوباره تلاش کنید.</string>
     <string name="import_error_wrong_archive_type">این فایل یک آرشیو ZIP نیست (نوع فایل: %1$s). نولفا فقط فایل‌های CBZ (ZIP) را باز می‌کند.</string>
+    <string name="import_error_rar_unavailable">این کمیک RAR به موتور RAR نیاز دارد که در این نسخه وجود ندارد. قالب‌های دیگر تحت تأثیر قرار نمی‌گیرند.</string>
+    <string name="import_error_cbr_is_zip">این فایل در واقع یک آرشیو ZIP است، نه RAR. آن را به .cbz تغییر نام دهید و دوباره وارد کنید.</string>
     <string name="import_error_old_format">این قالب قدیمی کتاب پشتیبانی نمی‌شود.</string>
     <string name="import_error_cannot_read">فایل خوانده نشد.</string>
     <string name="import_error_access_denied">دسترسی به فایل رد شد.</string>
@@ -162,6 +164,8 @@
     <string name="import_format_word">Word</string>
     <string name="import_format_cbz">CBZ</string>
     <string name="import_format_zip">ZIP</string>
+    <string name="import_format_cbr">CBR</string>
+    <string name="import_format_rar">RAR</string>
     <string name="import_format_fb2">FB2</string>
     <string name="import_format_rtf">RTF</string>
         <string name="import_large_files_note">برای فایل‌های بزرگ ممکن است کمی طول بکشد؛ با «انصراف» می‌توانید ایمپورت را متوقف کنید.</string>

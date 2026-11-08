@@ -18,6 +18,8 @@ import com.novelfa.reader.parser.PdfParser
 import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.parser.Fb2Parser
 import com.novelfa.reader.parser.engine.CbzEngine
+import com.novelfa.reader.parser.engine.RarEngine
+import com.novelfa.reader.parser.RarNative
 import com.novelfa.reader.parser.engine.DocxEngine
 import com.novelfa.reader.parser.engine.EpubEngine
 import com.novelfa.reader.parser.engine.Fb2Engine
@@ -67,6 +69,14 @@ val SUPPORTED_BOOK_MIME_TYPES = arrayOf(
     "application/x-zip-compressed",
     "application/x-cbz",
     "application/vnd.comicbook+zip",
+    // CBR/RAR image books: a .cbr/.rar often arrives as
+    // application/x-rar-compressed (or vnd.rar); the importer
+    // itself still validates the content and rejects anything
+    // that is not a real RAR archive.
+    "application/x-rar",
+    "application/x-rar-compressed",
+    "application/vnd.rar",
+    "application/vnd.comicbook-rar",
     // FictionBook and RTF: the common MIME types file managers
     // and providers report for .fb2/.fbz/.rtf picks.
     "application/x-fictionbook+xml",
@@ -348,7 +358,7 @@ class Importer(
 
     /**
      * Imports one book in any supported format (EPUB, TXT, PDF, Markdown,
-     * DOCX, FB2/FBZ, RTF, CBZ, ZIP). Every format is imported through its own
+     * DOCX, FB2/FBZ, RTF, CBZ, ZIP, CBR, RAR). Every format is imported through its own
      * rendering engine (see parser/engine): EPUB, DOCX, FB2/FBZ and
      * book-carrying ZIPs contribute metadata only at import (title, a
      * chapter count carried by the container, a single-entry cover) and
@@ -734,6 +744,57 @@ class Importer(
                 }
                 imageBookPages = meta.chapterCount
                 ParsedBook(title = meta.title, chapters = emptyList(), coverFile = meta.coverFile)
+            } else if (format == BookFormat.CBR || format == BookFormat.RAR) {
+                // Native image book (manhwa/manga/comic) in a RAR
+                // container: the same shape as CBZ above — import
+                // only lists the archive and extracts the first
+                // page as the cover, never the whole archive. The
+                // viewer decodes pages on demand through the
+                // native unrar bridge. The failure shapes, in
+                // order: a missing native lib (honest message,
+                // never a crash — other formats are unaffected),
+                // a ZIP wearing a .cbr name (rename to .cbz, not
+                // a corrupt-RAR error), a file that is not a RAR
+                // at all, and an archive with no images.
+                ioCtx.ensureActive()
+                reportStage("validate")
+                if (!RarNative.available) {
+                    throw ImportException(
+                        "RAR engine unavailable: $displayName",
+                        messageFa = context.getString(R.string.import_error_rar_unavailable)
+                    )
+                }
+                val kind = CbzBook.archiveKind(destFile)
+                if (kind == "ZIP") {
+                    throw ImportException(
+                        "ZIP archive named .cbr: $displayName",
+                        messageFa = context.getString(R.string.import_error_cbr_is_zip)
+                    )
+                }
+                if (kind != "RAR") {
+                    throw ImportException(
+                        "Not a RAR archive: $displayName",
+                        messageFa = context.getString(R.string.import_error_bad_structure)
+                    )
+                }
+                val meta = try {
+                    RarEngine.metadata(destFile, displayName, openCacheDir) {
+                        ioCtx.ensureActive()
+                    }
+                } catch (e: Exception) {
+                    val messageFa = if (e.message?.contains("no readable images") == true) {
+                        context.getString(R.string.import_error_no_readable_sections)
+                    } else {
+                        context.getString(R.string.import_error_bad_structure)
+                    }
+                    throw ImportException(
+                        e.message ?: "invalid comic archive: $displayName",
+                        messageFa = messageFa,
+                        cause = e
+                    )
+                }
+                imageBookPages = meta.chapterCount
+                ParsedBook(title = meta.title, chapters = emptyList(), coverFile = meta.coverFile)
             } else if (format == BookFormat.ZIP) {
                 // Archive engine: a ZIP is classified before any
                 // row is written. Image-only ZIPs are comics (same
@@ -834,7 +895,8 @@ class Importer(
             // have chapters, their pages ARE the book). Only the
             // TXT/Markdown/RTF path must have parsed chapters here.
             val isNativeBook = format == BookFormat.PDF ||
-                format == BookFormat.CBZ || format == BookFormat.ZIP
+                format == BookFormat.CBZ || format == BookFormat.CBR ||
+                format == BookFormat.RAR || format == BookFormat.ZIP
             val isMetadataOnly = format == BookFormat.EPUB ||
                 format == BookFormat.DOCX || format == BookFormat.FB2 ||
                 format == BookFormat.FBZ || zipIsBook
@@ -1056,6 +1118,15 @@ class Importer(
                     dest.writeBytes(bytes)
                     dest.takeIf { it.exists() && it.length() > 0 }
                 }
+            }
+            BookFormat.CBR, BookFormat.RAR -> {
+                // No File exists for a content:// source, and
+                // the native bridge only opens archive paths —
+                // so no cover can be extracted here. The book
+                // imports with a generated cover and the
+                // first-open backfill extracts the real first
+                // page from the working copy instead.
+                null
             }
             else -> null
         }

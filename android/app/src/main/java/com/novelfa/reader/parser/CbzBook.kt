@@ -45,9 +45,11 @@ import java.util.zip.ZipFile
  *   as-is and pages are decoded on demand at open time, exactly
  *   like the native PDF viewer. A 500-page manhwa therefore imports
  *   in seconds and costs no extracted-JPEG storage.
- * - CBR (RAR) is deliberately NOT supported: it needs a RAR
- *   decoder, which is a separate dependency. A .cbr file fails
- *   import with the unsupported-format message, not silently.
+ * - CBR (RAR) is served by the same rules through the native
+ *   unrar bridge ([RarNative], [RarEngine]): a RAR is a CBZ
+ *   with a different container, so its page list, natural order
+ *   and chapter split all come from this object, and only the
+ *   entry bytes come from JNI instead of the ZIP reader.
  */
 object CbzBook {
 

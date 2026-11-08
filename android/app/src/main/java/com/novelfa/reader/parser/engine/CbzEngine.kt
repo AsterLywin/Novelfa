@@ -22,10 +22,11 @@ import java.io.File
  *   engine's [open], which is deliberately unsupported: a comic has
  *   no chapters to convert to HTML, its pages ARE the book.
  *
- * CBR is still not supported: it needs a RAR decoder, which neither
- * the platform nor this codebase provides, and pretending otherwise
- * by renaming the extension would only produce a corrupt-book error
- * at open. That gap is stated, not papered over.
+ * - CBR (RAR) is the same book shape through the native unrar
+ *   bridge instead of the platform ZIP reader: [RarEngine]
+ *   reuses this object's page rules (image filter, natural
+ *   order, chapter split, cover downsample) and only the entry
+ *   bytes come from JNI.
  */
 object CbzEngine : BookEngine {
     override val format: BookFormat = BookFormat.CBZ

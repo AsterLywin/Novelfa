@@ -48,13 +48,14 @@
                 <data android:mimeType="application/x-fictionbook" />
                 <data android:mimeType="application/rtf" />
                 <data android:mimeType="text/rtf" />
-                <!-- CBR/CB7 are NOT openable yet (no RAR/7z engine):
-                     these filters only let the app receive the file
-                     so import can reject it with its own message
-                     instead of the file manager having nowhere to
-                     send it. -->
+                <data android:mimeType="application/x-rar" />
                 <data android:mimeType="application/x-rar-compressed" />
                 <data android:mimeType="application/vnd.rar" />
+                <!-- CBR is openable now (native RAR engine); CB7 is
+                     still NOT openable (no 7z engine): its filter
+                     only lets the app receive the file so import
+                     can reject it with its own message instead of
+                     the file manager having nowhere to send it. -->
                 <data android:mimeType="application/x-7z-compressed" />
             </intent-filter>
             <intent-filter>
@@ -75,6 +76,7 @@
                 <data android:pathPattern=".*\\.fbz" />
                 <data android:pathPattern=".*\\.rtf" />
                 <data android:pathPattern=".*\\.cbr" />
+                <data android:pathPattern=".*\\.rar" />
                 <data android:pathPattern=".*\\.cb7" />
             </intent-filter>
         </activity>
