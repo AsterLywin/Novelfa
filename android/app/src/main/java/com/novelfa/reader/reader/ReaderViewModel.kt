@@ -189,6 +189,32 @@ class ReaderViewModel(
         return fontFaceCacheValue
     }
 
+    // Font identity, NOT the CSS string itself: with base64
+    // fonts the CSS is multi-MB, and using it as a key would make
+    // every key (and every cached-document lookup) carry
+    // megabytes. File identity is enough — a changed font file
+    // changes its size or mtime, so the key misses.
+    private fun fontIdentity(files: List<File>): String =
+        files.joinToString(",") {
+            "${it.name}:${it.length()}:${it.lastModified()}"
+        }
+
+    /**
+     * Layout inputs shared by every chapter's page count (see
+     * BookPageCount.kt): the same settings that determine the
+     * cached-HTML key in loadChapter, minus the per-chapter file
+     * (the counts are keyed per chapter already) and minus the
+     * theme (colors do not change layout). The reader appends the
+     * viewport size — the counts depend on it too.
+     */
+    fun layoutSettingsKey(): String = listOf(
+        fontFamily, fontIdentity(fontFiles),
+        fontIdentity(fallbackFontFiles), fontSize.toString(),
+        lineHeight.toString(), sideMargin.toString(),
+        paragraphSpacing.toString(), isEnglish.toString(),
+        footnotePopup.toString()
+    ).joinToString("|")
+
     // State, not a plain var, on purpose: the sections drawer
     // highlights `i == index` inside lazy items, and lazy items
     // only recompose when a State they read changes — with a plain
@@ -362,15 +388,6 @@ class ReaderViewModel(
             // chapter with the same settings.
             val chapterFile = chapters[i].file
             val fontCss = cachedFontFaceCss()
-            // Font identity, NOT the CSS string itself: with base64
-            // fonts the CSS is multi-MB, and using it as a cache key
-            // would make every key (and every cached document lookup)
-            // carry megabytes. File identity is enough — a changed
-            // font file changes its size or mtime, so the key misses.
-            fun fontIdentity(files: List<File>): String =
-                files.joinToString(",") {
-                    "${it.name}:${it.length()}:${it.lastModified()}"
-                }
             val htmlKey = listOf(
                 bookId, i.toString(), chapterFile.absolutePath,
                 chapterFile.length().toString(), chapterFile.lastModified().toString(),

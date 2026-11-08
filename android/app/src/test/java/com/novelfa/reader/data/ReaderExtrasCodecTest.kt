@@ -87,4 +87,18 @@ class ReaderExtrasCodecTest {
             addToSearchHistory(ten, "new")
         )
     }
+
+    @Test
+    fun chapterPageCounts_roundTrip() {
+        val counts = mapOf(0 to 12, 3 to 8, 7 to 21)
+        assertEquals(counts, parseChapterPageCounts(serializeChapterPageCounts(counts)))
+        assertEquals(emptyMap<Int, Int>(), parseChapterPageCounts(null))
+        assertEquals(emptyMap<Int, Int>(), parseChapterPageCounts(""))
+        // Malformed entries are dropped, never a guess; zero-page
+        // chapters are dropped too (the pager guarantees >= 1 page).
+        assertEquals(
+            mapOf(5 to 4),
+            parseChapterPageCounts("5:4,x:3,2:0,-1:7,9:,3:abc,5:4")
+        )
+    }
 }

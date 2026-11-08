@@ -480,6 +480,11 @@ fun ReaderScreen(
     // count is phase 2's job.
     var verticalPage by remember { mutableIntStateOf(0) }
     var verticalPageCount by remember { mutableIntStateOf(0) }
+    // Latest vertical in-section position as Compose state (the
+    // tracker itself is deliberately NOT state): drives the
+    // vertical book-wide pill. Set from onSectionPos, cleared on
+    // a new document.
+    var verticalSection by remember { mutableStateOf<SectionPosition?>(null) }
     // True once the live document has finished loading. A turn that
     // finds rdrTurn missing WHILE the page is still loading must wait
     // (like a 'busy' turn), not recover: recovery reloads the chapter,
@@ -526,6 +531,29 @@ fun ReaderScreen(
     var fontOpen by remember { mutableStateOf(false) }
     // In-book text search + highlights (SEARCH_JS / SELECT_JS).
     val highlights by extrasStore.highlights(bookId).collectAsState(initial = emptyList())
+    // Book-wide page count (phase 2, see BookPageCount.kt): the
+    // cached per-chapter final totals for the current layout
+    // fingerprint. The fingerprint changes with any layout input
+    // (font, spacing, viewport), so the collected map is always
+    // this layout's map — a stale layout's counts never show.
+    fun pageCountFingerprint(): String {
+        val v = vm ?: return ""
+        val wv = webView ?: return ""
+        val density = context.resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
+        val w = kotlin.math.roundToInt(wv.width / density)
+        val h = kotlin.math.roundToInt(wv.height / density)
+        if (w <= 0 || h <= 0) return ""
+        return v.layoutSettingsKey() + "|${w}x$h"
+    }
+    val pageCountFp = pageCountFingerprint()
+    val chapterCounts by remember(pageCountFp) {
+        extrasStore.chapterPageCounts(bookId, pageCountFp)
+    }.collectAsState(initial = emptyMap())
+    // Per-chapter file sizes (free stats, no reads): the page-count
+    // estimate's calibration input (see BookPageCount.kt).
+    val chapterBytes = remember(vm?.chapters) {
+        vm?.chapters?.map { it.file.length() } ?: emptyList()
+    }
     // Recent searches for this book (ReadEra's history list):
     // newest first, shown under the field while no results are
     // shown; tap re-runs, long-press deletes one entry.
@@ -1543,6 +1571,19 @@ fun ReaderScreen(
                         pagedPage = page
                         pagedPageCount = total
                         pagerBuilding = false
+                        // Book-wide page count: every adopted report
+                        // is a FINAL total now (the pager reports
+                        // total 0 while building), so it is safe to
+                        // record per chapter. The store keys the map
+                        // by the layout fingerprint, so a count never
+                        // lands in another layout's map.
+                        val chapter = vm?.index
+                        val fp = pageCountFingerprint()
+                        if (chapter != null && fp.isNotEmpty() && chapterCounts[chapter] != total) {
+                            runCatching {
+                                extrasStore.setChapterPageCount(bookId, fp, chapter, total)
+                            }
+                        }
                     }
                 }
             },
@@ -1580,6 +1621,7 @@ fun ReaderScreen(
                     if (v.readingMode != ReadingMode.CONTINUOUS_VERTICAL) return@launch
                     val pos = runCatching { SectionPosition(ci, frac) }.getOrNull() ?: return@launch
                     sectionTracker.lastReported = pos
+                    verticalSection = pos
                     val now = System.currentTimeMillis()
                     if (now - sectionTracker.lastSaveMs >= 500) {
                         sectionTracker.lastSaveMs = now
@@ -2376,6 +2418,7 @@ fun ReaderScreen(
                             pagedPageCount = 0
                             verticalPage = 0
                             verticalPageCount = 0
+                            verticalSection = null
                             // A new document's pager has no error yet:
                             // the previous document's teardown reason
                             // must not linger into the new document's
@@ -2572,8 +2615,21 @@ fun ReaderScreen(
                 if (modeNow == ReadingMode.PAGED_HORIZONTAL && !fullscreenUi &&
                     pagedPageCount > 0 && pagedPage in 1..pagedPageCount
                 ) {
+                    // Book-wide numbers (ReadEra-style) when the
+                    // cache can calibrate them: the current page
+                    // across the whole book, not just this chapter.
+                    // "~" marks an estimated total (some chapters
+                    // not yet counted); without any calibration the
+                    // pill falls back to the chapter-local numbers.
+                    val bookNumbers = vm?.let { v ->
+                        bookPageNumbers(chapterCounts, chapterBytes, v.index, pagedPage)
+                    }
                     Text(
-                        text = stringResource(R.string.page_indicator, pagedPage, pagedPageCount),
+                        text = when (val n = bookNumbers) {
+                            null -> stringResource(R.string.page_indicator, pagedPage, pagedPageCount)
+                            else -> if (n.exact) stringResource(R.string.page_indicator, n.page, n.total)
+                            else stringResource(R.string.page_indicator_approx, n.page, n.total)
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
@@ -2606,14 +2662,30 @@ fun ReaderScreen(
                             .padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
-                // Vertical mode: same pill, from scroll screens (see
-                // the onScroll computation). Hidden while the counts
-                // are unknown and in fullscreen, like the paged pill.
+                // Vertical mode: the book-wide numbers when the
+                // cache can calibrate them (the section fraction
+                // inside the current chapter names the page), else
+                // the scroll-screens pill from phase 1. Hidden while
+                // the counts are unknown and in fullscreen, like the
+                // paged pill.
+                val verticalBookNumbers = verticalSection?.let { sec ->
+                    val ratio = pagesPerByte(chapterCounts, chapterBytes) ?: return@let null
+                    val chapterPages = chapterPageCount(chapterCounts, chapterBytes, sec.chapter, ratio)
+                    bookPageNumbers(
+                        chapterCounts, chapterBytes, sec.chapter,
+                        pageWithinChapter(sec.fraction, chapterPages)
+                    )
+                }
                 if (modeNow == ReadingMode.CONTINUOUS_VERTICAL && !fullscreenUi &&
-                    verticalPageCount > 0 && verticalPage in 1..verticalPageCount
+                    (verticalBookNumbers != null ||
+                        (verticalPageCount > 0 && verticalPage in 1..verticalPageCount))
                 ) {
                     Text(
-                        text = stringResource(R.string.page_indicator, verticalPage, verticalPageCount),
+                        text = when (val n = verticalBookNumbers) {
+                            null -> stringResource(R.string.page_indicator, verticalPage, verticalPageCount)
+                            else -> if (n.exact) stringResource(R.string.page_indicator, n.page, n.total)
+                            else stringResource(R.string.page_indicator_approx, n.page, n.total)
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier

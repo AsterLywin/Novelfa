@@ -221,6 +221,31 @@ internal fun addToSearchHistory(history: List<String>, query: String): List<Stri
         .take(MAX_SEARCH_HISTORY)
 }
 
+/**
+ * Per-chapter final page counts for one layout, stored as
+ * "chapter:pages,chapter:pages" sorted by chapter. A malformed
+ * entry is dropped, never a guess; a chapter with 0 pages is
+ * dropped too (the pager guarantees at least 1 page per chapter).
+ */
+internal fun parseChapterPageCounts(raw: String?): Map<Int, Int> {
+    if (raw.isNullOrBlank()) return emptyMap()
+    val out = mutableMapOf<Int, Int>()
+    for (entry in raw.split(",")) {
+        val parts = entry.split(":")
+        if (parts.size != 2) continue
+        val chapter = parts[0].toIntOrNull() ?: continue
+        val count = parts[1].toIntOrNull() ?: continue
+        if (chapter < 0 || count <= 0) continue
+        out[chapter] = count
+    }
+    return out
+}
+
+internal fun serializeChapterPageCounts(counts: Map<Int, Int>): String =
+    counts.entries.filter { it.key >= 0 && it.value > 0 }
+        .sortedBy { it.key }
+        .joinToString(",") { "${it.key}:${it.value}" }
+
 class ReaderExtrasStore(private val context: Context) {
 
     private fun bookmarksKey(bookId: String) = stringPreferencesKey("bm_$bookId")
@@ -374,6 +399,36 @@ class ReaderExtrasStore(private val context: Context) {
             prefs[key] = serializeSearchHistory(
                 parseSearchHistory(prefs[key]).filterNot { it.equals(query, ignoreCase = true) }
             )
+        }
+    }
+
+    /**
+     * Per-chapter final page counts for one layout fingerprint (see
+     * BookPageCount.kt): the book-wide total's cache. The key carries
+     * the fingerprint's hash, so a font, spacing or viewport change
+     * (rotation, fullscreen toggle) reads a different — possibly
+     * empty — map instead of mixing counts from another layout, and
+     * toggling back finds the old map again. Keys end in "_$bookId"
+     * so clearBook's suffix sweep removes them like every other
+     * per-book key. Only final totals are recorded (the pager
+     * reports total 0 while building, and the reader only records
+     * adopted reports), so a cached count is always a real count.
+     */
+    private fun chapterPageCountsKey(bookId: String, fingerprint: String) =
+        stringPreferencesKey("pgc_${Integer.toHexString(fingerprint.hashCode())}_$bookId")
+
+    fun chapterPageCounts(bookId: String, fingerprint: String): Flow<Map<Int, Int>> =
+        context.readerExtrasDataStore.data.map {
+            parseChapterPageCounts(it[chapterPageCountsKey(bookId, fingerprint)])
+        }
+
+    suspend fun setChapterPageCount(bookId: String, fingerprint: String, chapter: Int, count: Int) {
+        if (chapter < 0 || count <= 0) return
+        val key = chapterPageCountsKey(bookId, fingerprint)
+        context.readerExtrasDataStore.edit { prefs ->
+            val counts = parseChapterPageCounts(prefs[key]).toMutableMap()
+            counts[chapter] = count
+            prefs[key] = serializeChapterPageCounts(counts)
         }
     }
 

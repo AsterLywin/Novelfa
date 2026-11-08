@@ -317,6 +317,7 @@
     <string name="pager_reload">در حال بارگذاری دوباره‌ی بخش…</string>
     <string name="pager_building">در حال آماده‌سازی صفحه‌ها…</string>
     <string name="page_indicator">صفحه‌ی %1$d از %2$d</string>
+    <string name="page_indicator_approx">صفحه‌ی %1$d از حدود %2$d</string>
     <string name="pager_failed">صفحه‌بندی این بخش ساخته نشد؛ با کشیدن عمودی بخوانید یا از فهرست، بخش دیگری را باز کنید.</string>
     <string name="pdf_native_loading">در حال باز کردن PDF…</string>
     <string name="pdf_native_error">باز کردن این PDF انجام نشد.</string>

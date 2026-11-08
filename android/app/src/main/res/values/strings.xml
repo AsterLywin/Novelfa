@@ -317,6 +317,7 @@
     <string name="pager_reload">Reloading the chapter…</string>
     <string name="pager_building">Preparing the pages…</string>
     <string name="page_indicator">Page %1$d of %2$d</string>
+    <string name="page_indicator_approx">Page %1$d of about %2$d</string>
     <string name="pager_failed">This chapter’s pagination failed; scroll vertically to read, or open another chapter from the list.</string>
     <string name="pdf_native_loading">Opening PDF…</string>
     <string name="pdf_native_error">Couldn\'t open this PDF.</string>
