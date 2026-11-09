@@ -40,6 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -83,7 +84,16 @@ fun CharacterSheet(
      * tap (not when the sheet opens) avoids a race where a tap before
      * the preload finished would silently do nothing.
      */
-    unlockInfoLoader: (suspend (CharacterTheme) -> ThemeUnlockInfo?)? = null
+    unlockInfoLoader: (suspend (CharacterTheme) -> ThemeUnlockInfo?)? = null,
+    /**
+     * Whether to show the Windows «باز شد · با یک راز ✦» line under a
+     * theme's tagline. The caller decides the rule (secret-unlocked
+     * and not unlocked by either rank gate); the sheet only renders
+     * it. No success-green token exists on Android, so the line uses
+     * the accent (primary), like the earned-mark names in the
+     * celebration dialog.
+     */
+    showSecretMark: (CharacterTheme) -> Boolean = { false }
 ) {
     val isEnglishUi = LocalConfiguration.current.locales[0].language.startsWith("en")
     var pendingTheme by remember { mutableStateOf<CharacterTheme?>(null) }
@@ -133,6 +143,7 @@ fun CharacterSheet(
                             accent = theme.dark.accent,
                             locked = locked,
                             active = activeId == theme.id,
+                            secretMark = showSecretMark(theme),
                             onClick = {
                                 if (locked) {
                                     pendingTheme = theme
@@ -271,6 +282,7 @@ private fun CharacterRow(
     accent: String,
     locked: Boolean,
     active: Boolean,
+    secretMark: Boolean = false,
     onClick: () -> Unit
 ) {
     Row(
@@ -356,6 +368,14 @@ private fun CharacterRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (secretMark) {
+                Text(
+                    text = stringResource(R.string.theme_unlocked_secret),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
         }
         Spacer(modifier = Modifier.width(8.dp))
         Box(

@@ -1280,7 +1280,14 @@ fun LibraryScreen(
                             }
                             TextButton(onClick = {
                                 scope.launch {
-                                    if (best != null) prefs.setCharTheme(best.id)
+                                    // Guard (same as SettingsViewModel.setCharTheme):
+                                    // best is genuinely unlocked by
+                                    // construction (RankHook's fresh
+                                    // filter), but never store a theme
+                                    // the unlock check rejects.
+                                    if (best != null && RankService(rankPrefs).isUnlocked(best)) {
+                                        prefs.setCharTheme(best.id)
+                                    }
                                     RankHook.acknowledgeXpCelebration(rankPrefs, up.toXp)
                                     xpRankUp = null
                                 }
@@ -1306,7 +1313,13 @@ fun LibraryScreen(
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        prefs.setCharTheme(theme.id)
+                        // Guard (same as SettingsViewModel.setCharTheme):
+                        // the theme was secret-unlocked a moment ago in
+                        // this flow, but never store a theme the unlock
+                        // check rejects.
+                        if (RankService(rankPrefs).isUnlocked(theme)) {
+                            prefs.setCharTheme(theme.id)
+                        }
                         secretUnlocked = null
                     }
                 }) { Text(stringResource(R.string.yes)) }

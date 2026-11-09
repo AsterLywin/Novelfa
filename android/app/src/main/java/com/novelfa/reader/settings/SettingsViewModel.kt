@@ -63,7 +63,23 @@ class SettingsViewModel(
 
     suspend fun setTheme(value: String) = prefs.setTheme(value)
     suspend fun setAccent(value: String) = prefs.setAccent(value)
-    suspend fun setCharTheme(value: String?) = prefs.setCharTheme(value ?: "")
+    /**
+     * Stores the active character theme. Refuses a theme the user has
+     * not unlocked (Windows ThemeManager.SetCharacter parity: it
+     * returns false for a locked theme and stores nothing) — otherwise
+     * the app would paint a locked theme's colors while the picker
+     * shows it locked. Null/blank clears the theme (always allowed).
+     * Returns true when the value was stored.
+     */
+    suspend fun setCharTheme(value: String?): Boolean {
+        val id = value.orEmpty()
+        if (id.isNotBlank()) {
+            val theme = CharacterThemes.find(id)
+            if (theme != null && !rankService().isUnlocked(theme)) return false
+        }
+        prefs.setCharTheme(id)
+        return true
+    }
     suspend fun setFontSize(value: Int) = prefs.setFontSize(value.coerceIn(10, 72))
     /**
      * Stores a custom font-family name. Returns false (and stores nothing)

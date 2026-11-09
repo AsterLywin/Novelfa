@@ -313,6 +313,7 @@
     <string name="theme_unlock_either">با هرکدام از این دو راه باز می‌شود:</string>
     <string name="theme_unlock_books">%1$d از %2$d کتاب تمام‌شده (رتبه‌ی «%3$s»)</string>
     <string name="theme_unlock_xp">%1$d از %2$d XP (عنوان «%3$s»)</string>
+    <string name="theme_unlocked_secret">باز شد · با یک راز ✦</string>
     <string name="font_size_min">کمترین سایز فونت مجاز %1$d است</string>
     <string name="font_size_max">بیشترین سایز فونت مجاز %1$d است</string>
     <string name="pager_reload">در حال بارگذاری دوباره‌ی بخش…</string>

@@ -519,7 +519,17 @@ private fun CharacterSection(viewModel: SettingsViewModel) {
             onToggleParticles = { enabled ->
                 scope.launch { viewModel.setThemeParticles(enabled) }
             },
-            unlockInfoLoader = { theme -> viewModel.themeUnlockInfo(theme, isEnglishUi) }
+            unlockInfoLoader = { theme -> viewModel.themeUnlockInfo(theme, isEnglishUi) },
+            // Windows parity («باز شد · با یک راز ✦»): the line shows
+            // only when a secret code is what opened the theme — not
+            // when a rank gate already did. (Windows shows the same
+            // line for XP-only unlocks too, which mislabels them as
+            // secret; Android does not.)
+            showSecretMark = { t ->
+                rank.isSecretUnlocked(t.id) &&
+                    !rank.isRankUnlocked(t.requiredRank) &&
+                    !rank.isXpUnlocked(t.xpTitle)
+            }
         )
     }
 }

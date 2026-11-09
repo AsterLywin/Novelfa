@@ -12,6 +12,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.toArgb
 import com.novelfa.reader.data.PrefsStore
+import com.novelfa.reader.data.PrefsStoreRankPrefs
+import com.novelfa.reader.domain.RankService
 import com.novelfa.reader.settings.SettingsViewModel
 import com.novelfa.reader.domain.CharacterThemes
 import com.novelfa.reader.theme.buildPlainPalette
@@ -45,6 +47,33 @@ class MainActivity : ComponentActivity() {
             runCatching { PrefsStore(applicationContext).appearanceSnapshot() }
                 .getOrNull()
         }
+        // Startup reconcile (Windows SetCharacter parity, applied to the
+        // stored value): a theme saved while unlocked must never stay
+        // active after it stops being unlocked — otherwise the app
+        // paints its colors while the picker shows it locked (the
+        // active-but-locked state users reported on Windows). The check
+        // MUST wait for the rank bridge's preload: before it, maxRank
+        // reads -1 and totalXp reads 0, so every theme looks locked and
+        // a legitimate theme would be cleared on cold start. Unknown
+        // ids (find returns null) are left alone — the app already
+        // renders plain colors for them.
+        var effectiveCharTheme = appearance?.charTheme.orEmpty()
+        if (effectiveCharTheme.isNotBlank()) {
+            val storedTheme = CharacterThemes.find(effectiveCharTheme)
+            if (storedTheme != null) {
+                runBlocking(Dispatchers.IO) {
+                    runCatching {
+                        val store = PrefsStore(applicationContext)
+                        val rankBridge = PrefsStoreRankPrefs(store)
+                        rankBridge.awaitLoaded()
+                        if (!RankService(rankBridge).isUnlocked(storedTheme)) {
+                            store.setCharTheme("")
+                            effectiveCharTheme = ""
+                        }
+                    }
+                }
+            }
+        }
         // Apply the saved in-app language to this Activity's resources
         // BEFORE the first frame. String resources (and LocalConfiguration)
         // resolve from the Activity configuration, which nothing else
@@ -60,7 +89,7 @@ class MainActivity : ComponentActivity() {
         // even the pre-first-frame window matches the app.
         appearance?.let { snap ->
             val isLight = snap.theme == "light"
-            val bg = snap.charTheme.takeIf { it.isNotBlank() }
+            val bg = effectiveCharTheme.takeIf { it.isNotBlank() }
                 ?.let { CharacterThemes.find(it) }
                 ?.let { parseHex(it.palette(isLight).bg) }
                 ?: buildPlainPalette(isLight, snap.accent).bg
