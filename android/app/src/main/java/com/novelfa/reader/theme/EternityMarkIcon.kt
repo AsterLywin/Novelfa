@@ -30,11 +30,13 @@ import kotlin.math.sin
  * matching its name — ember flame, starry dewdrop, golden leaf,
  * crescent, paper sun, galactic crown, keeper's wing, heart of
  * Pleiades, throne, and the radiant sun of worlds (the most
- * elaborate, with three small worlds orbiting it). All 10 are gold
- * so they stand apart from the violet title stars (StarRow); the
- * gold is fixed, it does NOT follow the app accent.
+ * elaborate, with three small worlds orbiting it). All 10 follow the
+ * app's effective accent (primary / primaryContainer, lightened for
+ * the bright details) — a character theme's accent when one is active,
+ * otherwise the user's own accent color — so they always match the
+ * rest of the UI, exactly like the violet title stars.
  *
- * States: earned = gold gradient fill (+ light/dark details);
+ * States: earned = accent gradient fill (+ light/dark details);
  * locked = outline only, in onSurfaceVariant. The shapes live in a
  * 120x120 space and are scaled to [size] — the same pattern as
  * StarRow's drawn stars, and the same withTransform+scale recipe
@@ -48,26 +50,38 @@ import kotlin.math.sin
  */
 @Composable
 fun EternityMarkIcon(markIndex: Int, size: Dp, earned: Boolean, modifier: Modifier = Modifier) {
-    val outline = MaterialTheme.colorScheme.onSurfaceVariant
+    // The mark follows the app's own effective accent, exactly like the
+    // title stars (StarRow uses primary): NovelfaApp buildAppColorScheme
+    // resolves it as a character theme's accent when one is active,
+    // otherwise the user's own accent color. So the mark changes with
+    // the theme/accent automatically — no fixed color anywhere.
+    val scheme = MaterialTheme.colorScheme
+    val colors = MarkColors(
+        light = lighten(scheme.primary, 0.6f),
+        mid = scheme.primary,
+        dark = scheme.primaryContainer
+    )
+    val outline = scheme.onSurfaceVariant
     Canvas(modifier = modifier.size(size)) {
         // this.size is the canvas Size: the Dp parameter named `size`
         // shadows DrawScope.size, and Dp has no minDimension.
         val scale = this.size.minDimension / 120f
         withTransform({ scale(scale, scale) }) {
-            drawEternityMark(markIndex.coerceIn(1, 10), earned, outline)
+            drawEternityMark(markIndex.coerceIn(1, 10), earned, outline, colors)
         }
     }
 }
 
-private val MarkGoldColors = listOf(
-    Color(0xFFFFE9A8),
-    Color(0xFFF5C542),
-    Color(0xFFE8960C)
+/** The three stops of a mark's gradient + its light/dark details. */
+private data class MarkColors(val light: Color, val mid: Color, val dark: Color)
+
+/** Blend a color toward white (lighten); Color has no built-in lighten. */
+private fun lighten(color: Color, f: Float): Color = Color(
+    red = color.red + (1f - color.red) * f,
+    green = color.green + (1f - color.green) * f,
+    blue = color.blue + (1f - color.blue) * f,
+    alpha = 1f
 )
-private val MarkGoldLight = Color(0xFFFFE9A8)
-private val MarkGoldDark = Color(0xFF8A5A00)
-private val MarkFeatherMid = Color(0xFFE8A90B)
-private val MarkFeatherDark = Color(0xFFD9960A)
 
 /** 4-point sparkle, concave diamond, first point at the top. */
 private fun star4Path(cx: Float, cy: Float, r: Float): Path {
@@ -112,9 +126,9 @@ private fun diamondPath(cx: Float, cy: Float, r: Float): Path {
     }
 }
 
-private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Color) {
-    val gold = Brush.linearGradient(
-        colors = MarkGoldColors,
+private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Color, colors: MarkColors) {
+    val accent = Brush.linearGradient(
+        colors = listOf(colors.light, colors.mid, colors.dark),
         start = Offset(60f, 0f),
         end = Offset(60f, 120f)
     )
@@ -132,7 +146,7 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
                 close()
             }
             if (earned) {
-                drawPath(flame, brush = gold)
+                drawPath(flame, brush = accent)
                 val core = Path().apply {
                     moveTo(60f, 56f)
                     cubicTo(66f, 64f, 69f, 70f, 69f, 77f)
@@ -140,7 +154,7 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
                     cubicTo(51f, 70f, 55f, 64f, 60f, 56f)
                     close()
                 }
-                drawPath(core, color = MarkGoldLight)
+                drawPath(core, color = colors.light)
             } else {
                 drawPath(flame, color = outline, style = stroke)
             }
@@ -155,14 +169,14 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
                 close()
             }
             if (earned) {
-                drawPath(drop, brush = gold)
+                drawPath(drop, brush = accent)
                 drawOval(
-                    color = MarkGoldLight,
+                    color = colors.light,
                     topLeft = Offset(44f, 56f),
                     size = Size(12f, 20f),
                     alpha = 0.55f
                 )
-                drawPath(star4Path(82f, 34f, 11f), color = MarkGoldLight)
+                drawPath(star4Path(82f, 34f, 11f), color = colors.light)
             } else {
                 drawPath(drop, color = outline, style = stroke)
             }
@@ -176,18 +190,18 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
                 close()
             }
             if (earned) {
-                drawPath(leaf, brush = gold)
-                drawLine(MarkGoldDark, Offset(60f, 20f), Offset(60f, 100f), strokeWidth = 3f, cap = StrokeCap.Round)
-                drawLine(MarkGoldDark, Offset(60f, 44f), Offset(78f, 30f), strokeWidth = 2.4f, cap = StrokeCap.Round)
-                drawLine(MarkGoldDark, Offset(60f, 44f), Offset(42f, 30f), strokeWidth = 2.4f, cap = StrokeCap.Round)
-                drawLine(MarkGoldDark, Offset(60f, 66f), Offset(80f, 52f), strokeWidth = 2.4f, cap = StrokeCap.Round)
-                drawLine(MarkGoldDark, Offset(60f, 66f), Offset(40f, 52f), strokeWidth = 2.4f, cap = StrokeCap.Round)
+                drawPath(leaf, brush = accent)
+                drawLine(colors.dark, Offset(60f, 20f), Offset(60f, 100f), strokeWidth = 3f, cap = StrokeCap.Round)
+                drawLine(colors.dark, Offset(60f, 44f), Offset(78f, 30f), strokeWidth = 2.4f, cap = StrokeCap.Round)
+                drawLine(colors.dark, Offset(60f, 44f), Offset(42f, 30f), strokeWidth = 2.4f, cap = StrokeCap.Round)
+                drawLine(colors.dark, Offset(60f, 66f), Offset(80f, 52f), strokeWidth = 2.4f, cap = StrokeCap.Round)
+                drawLine(colors.dark, Offset(60f, 66f), Offset(40f, 52f), strokeWidth = 2.4f, cap = StrokeCap.Round)
             } else {
                 drawPath(leaf, color = outline, style = stroke)
             }
         }
         4 -> {
-            // Silver crescent (gold here): outer circle minus the
+            // Silver crescent (accent here): outer circle minus the
             // offset inner circle. Filled = EvenOdd path; locked =
             // the two arcs of its outline (see the file header).
             val outer = Rect(20f, 24f, 92f, 96f)
@@ -198,9 +212,9 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
                     addOval(inner)
                     fillType = PathFillType.EvenOdd
                 }
-                drawPath(crescent, brush = gold)
-                drawPath(star4Path(92f, 28f, 10f), color = MarkGoldLight)
-                drawPath(star4Path(84f, 88f, 7f), color = MarkGoldLight)
+                drawPath(crescent, brush = accent)
+                drawPath(star4Path(92f, 28f, 10f), color = colors.light)
+                drawPath(star4Path(84f, 88f, 7f), color = colors.light)
             } else {
                 drawArc(
                     color = outline,
@@ -226,10 +240,10 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
             // Paper sun: 8 rays + disc + the folded-paper crease.
             val rays = (0 until 8).map { rayPath(60f, 60f, it * 45f, 26f, 46f, 8f) }
             if (earned) {
-                rays.forEach { drawPath(it, brush = gold) }
-                drawCircle(brush = gold, radius = 24f, center = Offset(60f, 60f))
+                rays.forEach { drawPath(it, brush = accent) }
+                drawCircle(brush = accent, radius = 24f, center = Offset(60f, 60f))
                 drawLine(
-                    MarkGoldDark, Offset(42f, 74f), Offset(78f, 46f),
+                    colors.dark, Offset(42f, 74f), Offset(78f, 46f),
                     strokeWidth = 2.5f, cap = StrokeCap.Round, alpha = 0.45f
                 )
             } else {
@@ -250,18 +264,18 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
                 close()
             }
             if (earned) {
-                drawPath(crown, brush = gold)
+                drawPath(crown, brush = accent)
                 drawRoundRect(
-                    brush = gold,
+                    brush = accent,
                     topLeft = Offset(28f, 88f),
                     size = Size(64f, 10f),
                     cornerRadius = CornerRadius(3f, 3f)
                 )
-                drawCircle(brush = gold, radius = 5f, center = Offset(22f, 40f))
-                drawCircle(brush = gold, radius = 5f, center = Offset(60f, 22f))
-                drawCircle(brush = gold, radius = 5f, center = Offset(98f, 40f))
-                drawPath(diamondPath(60f, 60f, 10f), color = MarkGoldLight)
-                drawPath(star4Path(60f, 8f, 6f), color = MarkGoldLight)
+                drawCircle(brush = accent, radius = 5f, center = Offset(22f, 40f))
+                drawCircle(brush = accent, radius = 5f, center = Offset(60f, 22f))
+                drawCircle(brush = accent, radius = 5f, center = Offset(98f, 40f))
+                drawPath(diamondPath(60f, 60f, 10f), color = colors.light)
+                drawPath(star4Path(60f, 8f, 6f), color = colors.light)
             } else {
                 drawPath(crown, color = outline, style = stroke)
                 drawRoundRect(
@@ -300,9 +314,9 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
                 close()
             }
             if (earned) {
-                drawPath(feather1, brush = gold)
-                drawPath(feather2, color = MarkFeatherMid)
-                drawPath(feather3, color = MarkFeatherDark)
+                drawPath(feather1, brush = accent)
+                drawPath(feather2, color = colors.mid)
+                drawPath(feather3, color = colors.dark)
             } else {
                 drawPath(feather1, color = outline, style = stroke)
                 drawPath(feather2, color = outline, style = stroke)
@@ -320,10 +334,10 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
                 close()
             }
             if (earned) {
-                drawPath(heart, brush = gold)
-                drawPath(star4Path(30f, 20f, 8f), color = MarkGoldLight)
-                drawPath(star4Path(60f, 12f, 9f), color = MarkGoldLight)
-                drawPath(star4Path(90f, 20f, 8f), color = MarkGoldLight)
+                drawPath(heart, brush = accent)
+                drawPath(star4Path(30f, 20f, 8f), color = colors.light)
+                drawPath(star4Path(60f, 12f, 9f), color = colors.light)
+                drawPath(star4Path(90f, 20f, 8f), color = colors.light)
             } else {
                 drawPath(heart, color = outline, style = stroke)
             }
@@ -340,28 +354,28 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
                 close()
             }
             if (earned) {
-                drawPath(back, brush = gold)
-                drawCircle(brush = gold, radius = 4f, center = Offset(46f, 8f))
-                drawCircle(brush = gold, radius = 4f, center = Offset(74f, 8f))
-                drawPath(diamondPath(60f, 27f, 9f), color = MarkGoldLight)
+                drawPath(back, brush = accent)
+                drawCircle(brush = accent, radius = 4f, center = Offset(46f, 8f))
+                drawCircle(brush = accent, radius = 4f, center = Offset(74f, 8f))
+                drawPath(diamondPath(60f, 27f, 9f), color = colors.light)
                 drawRoundRect(
-                    brush = gold, topLeft = Offset(28f, 52f), size = Size(18f, 12f),
+                    brush = accent, topLeft = Offset(28f, 52f), size = Size(18f, 12f),
                     cornerRadius = CornerRadius(2f, 2f)
                 )
                 drawRoundRect(
-                    brush = gold, topLeft = Offset(74f, 52f), size = Size(18f, 12f),
+                    brush = accent, topLeft = Offset(74f, 52f), size = Size(18f, 12f),
                     cornerRadius = CornerRadius(2f, 2f)
                 )
                 drawRoundRect(
-                    brush = gold, topLeft = Offset(28f, 64f), size = Size(64f, 9f),
+                    brush = accent, topLeft = Offset(28f, 64f), size = Size(64f, 9f),
                     cornerRadius = CornerRadius(3f, 3f)
                 )
                 drawRoundRect(
-                    brush = gold, topLeft = Offset(26f, 76f), size = Size(68f, 10f),
+                    brush = accent, topLeft = Offset(26f, 76f), size = Size(68f, 10f),
                     cornerRadius = CornerRadius(2f, 2f)
                 )
                 drawRoundRect(
-                    color = MarkFeatherDark, topLeft = Offset(34f, 88f), size = Size(52f, 7f),
+                    color = colors.dark, topLeft = Offset(34f, 88f), size = Size(52f, 7f),
                     cornerRadius = CornerRadius(2f, 2f)
                 )
             } else {
@@ -398,11 +412,11 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
             }
             if (earned) {
                 drawCircle(color = Color(0xFFF5C542), radius = 48f, center = Offset(60f, 60f), alpha = 0.16f)
-                rays.forEach { drawPath(it, brush = gold) }
-                drawCircle(brush = gold, radius = 25f, center = Offset(60f, 60f))
-                drawCircle(color = MarkGoldLight, radius = 5.5f, center = Offset(60f, 14f))
-                drawCircle(color = MarkGoldLight, radius = 5.5f, center = Offset(100f, 84f))
-                drawCircle(color = MarkGoldLight, radius = 5.5f, center = Offset(20f, 84f))
+                rays.forEach { drawPath(it, brush = accent) }
+                drawCircle(brush = accent, radius = 25f, center = Offset(60f, 60f))
+                drawCircle(color = colors.light, radius = 5.5f, center = Offset(60f, 14f))
+                drawCircle(color = colors.light, radius = 5.5f, center = Offset(100f, 84f))
+                drawCircle(color = colors.light, radius = 5.5f, center = Offset(20f, 84f))
             } else {
                 rays.forEach { drawPath(it, color = outline, style = stroke) }
                 drawCircle(color = outline, radius = 25f, center = Offset(60f, 60f), style = stroke)

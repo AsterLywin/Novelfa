@@ -1227,7 +1227,8 @@ fun LibraryScreen(
                                     text = mark.displayName(isEnglishUi),
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFF5C542)
+                                    // Same accent as the mark itself.
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                             }
                             Spacer(modifier = Modifier.height(14.dp))
