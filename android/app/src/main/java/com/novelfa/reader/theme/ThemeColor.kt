@@ -19,3 +19,11 @@ fun hexToColor(hex: String): Color {
         blue = (v and 0xFF).toInt()
     )
 }
+
+/** Blend a color toward white (lighten); Color has no built-in lighten. */
+internal fun lighten(color: Color, f: Float): Color = Color(
+    red = color.red + (1f - color.red) * f,
+    green = color.green + (1f - color.green) * f,
+    blue = color.blue + (1f - color.blue) * f,
+    alpha = 1f
+)

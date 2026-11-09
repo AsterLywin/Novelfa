@@ -75,14 +75,6 @@ fun EternityMarkIcon(markIndex: Int, size: Dp, earned: Boolean, modifier: Modifi
 /** The three stops of a mark's gradient + its light/dark details. */
 private data class MarkColors(val light: Color, val mid: Color, val dark: Color)
 
-/** Blend a color toward white (lighten); Color has no built-in lighten. */
-private fun lighten(color: Color, f: Float): Color = Color(
-    red = color.red + (1f - color.red) * f,
-    green = color.green + (1f - color.green) * f,
-    blue = color.blue + (1f - color.blue) * f,
-    alpha = 1f
-)
-
 /** 4-point sparkle, concave diamond, first point at the top. */
 private fun star4Path(cx: Float, cy: Float, r: Float): Path {
     val path = Path()
