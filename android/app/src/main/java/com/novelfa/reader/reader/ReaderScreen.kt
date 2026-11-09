@@ -2596,10 +2596,11 @@ fun ReaderScreen(
                     }
                 }
                 // Footnote bubble, Moon+ Reader style (see
-                // handleFootnoteTap and FootnoteBubble): a pale-yellow
-                // bubble anchored to the tap point, with a triangle
-                // tail pointing at it, popping in with a spring scale
-                // pivoting at the tail. The transparent layer over
+                // handleFootnoteTap and FootnoteBubble): a bubble in
+                // Novelfa's UI surfaces, anchored to the tap point,
+                // with a triangle tail pointing at it, popping in
+                // with a spring scale pivoting at the tail. The
+                // transparent layer over
                 // the page dismisses it on any tap outside; a scroll,
                 // back key, chapter/page change or fullscreen toggle
                 // closes it too (see the onScroll clear, BackHandler
@@ -3307,21 +3308,19 @@ fun ReaderScreen(
         } // Close particle Box
 } // Close ReaderScr
 
-// Moon+ Reader footnote bubble colors (A.java:187-188, verified from
-// the 10.8 decompile): pale-yellow bubble, near-black text, in every
-// theme — the bubble is a highlight color, not a theme surface.
-private val FOOTNOTE_BUBBLE_COLOR = Color(0xFFF6EA8C)
-private val FOOTNOTE_BUBBLE_TEXT_COLOR = Color(0xFF111111)
-
 /**
  * The footnote bubble, Moon+ Reader style (PopupNoteLay / pop_note.xml,
  * 10.8 decompiled 2026-11-08, studied 2026-11-09 — reimplemented here
  * in Novelfa's own code, no Moon code copied):
  *
- * - A pale-yellow rounded bubble anchored to the tap point: below the
- *   tap when the tap is in the top 38% of the reading area (50% in
- *   landscape), otherwise above it, with a 14dp gap; horizontally
- *   centered on the tap and clamped inside the area.
+ * - A rounded bubble in Novelfa's own UI surfaces
+ *   (surfaceContainerHigh + onSurface — the same tier as dialogs and
+ *   cards, following the reader theme; Moon's pale yellow was the
+ *   reference, but the user asked for Novelfa's UI instead), anchored
+ *   to the tap point: below the tap when the tap is in the top 38%
+ *   of the reading area (50% in landscape), otherwise above it, with
+ *   a 14dp gap; horizontally centered on the tap and clamped inside
+ *   the area.
  * - A 12x8dp triangle tail on the top or bottom edge, pointing at
  *   the tap (clamped to stay 36dp inside the bubble's edges).
  * - A spring scale pop-in/out pivoting at the tail (stiffness 200,
@@ -3355,6 +3354,10 @@ private fun FootnoteBubble(
     onCopy: () -> Unit
 ) {
     val density = LocalDensity.current
+    // Novelfa's UI, not Moon's yellow: the elevated surface tier
+    // (dialogs/cards) + onSurface text, following the reader theme.
+    val bubbleColor = MaterialTheme.colorScheme.surfaceContainerHigh
+    val bubbleTextColor = MaterialTheme.colorScheme.onSurface
     val hasLink = remember(note.html) {
         Regex("<a\\b", RegexOption.IGNORE_CASE).containsMatchIn(note.html)
     }
@@ -3403,11 +3406,11 @@ private fun FootnoteBubble(
             }
             .combinedClickable(onClick = {}, onLongClick = onCopy)
     ) {
-        if (below) FootnoteTail(arrowLeftPx)
+        if (below) FootnoteTail(arrowLeftPx, bubbleColor)
         Box(
             modifier = Modifier
                 .shadow(4.dp, RoundedCornerShape(8.dp))
-                .background(FOOTNOTE_BUBBLE_COLOR, RoundedCornerShape(8.dp))
+                .background(bubbleColor, RoundedCornerShape(8.dp))
                 .padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 24.dp)
         ) {
             Column {
@@ -3418,7 +3421,7 @@ private fun FootnoteBubble(
                         style = TextStyle(
                             fontSize = (fontSizeSp * 1.25f).sp,
                             fontWeight = FontWeight.Bold,
-                            color = FOOTNOTE_BUBBLE_TEXT_COLOR
+                            color = bubbleTextColor
                         )
                     )
                     Spacer(Modifier.weight(1f))
@@ -3439,7 +3442,7 @@ private fun FootnoteBubble(
                     style = TextStyle(
                         fontSize = fontSizeSp.sp,
                         lineHeight = (fontSizeSp * lineHeight).sp,
-                        color = FOOTNOTE_BUBBLE_TEXT_COLOR
+                        color = bubbleTextColor
                     ),
                     onClick = { offset ->
                         annotated.getStringAnnotations("url", offset, offset)
@@ -3454,13 +3457,13 @@ private fun FootnoteBubble(
                 )
             }
         }
-        if (!below) FootnoteTail(arrowLeftPx, pointUp = false)
+        if (!below) FootnoteTail(arrowLeftPx, bubbleColor, pointUp = false)
     }
 }
 
 /** The bubble's 12x8dp triangle tail, pointing up or down. */
 @Composable
-private fun FootnoteTail(arrowLeftPx: Float, pointUp: Boolean = true) {
+private fun FootnoteTail(arrowLeftPx: Float, color: Color, pointUp: Boolean = true) {
     val density = LocalDensity.current
     val arrowLeftDp = with(density) { arrowLeftPx.toDp() }
     Canvas(
@@ -3480,7 +3483,7 @@ private fun FootnoteTail(arrowLeftPx: Float, pointUp: Boolean = true) {
             }
             close()
         }
-        drawPath(path, FOOTNOTE_BUBBLE_COLOR)
+        drawPath(path, color)
     }
 }
 
