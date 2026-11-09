@@ -91,6 +91,7 @@ import com.novelfa.reader.theme.AppIconKind
 import com.novelfa.reader.domain.CharacterTheme
 import com.novelfa.reader.domain.CharacterThemes
 import com.novelfa.reader.theme.CelebrationParticles
+import com.novelfa.reader.theme.EternityMarkIcon
 import com.novelfa.reader.domain.CelebrationTier
 import com.novelfa.reader.data.PrefsStoreRankPrefs
 import com.novelfa.reader.domain.XpLevel
@@ -1206,6 +1207,31 @@ fun LibraryScreen(
                         modifier = Modifier.matchParentSize()
                     )
                     Column(modifier = Modifier.padding(24.dp)) {
+                        // Eternity tiers: the earned mark itself, large
+                        // and gold, with its name underneath — the dialog
+                        // never named which mark was earned before.
+                        // Non-eternity tiers have no mark (mark == null).
+                        val mark = up.toLevel.mark
+                        if (mark != null) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                EternityMarkIcon(
+                                    markIndex = mark.index,
+                                    size = 72.dp,
+                                    earned = true
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = mark.displayName(isEnglishUi),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFF5C542)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(14.dp))
+                        }
                         Text(
                             text = stringResource(tierTitleRes),
                             style = MaterialTheme.typography.titleLarge
@@ -1232,9 +1258,15 @@ fun LibraryScreen(
                         )
                         // Drawn stars under the sentence (fractional fill,
                         // like everywhere else) instead of glyph stars
-                        // embedded in the message text.
+                        // embedded in the message text. Bigger than the
+                        // old 20.dp so the celebration reads at a glance;
+                        // eternity tiers keep smaller stars under the hero
+                        // mark instead of competing with it.
                         Spacer(modifier = Modifier.height(10.dp))
-                        StarRow(fill = up.toLevel.starFill, starSize = 20.dp)
+                        StarRow(
+                            fill = up.toLevel.starFill,
+                            starSize = if (mark != null) 24.dp else 28.dp
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
