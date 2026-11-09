@@ -236,14 +236,6 @@ private fun RankMarkRow(mark: EternityMark, level: XpLevel, isEnglishUi: Boolean
             }
         }
         Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = if (locked) "○" else "✦",
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (locked) {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-                MaterialTheme.colorScheme.primary
-            }
-        )
+        EternityMarkIcon(markIndex = mark.index, size = 30.dp, earned = !locked)
     }
 }

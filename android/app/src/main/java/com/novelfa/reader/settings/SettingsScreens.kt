@@ -76,6 +76,7 @@ import com.novelfa.reader.data.PrefsStoreRankPrefs
 import com.novelfa.reader.NovelfaApplication
 import com.novelfa.reader.domain.RankService
 import com.novelfa.reader.theme.RanksDialog
+import com.novelfa.reader.theme.EternityMarkIcon
 import com.novelfa.reader.theme.StarRow
 import com.novelfa.reader.domain.XpRank
 import java.text.SimpleDateFormat
@@ -876,11 +877,19 @@ private fun RankSection(viewModel: SettingsViewModel) {
             )
             if (level.mark != null) {
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "✦ ${level.mark!!.displayName(isEnglishUi)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    EternityMarkIcon(
+                        markIndex = level.mark!!.index,
+                        size = 16.dp,
+                        earned = true
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = level.mark!!.displayName(isEnglishUi),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(12.dp))
             LinearProgressIndicator(
