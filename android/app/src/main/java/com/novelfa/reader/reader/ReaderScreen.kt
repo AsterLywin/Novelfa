@@ -1,17 +1,6 @@
 package com.novelfa.reader.reader
 
-import android.Manifest
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.ServiceConnection
-import android.content.pm.PackageManager
-import android.os.Build
-import android.os.IBinder
-import android.speech.tts.TextToSpeech
 import android.util.Log
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -55,7 +44,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
-import androidx.compose.material3.Slider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -65,7 +53,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -93,7 +80,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -234,190 +220,7 @@ fun ReaderScreen(
         val pos = sectionTracker.lastReported ?: return
         extrasStore.setSectionPosition(bookId, pos.chapter, pos.fraction)
     }
-    // ---- Read-aloud (TTS) ----
-    // The engine lives in TtsService (foreground, mediaPlayback), so
-    // playback survives screen-off; this screen only binds it, feeds
-    // it one chapter's chunks at a time, and stops it on close.
-    // No notification-permission flow existed in the app before this:
-    // starting playback requests POST_NOTIFICATIONS on Android 13+
-    // (see startTts); a denial still plays — only the notification
-    // is hidden — and stopping stays possible from this screen.
-    var ttsService by remember { mutableStateOf<TtsService?>(null) }
-    var ttsBound by remember { mutableStateOf(false) }
-    var ttsState by remember { mutableStateOf(TtsState.IDLE) }
-    var ttsDialogOpen by remember { mutableStateOf(false) }
-    var ttsSleepMinutes by remember { mutableStateOf<Int?>(null) }
-    // Chapter the service is currently reading (may lag vm.index
-    // while the advance effect below loads the next chapter).
-    var ttsChapter by remember { mutableIntStateOf(-1) }
-    // Chapter-advance request from the service listener: the next
-    // chapter index when a chapter finishes. A LaunchedEffect
-    // (defined after gotoChapter, which it calls) consumes it. State,
-    // not a direct call, because the listener fires from the service
-    // binder thread and gotoChapter is a screen-local function.
-    var ttsAdvanceTo by remember { mutableIntStateOf(-1) }
-    // True while the advance effect drives gotoChapter: gotoChapter
-    // stops playback on a USER chapter jump, but not on this one.
-    var ttsAutoAdvancing by remember { mutableStateOf(false) }
-    // Pending queue while the service binds (binding is async).
-    var ttsPendingChunks by remember { mutableStateOf<List<String>?>(null) }
-    var ttsPendingTitle by remember { mutableStateOf("") }
-    var ttsPendingChapterTitle by remember { mutableStateOf("") }
-    val ttsSpeed by prefs.ttsSpeed.collectAsState(initial = TtsSpeed.DEFAULT)
-    val ttsListenMsg = stringResource(R.string.tts_listen)
-    val ttsNoEngineMsg = stringResource(R.string.tts_no_engine)
-    val ttsMissingDataMsg = stringResource(R.string.tts_missing_data)
-    val ttsLangNotSupportedMsg = stringResource(R.string.tts_lang_not_supported)
-    val ttsFailedMsg = stringResource(R.string.tts_failed)
-    val ttsEmptyMsg = stringResource(R.string.tts_empty)
-    val ttsFinishedMsg = stringResource(R.string.tts_finished)
-    val ttsInstallDataMsg = stringResource(R.string.tts_install_data)
-
-    fun ttsShowError(error: TtsError) {
-        scope.launch {
-            when (error) {
-                TtsError.NO_ENGINE -> snackbar.showSnackbar(ttsNoEngineMsg)
-                TtsError.MISSING_DATA -> {
-                    // The one real remedy: the system's voice-data
-                    // installer (a stock Android action, not a fake).
-                    val result = snackbar.showSnackbar(
-                        ttsMissingDataMsg, ttsInstallDataMsg
-                    )
-                    if (result == SnackbarResult.ActionPerformed) {
-                        runCatching {
-                            context.startActivity(
-                                Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA)
-                            )
-                        }
-                    }
-                }
-                TtsError.LANGUAGE_NOT_SUPPORTED ->
-                    snackbar.showSnackbar(ttsLangNotSupportedMsg)
-                else -> snackbar.showSnackbar(ttsFailedMsg)
-            }
-        }
-    }
-
-    val ttsConnection = remember {
-        object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-                val service = (binder as? TtsService.LocalBinder)?.service() ?: return
-                service.listener = object : TtsService.TtsListener {
-                    override fun onStateChanged(state: TtsState) {
-                        ttsState = state
-                    }
-
-                    override fun onChapterFinished() {
-                        ttsAdvanceTo = ttsChapter + 1
-                    }
-
-                    override fun onError(error: TtsError) {
-                        ttsState = TtsState.IDLE
-                        ttsShowError(error)
-                    }
-                }
-                ttsService = service
-                ttsBound = true
-                val pending = ttsPendingChunks
-                if (pending != null) {
-                    ttsPendingChunks = null
-                    service.startReading(
-                        pending, vm?.isEnglish == true, ttsSpeed,
-                        ttsPendingTitle, ttsPendingChapterTitle
-                    )
-                }
-            }
-
-            override fun onServiceDisconnected(name: ComponentName?) {
-                ttsService = null
-                ttsBound = false
-                ttsState = TtsState.IDLE
-            }
-        }
-    }
-
-    fun startTtsNow() {
-        val v = vm ?: return
-        scope.launch {
-            val chunks = v.ttsChunks(v.index)
-            if (chunks.isEmpty()) {
-                snackbar.showSnackbar(ttsEmptyMsg)
-                return@launch
-            }
-            val title = runCatching {
-                withContext(Dispatchers.IO) { repo.book(bookId)?.title }
-            }.getOrNull() ?: ""
-            ttsChapter = v.index
-            val bound = ttsService
-            if (bound != null) {
-                bound.startReading(
-                    chunks, v.isEnglish, ttsSpeed,
-                    title, v.chapterTitle(v.index)
-                )
-            } else {
-                ttsPendingChunks = chunks
-                ttsPendingTitle = title
-                ttsPendingChapterTitle = v.chapterTitle(v.index)
-                context.startService(TtsService.intent(context))
-                context.bindService(
-                    TtsService.intent(context), ttsConnection,
-                    Context.BIND_AUTO_CREATE
-                )
-            }
-        }
-    }
-
-    val ttsPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) {
-        // Granted or denied, playback starts: on Android 13+ a denial
-        // only hides the foreground notification, and the reader's own
-        // controls can still stop playback.
-        startTtsNow()
-    }
-
-    fun startTts() {
-        if (ttsState == TtsState.PLAYING || ttsState == TtsState.PAUSED) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                context, Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            ttsPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            startTtsNow()
-        }
-    }
-
-    fun stopTts() {
-        ttsPendingChunks = null
-        ttsSleepMinutes = null
-        ttsAdvanceTo = -1
-        ttsService?.stop()
-        if (ttsBound) {
-            runCatching { context.unbindService(ttsConnection) }
-            ttsBound = false
-        }
-        if (ttsService != null) {
-            context.stopService(TtsService.intent(context))
-        }
-        ttsService = null
-        ttsState = TtsState.IDLE
-        ttsChapter = -1
-    }
-
-    fun ttsToggle() {
-        when (ttsState) {
-            TtsState.PLAYING -> ttsService?.pause()
-            TtsState.PAUSED -> ttsService?.resume()
-            else -> startTts()
-        }
-    }
-
     fun closeReader() {
-        // Read-aloud belongs to this reader: closing it stops
-        // playback (the service is not left speaking to nobody).
-        stopTts()
         scope.launch {
             runCatching { vm?.xpFlush() }
             // The paged anchor is throttled (500ms) on turns; a close
@@ -437,9 +240,6 @@ fun ReaderScreen(
                 runCatching { v.flushPagedAnchor() }
                 runCatching { flushSectionPosition() }
             }
-            // System-back/gesture exit: same rule as closeReader —
-            // the service stops with the reader.
-            stopTts()
         }
     }
     var loadError by remember { mutableStateOf(false) }
@@ -1117,12 +917,6 @@ fun ReaderScreen(
     }
 
     suspend fun gotoChapter(v: ReaderViewModel, i: Int) {
-        // A manual chapter jump ends read-aloud of the old chapter
-        // (its chunks belong to that chapter). The TTS advance effect
-        // below sets ttsAutoAdvancing, so its own jumps are exempt.
-        if (i != v.index && !ttsAutoAdvancing) {
-            stopTts()
-        }
         // A real chapter change re-arms pager recovery; a same-chapter
         // reload (the recovery itself, a mode switch) must not, or a
         // permanently torn-down chapter would reload-loop on every tap.
@@ -1146,55 +940,6 @@ fun ReaderScreen(
             rev++
         } else {
             showVmError(v)
-        }
-    }
-
-    // Read-aloud chapter advance: the service reports a finished
-    // chapter by setting ttsAdvanceTo (see the TTS listener above);
-    // this effect is the only place that calls gotoChapter for TTS.
-    // It loads the next chapter, feeds its chunks to the service and
-    // keeps reading — or stops at the book's end and says so.
-    LaunchedEffect(ttsAdvanceTo) {
-        val next = ttsAdvanceTo
-        if (next < 0) return@LaunchedEffect
-        ttsAdvanceTo = -1
-        val v = vm ?: return@LaunchedEffect
-        val service = ttsService ?: run {
-            ttsState = TtsState.IDLE
-            return@LaunchedEffect
-        }
-        val decision = TtsPlaybackPlan.afterChapterEnd(ttsChapter, v.chapters.size)
-        when (decision) {
-            is TtsPlaybackPlan.Next.Finished -> {
-                stopTts()
-                snackbar.showSnackbar(ttsFinishedMsg)
-            }
-            is TtsPlaybackPlan.Next.Chapter -> {
-                ttsAutoAdvancing = true
-                try {
-                    gotoChapter(v, decision.index)
-                    val chunks = v.ttsChunks(decision.index)
-                    if (chunks.isEmpty()) {
-                        // An empty chapter (cover / image-only): skip
-                        // ahead instead of going silent — the next
-                        // finish advances again, or ends the book.
-                        ttsChapter = decision.index
-                        ttsAdvanceTo = decision.index + 1
-                        return@LaunchedEffect
-                    }
-                    ttsChapter = decision.index
-                    service.startReading(
-                        chunks, v.isEnglish, ttsSpeed,
-                        service.bookTitle, v.chapterTitle(decision.index)
-                    )
-                } finally {
-                    ttsAutoAdvancing = false
-                }
-            }
-            is TtsPlaybackPlan.Next.Chunk -> {
-                // Unreachable: chunkIndex is past the last chunk by
-                // construction (see the afterChapter call above).
-            }
         }
     }
 
@@ -2145,20 +1890,20 @@ fun ReaderScreen(
                     else R.string.reader_bookmark_add
                 )
                 TopAppBar(
-                    // No title text: with six action icons in the bar
+                    // No title text: with seven action icons in the bar
                     // the "section X of Y" label was squeezed into an
                     // unreadable vertical wrap next to the drawer button
                     // (removed at Aster's request, both languages).
                     title = {},
                     navigationIcon = {
-                        TextButton(onClick = { scope.launch { drawerState.open() } }) {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             AppIcon(AppIconKind.List, tint = LocalContentColor.current, size = 19.dp)
                         }
                     },
                     actions = {
                         // Reading layout mode (replaces the old continuous
                         // toggle): ⇄ horizontal paging, ↕ vertical-continuous.
-                        TextButton(onClick = { modeOpen = true }, enabled = vm != null) {
+                        IconButton(onClick = { modeOpen = true }, enabled = vm != null) {
                             AppIcon(
                                 if (modeNow == ReadingMode.PAGED_HORIZONTAL) AppIconKind.Pages
                                 else AppIconKind.Scroll,
@@ -2166,40 +1911,14 @@ fun ReaderScreen(
                                 size = 19.dp
                             )
                         }
-                        TextButton(onClick = { themeOpen = true }, enabled = vm != null) {
+                        IconButton(onClick = { themeOpen = true }, enabled = vm != null) {
                             ContrastIcon(tint = LocalContentColor.current, size = 19.dp)
                         }
-                        TextButton(onClick = { fontOpen = true }, enabled = vm != null) {
+                        IconButton(onClick = { fontOpen = true }, enabled = vm != null) {
                             AppIcon(AppIconKind.Font, tint = LocalContentColor.current, size = 17.dp)
                         }
-                        TextButton(onClick = { searchOpen = true }, enabled = vm != null) {
+                        IconButton(onClick = { searchOpen = true }, enabled = vm != null) {
                             AppIcon(AppIconKind.Search, tint = LocalContentColor.current, size = 18.dp)
-                        }
-                        // Read-aloud (TTS): tap toggles play/pause for
-                        // the current chapter; long-press opens the
-                        // speed + sleep-timer dialog. The Play icon is
-                        // tinted while speaking (the app icon set has
-                        // no Pause icon, so the dialog's text buttons
-                        // name the pause/resume actions instead).
-                        Box(
-                            modifier = Modifier
-                                .combinedClickable(
-                                    onClick = { ttsToggle() },
-                                    onLongClick = { if (vm != null) ttsDialogOpen = true }
-                                )
-                                .semantics { contentDescription = ttsListenMsg }
-                                .padding(10.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            AppIcon(
-                                AppIconKind.Play,
-                                tint = if (ttsState == TtsState.PLAYING) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    LocalContentColor.current
-                                },
-                                size = 18.dp
-                            )
                         }
                         // Bookmark toggle for the current chapter
                         // (native viewer parity: filled when this
@@ -2208,7 +1927,7 @@ fun ReaderScreen(
                         // in the section drawer. The description
                         // names the action the tap will do, like the
                         // viewer's bookmark button.
-                        TextButton(
+                        IconButton(
                             onClick = { toggleCurrentBookmark() },
                             enabled = vm != null,
                             modifier = Modifier.semantics {
@@ -2226,10 +1945,10 @@ fun ReaderScreen(
                                 size = 18.dp
                             )
                         }
-                        TextButton(onClick = { fullscreenUi = true }, enabled = vm != null) {
+                        IconButton(onClick = { fullscreenUi = true }, enabled = vm != null) {
                             AppIcon(AppIconKind.Fullscreen, tint = LocalContentColor.current, size = 17.dp)
                         }
-                        TextButton(onClick = { closeReader() }) {
+                        IconButton(onClick = { closeReader() }) {
                             AppIcon(AppIconKind.Close, tint = LocalContentColor.current, size = 16.dp)
                         }
                     }
@@ -3141,30 +2860,6 @@ fun ReaderScreen(
         SupportDialog(onDismiss = { supportOpen = false })
     }
 
-    // Read-aloud controls: play/pause + stop, speed (persisted) and
-    // a session-only sleep timer. Opened by long-pressing the top-bar
-    // play button (a tap there toggles play/pause directly).
-    if (ttsDialogOpen) {
-        TtsDialog(
-            state = ttsState,
-            speed = ttsSpeed,
-            sleepMinutes = ttsSleepMinutes,
-            onToggle = { ttsToggle() },
-            onStop = { stopTts() },
-            onSpeedChange = { newSpeed ->
-                scope.launch {
-                    prefs.setTtsSpeed(newSpeed)
-                    ttsService?.setSpeed(newSpeed)
-                }
-            },
-            onSleepChange = { minutes ->
-                ttsSleepMinutes = minutes
-                ttsService?.setSleepTimerMinutes(minutes)
-            },
-            onDismiss = { ttsDialogOpen = false }
-        )
-    }
-
     // Archive choice for a ZIP holding several books (ReadEra's
     // ARCHIVE_COLLISION, as a choice instead of an error): the
     // candidate names are book data from inside the archive, never
@@ -3467,97 +3162,3 @@ fun ReaderScreen(
     } // Close fontOpen
         } // Close particle Box
 } // Close ReaderScr
-
-
-/**
- * Read-aloud (TTS) dialog: play/pause + stop, playback speed and a
- * sleep timer. Speed is 0.5x–2.0x in 0.25x steps (persisted in
- * PrefsStore on release, not on every drag tick); the timer is
- * session-only and stops playback when it fires (Off clears it).
- * No paragraph highlight: the reader document has no per-paragraph
- * ids to target (only .rdr-chap[data-idx] and the pager's internal
- * anchors), and adding them would be a HtmlBuilder rework — the
- * dialog says nothing about highlighting, and playback works
- * without it.
- */
-@Composable
-private fun TtsDialog(
-    state: TtsState,
-    speed: Float,
-    sleepMinutes: Int?,
-    onToggle: () -> Unit,
-    onStop: () -> Unit,
-    onSpeedChange: (Float) -> Unit,
-    onSleepChange: (Int?) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var sliderSpeed by remember { mutableFloatStateOf(speed) }
-    val sleepOptions: List<Pair<String, Int?>> = listOf(
-        stringResource(R.string.tts_sleep_off) to null,
-        stringResource(R.string.tts_sleep_minutes, 15) to 15,
-        stringResource(R.string.tts_sleep_minutes, 30) to 30,
-        stringResource(R.string.tts_sleep_minutes, 60) to 60
-    )
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.close))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = { onStop(); onDismiss() }) {
-                Text(stringResource(R.string.tts_stop))
-            }
-        },
-        title = { Text(stringResource(R.string.tts_listen)) },
-        text = {
-            Column {
-                Row {
-                    TextButton(onClick = onToggle) {
-                        Text(
-                            stringResource(
-                                if (state == TtsState.PLAYING) R.string.tts_pause
-                                else R.string.tts_resume
-                            )
-                        )
-                    }
-                }
-                Text(stringResource(R.string.tts_speed) + ": " + formatTtsSpeed(sliderSpeed))
-                Slider(
-                    value = sliderSpeed,
-                    onValueChange = { sliderSpeed = it },
-                    onValueChangeFinished = { onSpeedChange(sliderSpeed) },
-                    valueRange = TtsSpeed.MIN..TtsSpeed.MAX,
-                    steps = 5
-                )
-                Text(stringResource(R.string.tts_sleep_timer))
-                Row {
-                    for ((label, minutes) in sleepOptions) {
-                        TextButton(onClick = { onSleepChange(minutes) }) {
-                            Text(
-                                label,
-                                color = if (sleepMinutes == minutes) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    LocalContentColor.current
-                                },
-                                fontWeight = if (sleepMinutes == minutes) {
-                                    FontWeight.Bold
-                                } else {
-                                    FontWeight.Normal
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    )
-}
-
-/** "1.25×" / "1×" / "0.5×": the × is a unit glyph, not a word. */
-private fun formatTtsSpeed(speed: Float): String {
-    val text = "%.2f".format(Locale.US, speed).trimEnd('0').trimEnd('.')
-    return text + "×"
-}

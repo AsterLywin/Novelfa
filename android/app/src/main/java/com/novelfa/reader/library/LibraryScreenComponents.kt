@@ -41,7 +41,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ScrollableTabRow
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.LocalTextStyle
@@ -352,113 +351,6 @@ private fun pluralBooks(count: Int): String {
     val parts = raw.split("|")
     val form = if (count == 1) parts.first() else parts.last()
     return form.format(count)
-}
-
-@Composable
-internal fun SelectionBar(
-    count: Int,
-    onDelete: () -> Unit,
-    onCancel: () -> Unit
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.primaryContainer,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                stringResource(R.string.n_selected, count),
-                style = MaterialTheme.typography.titleSmall
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onDelete) {
-                    TrashCanIcon(
-                        // Bar content color, not destructive red: fixed
-                        // vivid red on the orange primaryContainer had
-                        // almost no contrast and read as a muddy smudge.
-                        // The trash shape + the delete-confirm dialog
-                        // carry the destructive meaning; the color just
-                        // needs to match the bar (and adapt to themes).
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-                // Cancel/close: bar content color, like the trash —
-                // the old fixed yellow washed out on the orange bar.
-                IconButton(onClick = onCancel) {
-                    AppIcon(
-                        AppIconKind.Close,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        size = 17.dp
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * Vector trash-can icon (replaces the 🗑️ emoji): lid + handle + tapered
- * body outline, drawn with Canvas so it follows the theme instead of the
- * system emoji font.
- */@Composable
-private fun TrashCanIcon(
-    color: Color,
-    modifier: Modifier = Modifier
-) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        // Slightly bolder than the old 0.09: at 22dp the thin outline
-        // washed out against the orange bar.
-        val stroke = w * 0.11f
-        // Handle on the lid.
-        drawLine(
-            color = color,
-            start = Offset(w * 0.38f, h * 0.06f),
-            end = Offset(w * 0.62f, h * 0.06f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round
-        )
-        // Lid.
-        drawLine(
-            color = color,
-            start = Offset(w * 0.12f, h * 0.20f),
-            end = Offset(w * 0.88f, h * 0.20f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round
-        )
-        // Tapered body outline.
-        drawPath(
-            path = Path().apply {
-                moveTo(w * 0.24f, h * 0.32f)
-                lineTo(w * 0.76f, h * 0.32f)
-                lineTo(w * 0.67f, h * 0.94f)
-                lineTo(w * 0.33f, h * 0.94f)
-                close()
-            },
-            color = color,
-            style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        )
-        // Two vertical ribs inside the body.
-        drawLine(
-            color = color,
-            start = Offset(w * 0.43f, h * 0.44f),
-            end = Offset(w * 0.41f, h * 0.82f),
-            strokeWidth = stroke * 0.75f,
-            cap = StrokeCap.Round
-        )
-        drawLine(
-            color = color,
-            start = Offset(w * 0.57f, h * 0.44f),
-            end = Offset(w * 0.59f, h * 0.82f),
-            strokeWidth = stroke * 0.75f,
-            cap = StrokeCap.Round
-        )
-    }
 }
 
 /**

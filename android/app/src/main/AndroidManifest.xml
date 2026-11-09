@@ -1,14 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Read-aloud (TTS): a foreground service of mediaPlayback type
-         keeps speaking with the screen off; posting its notification
-         needs POST_NOTIFICATIONS on Android 13+ (requested in the
-         reader when playback starts). -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
     <application
         android:name=".NovelfaApplication"
         android:allowBackup="true"
@@ -79,14 +71,6 @@
                 <data android:pathPattern=".*\\.rar" />
                 <data android:pathPattern=".*\\.cb7" />
             </intent-filter>
-        </activity>
-        <!-- Read-aloud (TTS) foreground service: not exported, never
-             started by another app; mediaPlayback so playback survives
-             screen-off. -->
-        <service
-            android:name=".reader.TtsService"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
-    </application>
+        </activity>    </application>
 
 </manifest>

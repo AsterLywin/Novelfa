@@ -380,22 +380,6 @@
     <string name="reader_bookmark_remove">حذف نشانک</string>
     <string name="reader_bookmarks">نشانک‌ها</string>
     <string name="reader_no_bookmarks">هنوز نشانکی نیست</string>
-    <!-- خواندن با صدا (TTS). «بخش» در فارسی همان فصل کتاب است. -->
-    <string name="tts_listen">خواندن با صدا</string>
-    <string name="tts_pause">مکث</string>
-    <string name="tts_resume">ادامه</string>
-    <string name="tts_stop">توقف</string>
-    <string name="tts_speed">سرعت</string>
-    <string name="tts_sleep_timer">تایمر خواب</string>
-    <string name="tts_sleep_off">خاموش</string>
-    <string name="tts_sleep_minutes">%1$d دقیقه</string>
-    <string name="tts_no_engine">موتور تبدیل متن به گفتار نصب نیست</string>
-    <string name="tts_missing_data">داده‌ی صوتی این زبان موجود نیست</string>
-    <string name="tts_lang_not_supported">زبان این کتاب در تبدیل متن به گفتار پشتیبانی نمی‌شود</string>
-    <string name="tts_failed">شروع خواندن با صدا ممکن نشد</string>
-    <string name="tts_empty">در این بخش متنی برای خواندن نیست</string>
-    <string name="tts_finished">خواندن این کتاب تمام شد</string>
-    <string name="tts_install_data">نصب داده‌ی صوتی</string>
     <string name="comic_capture">ذخیره‌ی صفحه</string>
     <string name="comic_page_saved">صفحه ذخیره شد: %1$s</string>
     <string name="comic_save_failed">ذخیره‌ی صفحه ممکن نشد</string>

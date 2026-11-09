@@ -63,10 +63,6 @@ class PrefsStore(private val context: Context) {
         // behaviour: tapping a footnote reference jumps to the note)
         // or "popup" (the note opens in a window on the same page).
         val FOOTNOTE_DISPLAY = stringPreferencesKey("footnoteDisplay")
-        // Read-aloud (TTS) playback speed, 0.5..2.0 (default 1.0):
-        // a global reader setting, not per book — the same voice
-        // speed for every book. Clamped on write (see TtsSpeed).
-        val TTS_SPEED = floatPreferencesKey("ttsSpeed")
         // Native comic viewer page background: "dark" (default, the
         // old 0xFF1E1E1E letterbox), "black" or "white".
         val COMIC_BACKGROUND = stringPreferencesKey("comicBackground")
@@ -366,20 +362,6 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setFootnoteDisplay(value: String) {
         context.dataStore.edit { it[FOOTNOTE_DISPLAY] = value }
-    }
-
-    /** Read-aloud speed (default 1.0x); clamped to 0.5..2.0 on write. */
-    val ttsSpeed: Flow<Float> =
-        context.dataStore.data.map {
-            com.novelfa.reader.reader.TtsSpeed.clamp(it[TTS_SPEED] ?: 1.0f)
-        }
-
-    suspend fun getTtsSpeed(): Float = ttsSpeed.first()
-
-    suspend fun setTtsSpeed(value: Float) {
-        context.dataStore.edit {
-            it[TTS_SPEED] = com.novelfa.reader.reader.TtsSpeed.clamp(value)
-        }
     }
 
     suspend fun setComicBackground(value: String) {

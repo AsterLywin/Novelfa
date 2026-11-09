@@ -3046,7 +3046,8 @@ internal fun NativeImageBookViewer(
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         text = stringResource(R.string.comic_fit_mode),
-                        style = MaterialTheme.typography.bodyMedium
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     SheetChoiceRow(
                         label = stringResource(R.string.comic_fit_width),
@@ -3090,7 +3091,8 @@ internal fun NativeImageBookViewer(
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         text = stringResource(R.string.comic_direction),
-                        style = MaterialTheme.typography.bodyMedium
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     SheetChoiceRow(
                         label = stringResource(R.string.comic_direction_rtl),

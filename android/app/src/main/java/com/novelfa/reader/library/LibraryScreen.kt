@@ -715,6 +715,44 @@ fun LibraryScreen(
             containerColor = Color.Transparent,
             snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
+            if (selection.isNotEmpty()) {
+                // Contextual action bar: it REPLACES the normal
+                // header (same bar, same background) instead of
+                // adding a second coloured slab below it — the old
+                // full-width purple SelectionBar doubled the header
+                // and shoved the whole library down on long-press.
+                // Trash uses the app icon set (AppIconKind.Trash),
+                // not the hand-drawn canvas trash of the old bar.
+                TopAppBar(
+                    title = {
+                        Text(
+                            stringResource(R.string.n_selected, selection.size),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = { selection = emptySet() }) {
+                            AppIcon(
+                                AppIconKind.Close,
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                size = 19.dp
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background
+                    ),
+                    actions = {
+                        IconButton(onClick = { deleteConfirm = true }) {
+                            AppIcon(
+                                AppIconKind.Trash,
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                size = 19.dp
+                            )
+                        }
+                    }
+                )
+            } else {
             TopAppBar(
                 // The Novelfa logo replaces the text title; white artwork on
                 // dark themes, black artwork on light themes. The PNGs live in
@@ -748,6 +786,7 @@ fun LibraryScreen(
                     }
                 }
             )
+            }
         },
         floatingActionButton = {
             // Translucent ONLY while the list is actively scrolling;
@@ -811,13 +850,6 @@ fun LibraryScreen(
                 .padding(padding)
                 .fillMaxSize()
         ) {
-            if (selection.isNotEmpty()) {
-                SelectionBar(
-                    count = selection.size,
-                    onDelete = { deleteConfirm = true },
-                    onCancel = { selection = emptySet() }
-                )
-            }
             if (!libraryReady) {
                 // Books still loading: themed background only — never a
                 // fake empty library, never a half-populated header.
