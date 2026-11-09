@@ -23,7 +23,9 @@ import androidx.compose.ui.viewinterop.AndroidView
  * (`Android.onChapter(ci,gen)` — the chapter at the viewport top),
  * the in-section position reporter (`Android.onSectionPos(ci,frac,gen)`
  * — the fraction of the top chapter's height above the viewport top,
- * see SectionPosition.kt), and
+ * see SectionPosition.kt), the vertical chapter-screens reporter
+ * (`Android.onChapterScreens(ci,screens,gen)` — the chapter's height
+ * in screens at the current viewport, for the vertical pill), and
  * in-book link taps handed over by the LINK_JS interceptor in
  * [HtmlBuilder.build] (`Android.onLink(href, chapIdx)` with the raw
  * authored href and the index of the chapter containing the link),
@@ -48,6 +50,16 @@ class ScrollBridge(
      * paged anchor owns position there).
      */
     private val onSectionPos: (Int, Float, Int) -> Unit = { _, _, _ -> },
+    /**
+     * Vertical chapter screens (see the scroll reporter in
+     * [HtmlBuilder.build]): the chapter index + its height in
+     * screens at the current viewport, reported when it changes.
+     * Vertical mode records it into the per-layout chapter-count
+     * map, so the vertical pill can show book-wide numbers like
+     * the paged pill. Paged documents never report it (their
+     * .rdr-chap is the fixed stage, always 1 screen).
+     */
+    private val onChapterScreens: (Int, Int, Int) -> Unit = { _, _, _ -> },
     /** Paged-mode tap turn at a chapter edge: +1 = last page, -1 = first page. */
     private val onPageEdge: (Int) -> Unit = {},
     /** Paged-mode turn failed: pager torn down or missing (see recoverPagerTurn). */
@@ -100,6 +112,11 @@ class ScrollBridge(
     @JavascriptInterface
     fun onSectionPos(ci: Long, frac: Double, gen: Long) {
         onSectionPos(ci.toInt(), frac.toFloat(), gen.toInt())
+    }
+
+    @JavascriptInterface
+    fun onChapterScreens(ci: Long, screens: Long, gen: Long) {
+        onChapterScreens(ci.toInt(), screens.toInt(), gen.toInt())
     }
 
     @JavascriptInterface

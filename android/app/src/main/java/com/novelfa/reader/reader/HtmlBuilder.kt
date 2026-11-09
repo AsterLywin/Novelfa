@@ -170,13 +170,38 @@ object HtmlBuilder {
         sb.append("var now=Date.now();")
         sb.append("if(Math.abs(fr-lfr)>=0.01||now-lpt>1000){lpt=now;lfr=fr;")
         sb.append("try{Android.onSectionPos(ci,fr,window.__rdrGen);}catch(x){}}}")
+        // Vertical page counts (see onChapterScreens): each chapter's
+        // height in screens, reported when it changes — a chapter
+        // newly stitched in, or images/fonts settling and moving its
+        // height. The native side records it into the per-layout
+        // chapter-count map, so the vertical pill can show the same
+        // book-wide numbers as the paged pill. Paged documents are
+        // excluded: their .rdr-chap is the fixed stage (one viewport
+        // tall), so every chapter would report 1 screen and pollute
+        // the vertical map. A zero viewport reports nothing (the
+        // division would invent screens). The block is failure-proof:
+        // a missing bridge or a bad measurement must never break the
+        // scroll/chapter/section reports around it.
+        sb.append("if(c>0&&!d.classList.contains('rdr-paged')){try{")
+        sb.append("if(window.__rdrScreens==null)window.__rdrScreens={};")
+        sb.append("var chs2=d.querySelectorAll('.rdr-chap');")
+        sb.append("for(var k2=0;k2<chs2.length;k2++){var el2=chs2[k2];")
+        sb.append("var ix2=parseInt(el2.getAttribute('data-idx'),10);")
+        sb.append("if(isNaN(ix2))continue;")
+        sb.append("var sc2=Math.max(1,Math.ceil((el2.offsetHeight||0)/c));")
+        sb.append("if(window.__rdrScreens[ix2]!==sc2){window.__rdrScreens[ix2]=sc2;")
+        sb.append("try{Android.onChapterScreens(ix2,sc2,window.__rdrGen);}catch(x){}}}}catch(x){}}")
         sb.append("if(t!=lt||h!=lh||c!=lc){lt=t;lh=h;lc=c;")
         sb.append("try{Android.onScroll(t,h,c,window.__rdrGen);}catch(x){}}")
         sb.append("else if(h>c){lr=t/(h-c);}}catch(x){}}")
         sb.append("function z(){try{if(lr>=0){var d=document.documentElement,b=document.body;")
         sb.append("var h=b.scrollHeight||d.scrollHeight||0,")
         sb.append("c=d.clientHeight||b.clientHeight||0;")
-        sb.append("var nt=Math.round(lr*Math.max(h-c,0));d.scrollTop=nt;b.scrollTop=nt;}}catch(x){}r();}")
+        sb.append("var nt=Math.round(lr*Math.max(h-c,0));d.scrollTop=nt;b.scrollTop=nt;}}catch(x){}")
+        // A resize changes every chapter's screens: forget the
+        // reported values so r() re-reports them all for the new
+        // viewport (the native map is keyed by viewport too).
+        sb.append("window.__rdrScreens={};r();}")
         sb.append("window.addEventListener('scroll',r);window.addEventListener('resize',z);setInterval(r,200);")
         sb.append("})();</script>")
         // In-book link interception for every build (see LINK_JS):

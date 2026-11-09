@@ -350,6 +350,16 @@ fun ReaderScreen(
     val chapterCounts by remember(pageCountFp) {
         extrasStore.chapterPageCounts(bookId, pageCountFp)
     }.collectAsState(initial = emptyMap())
+    // Vertical-mode chapter counts: the same per-layout map as
+    // chapterCounts, but keyed by a fingerprint with a "|vertical"
+    // suffix — a chapter's paged pages and its vertical screens
+    // are different numbers and must never share one map.
+    // Collected live like chapterCounts, so a recorded screen
+    // count reaches the pill without reopening the book.
+    val verticalFp = pageCountFp + "|vertical"
+    val verticalChapterCounts by remember(verticalFp) {
+        extrasStore.chapterPageCounts(bookId, verticalFp)
+    }.collectAsState(initial = emptyMap())
     // Per-chapter file sizes (free stats, no reads): the page-count
     // estimate's calibration input (see BookPageCount.kt).
     val chapterBytes = remember(vm?.chapters) {
@@ -1329,6 +1339,29 @@ fun ReaderScreen(
                             runCatching {
                                 extrasStore.setChapterPageCount(bookId, fp, chapter, total)
                             }
+                        }
+                    }
+                }
+            },
+            // Vertical chapter screens (see onChapterScreens): the
+            // vertical pill's calibration input. Recorded into the
+            // vertical map (fingerprint + "|vertical") — never the
+            // paged map, whose counts are paged pages, not screens.
+            // Only a changed count writes: the reporter re-reports
+            // every chapter on each document load, and a DataStore
+            // write per scroll tick would be pure churn.
+            onChapterScreens = { ci, screens, gen ->
+                scope.launch {
+                    val v = vm ?: return@launch
+                    if (gen != v.docGen) return@launch
+                    if (v.readingMode != ReadingMode.CONTINUOUS_VERTICAL) return@launch
+                    if (screens <= 0) return@launch
+                    val fp = pageCountFingerprint()
+                    if (fp.isEmpty()) return@launch
+                    val vfp = "$fp|vertical"
+                    if (verticalChapterCounts[ci] != screens) {
+                        runCatching {
+                            extrasStore.setChapterPageCount(bookId, vfp, ci, screens)
                         }
                     }
                 }
@@ -2389,10 +2422,10 @@ fun ReaderScreen(
                 // the counts are unknown and in fullscreen, like the
                 // paged pill.
                 val verticalBookNumbers = verticalSection?.let { sec ->
-                    val ratio = pagesPerByte(chapterCounts, chapterBytes) ?: return@let null
-                    val chapterPages = chapterPageCount(chapterCounts, chapterBytes, sec.chapter, ratio)
+                    val ratio = pagesPerByte(verticalChapterCounts, chapterBytes) ?: return@let null
+                    val chapterPages = chapterPageCount(verticalChapterCounts, chapterBytes, sec.chapter, ratio)
                     bookPageNumbers(
-                        chapterCounts, chapterBytes, sec.chapter,
+                        verticalChapterCounts, chapterBytes, sec.chapter,
                         pageWithinChapter(sec.fraction, chapterPages)
                     )
                 }
