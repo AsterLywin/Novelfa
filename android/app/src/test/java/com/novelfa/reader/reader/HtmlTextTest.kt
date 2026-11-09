@@ -2,6 +2,7 @@ package com.novelfa.reader.reader
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -217,5 +218,31 @@ class HtmlTextTest {
     @Test
     fun footnoteText_singleQuoteId_works() {
         assertEquals("متن", HtmlText.footnoteText("<p id='fn1'>متن</p>", "fn1"))
+    }
+
+    @Test
+    fun footnoteHtml_liWithBacklink_keepsLink() {
+        val html = "<ol><li id=\"novelfa-fn-1\">" +
+            "<a href=\"#novelfa-fnref-1\">↩</a> متن پاورقی</li></ol>"
+        val got = HtmlText.footnoteHtml(html, "novelfa-fn-1")
+        assertNotNull(got)
+        assertTrue(got!!.contains("<a href=\"#novelfa-fnref-1\">↩</a>"))
+        assertTrue(got.contains("متن پاورقی"))
+    }
+
+    @Test
+    fun footnoteHtml_pWithNestedTags_keepsMarkup() {
+        val html = "<p id=\"fn1\">متن <b>مهم</b> و &amp; چیز</p>"
+        assertEquals("متن <b>مهم</b> و &amp; چیز", HtmlText.footnoteHtml(html, "fn1"))
+    }
+
+    @Test
+    fun footnoteHtml_missingId_returnsNull() {
+        assertEquals(null, HtmlText.footnoteHtml("<p id=\"fn1\">x</p>", "fn2"))
+    }
+
+    @Test
+    fun footnoteHtml_empty_returnsNull() {
+        assertEquals(null, HtmlText.footnoteHtml("<p id=\"fn1\">   </p>", "fn1"))
     }
 }

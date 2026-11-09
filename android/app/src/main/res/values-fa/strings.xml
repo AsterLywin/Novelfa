@@ -194,6 +194,7 @@
     <string name="footnote_display_navigate">رفتن به پاورقی</string>
     <string name="footnote_display_popup">پنجره روی صفحه</string>
     <string name="footnote_view_in_text">مشاهده در متن</string>
+    <string name="footnote_open">باز کردن</string>
     <string name="duplicate_file_title">فایل تکراری</string>
     <string name="duplicate_file_message">این فایل از قبل داخل برنامه موجود است. آیا از وارد کردن آن اطمینان دارید؟ در صورت موافقت، فایل قدیمی با فایل جدید بازنویسی می‌شود.</string>
     <string name="yes_overwrite">بله، بازنویسی کن</string>

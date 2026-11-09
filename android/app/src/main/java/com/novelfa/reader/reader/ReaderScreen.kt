@@ -1,6 +1,23 @@
 package com.novelfa.reader.reader
 
+import android.content.Intent
+import android.graphics.Typeface
+import android.net.Uri
+import android.text.Html
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StrikethroughSpan
+import android.text.style.StyleSpan
+import android.text.style.SubscriptSpan
+import android.text.style.SuperscriptSpan
+import android.text.style.URLSpan
+import android.text.style.UnderlineSpan
 import android.util.Log
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -9,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,6 +40,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
@@ -62,24 +81,38 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.onSizeChanged
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -175,6 +208,7 @@ fun ReaderScreen(
     support: SupportTracker? = null
 ) {
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -327,6 +361,38 @@ fun ReaderScreen(
     // null when no popup is shown. The setting itself lives on the
     // ViewModel (v.footnotePopup) and in PrefsStore.
     var footnoteNote by remember { mutableStateOf<FootnotePopup?>(null) }
+    // Moon+ Reader anchored bubble (see FootnoteBubble): the tap
+    // point in CSS px (= dp) the note was opened from, the reading
+    // area size and the bubble's measured size (px) for anchoring,
+    // and the spring scale (pop-in/out, pivoting at the tail).
+    // lastFootnoteNote keeps the note visible while the scale-out
+    // exit plays after footnoteNote is cleared.
+    var footnoteTap by remember { mutableStateOf(Offset.Zero) }
+    var footnoteAreaSize by remember { mutableStateOf(IntSize.Zero) }
+    var footnoteBubbleSize by remember { mutableStateOf(IntSize.Zero) }
+    var lastFootnoteNote by remember { mutableStateOf<FootnotePopup?>(null) }
+    val footnoteScale = remember { Animatable(0f) }
+    // ScrollTop of the last onScroll report: a scroll (top changes)
+    // dismisses the bubble, but a height-only change (images
+    // settling) must not — the note stays readable.
+    var lastFootnoteScrollTop by remember { mutableIntStateOf(-1) }
+    // Spring pop-in/out for the footnote bubble (Moon+ Reader's jelly
+    // scale, stiffness 200 / damping 0.625, pivoting at the tail).
+    // One animator only: dismissing just clears footnoteNote and
+    // this animates to 0; the bubble stays composed while the scale
+    // is above zero, showing lastFootnoteNote through the exit.
+    LaunchedEffect(footnoteNote) {
+        if (footnoteNote != null) lastFootnoteNote = footnoteNote
+        footnoteScale.animateTo(
+            if (footnoteNote != null) 1f else 0f,
+            spring(dampingRatio = 0.625f, stiffness = 200f)
+        )
+    }
+    // Back dismisses the footnote bubble first (Moon+ Reader: back
+    // hides the popup before leaving the reader).
+    BackHandler(enabled = footnoteNote != null) {
+        footnoteNote = null
+    }
     var supportOpen by remember { mutableStateOf(false) }
     var themeOpen by remember { mutableStateOf(false) }
     var fontOpen by remember { mutableStateOf(false) }
@@ -623,6 +689,12 @@ fun ReaderScreen(
         }
     }
     var fullscreenUi by rememberSaveable { mutableStateOf(false) }
+    // The footnote bubble belongs to the page it was opened on: a
+    // chapter change, a page turn, or a fullscreen toggle closes it
+    // (Moon+ Reader hides the popup on any of those, too).
+    LaunchedEffect(vm?.index, pagedPage, fullscreenUi) {
+        footnoteNote = null
+    }
     // Reading layout mode (persisted globally): horizontal paging or
     // vertical-continuous. Replaces the old continuous toggle.
     val savedModeKey by prefs.readingMode.collectAsState(initial = "paged")
@@ -644,6 +716,7 @@ fun ReaderScreen(
     val pagerFailedMsg = stringResource(R.string.pager_failed)
     val fontMissingMsg = stringResource(R.string.reader_font_missing)
     val linkTargetMsg = stringResource(R.string.link_target_not_found)
+    val copiedMsg = stringResource(R.string.copied)
     val imageSavedTemplate = stringResource(R.string.image_saved)
     val imageSaveFailedMsg = stringResource(R.string.image_save_failed)
 
@@ -1139,15 +1212,47 @@ fun ReaderScreen(
      * Footnote tap in popup mode (from LINK_JS via the bridge): the
      * note opens in a popup on this page instead of navigating.
      * When the note cannot be found anywhere, navigate exactly as
-     * before — a missed note never becomes a dead tap.
+     * before — a missed note never becomes a dead tap. [tap] is the
+     * tap point in CSS px (= dp): the Moon+ Reader bubble anchors
+     * to it.
      */
-    suspend fun handleFootnoteTap(v: ReaderViewModel, href: String, chap: Int, label: String) {
+    suspend fun handleFootnoteTap(v: ReaderViewModel, href: String, chap: Int, label: String, tap: Offset) {
         val note = v.footnoteFor(href, chap, label)
         if (note == null) {
             handleInBookLink(v, href, chap)
             return
         }
+        footnoteTap = tap
         footnoteNote = note
+    }
+
+    /**
+     * A link tapped inside the footnote bubble (Moon+ Reader: links
+     * in the note stay tappable). A fragment that resolves to
+     * another note opens it as a nested popup at the same tap
+     * point; any other in-book fragment navigates; an external
+     * link opens in the browser.
+     */
+    fun openFootnoteLink(href: String, note: FootnotePopup, label: String) {
+        val v = vm ?: return
+        if (href.startsWith("#")) {
+            scope.launch {
+                val nested = v.footnoteFor(href, note.chapterIdx, label)
+                if (nested != null) {
+                    footnoteNote = nested
+                } else {
+                    handleInBookLink(v, href, note.chapterIdx)
+                }
+            }
+            return
+        }
+        if (href.startsWith("http://") || href.startsWith("https://") ||
+            href.startsWith("mailto:") || href.startsWith("tel:")
+        ) {
+            runCatching {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(href)))
+            }
+        }
     }
 
     /**
@@ -1239,6 +1344,15 @@ fun ReaderScreen(
                 // gets rejected — desyncing the ViewModel window from the
                 // DOM (the "can't advance after drawer select" bug).
                 if (gen != v.docGen) return@launch
+                // A scroll dismisses the footnote bubble (Moon+
+                // Reader: any touch on the page hides the popup).
+                // Only a scrollTop change counts: a height-only
+                // change (images settling) must not close the note
+                // the user is reading.
+                if (t != lastFootnoteScrollTop) {
+                    footnoteNote = null
+                }
+                lastFootnoteScrollTop = t
                 val last = v.contLast
                 val first = v.contFirst
                 v.onScroll(t, h, c)
@@ -1370,9 +1484,9 @@ fun ReaderScreen(
                 val v = vm
                 if (v != null) scope.launch { handleInBookLink(v, href, chap) }
             },
-            onFootnoteClick = { href, chap, label ->
+            onFootnoteClick = { href, chap, label, x, y ->
                 val v = vm
-                if (v != null) scope.launch { handleFootnoteTap(v, href, chap, label) }
+                if (v != null) scope.launch { handleFootnoteTap(v, href, chap, label, Offset(x, y)) }
             },
             onImageClick = { src, chap ->
                 val v = vm
@@ -2112,7 +2226,8 @@ fun ReaderScreen(
             Box(
                 modifier = Modifier
                     .padding(padding)
-                    .fillMaxSize(),
+                    .fillMaxSize()
+                    .onSizeChanged { footnoteAreaSize = it },
                 contentAlignment = Alignment.Center
             ) {
                 when {
@@ -2477,6 +2592,59 @@ fun ReaderScreen(
                             AppIconKind.ExitFullscreen,
                             tint = MaterialTheme.colorScheme.onSurface,
                             size = 18.dp
+                        )
+                    }
+                }
+                // Footnote bubble, Moon+ Reader style (see
+                // handleFootnoteTap and FootnoteBubble): a pale-yellow
+                // bubble anchored to the tap point, with a triangle
+                // tail pointing at it, popping in with a spring scale
+                // pivoting at the tail. The transparent layer over
+                // the page dismisses it on any tap outside; a scroll,
+                // back key, chapter/page change or fullscreen toggle
+                // closes it too (see the onScroll clear, BackHandler
+                // and the LaunchedEffect above). The layer vanishes
+                // instantly on dismiss while the bubble scales out.
+                if (footnoteNote != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clickable { footnoteNote = null }
+                    )
+                }
+                if (footnoteNote != null || footnoteScale.value > 0.001f) {
+                    val note = footnoteNote ?: lastFootnoteNote
+                    if (note != null) {
+                        val v = vm
+                        FootnoteBubble(
+                            note = note,
+                            tap = footnoteTap,
+                            areaSize = footnoteAreaSize,
+                            bubbleSize = footnoteBubbleSize,
+                            onBubbleSize = { footnoteBubbleSize = it },
+                            scale = footnoteScale.value,
+                            linkColor = hexToColor(
+                                (Themes.findStatic(readerThemeKey) ?: Themes.DARK).link
+                            ),
+                            fontSizeSp = v?.fontSize ?: 18,
+                            lineHeight = (v?.lineHeight ?: 1.8).toFloat(),
+                            onOpen = {
+                                footnoteNote = null
+                                val vv = vm ?: return@FootnoteBubble
+                                scope.launch {
+                                    if (note.chapterIdx == vv.index) {
+                                        if (note.fragment.isNotBlank()) jumpToAnchor(vv, note.fragment)
+                                    } else {
+                                        if (note.fragment.isNotBlank()) pendingAnchor = note.fragment
+                                        gotoChapter(vv, note.chapterIdx)
+                                    }
+                                }
+                            },
+                            onNoteLink = { href, label -> openFootnoteLink(href, note, label) },
+                            onCopy = {
+                                clipboard.setText(AnnotatedString(note.text))
+                                scope.launch { snackbar.showSnackbar(copiedMsg) }
+                            }
                         )
                     }
                 }
@@ -2965,63 +3133,6 @@ fun ReaderScreen(
         }
     }
 
-    // Footnote popup: the tapped note, shown in a window on this
-    // page (the note's own text, resolved by handleFootnoteTap).
-    // "View in text" jumps to where the note lives in the book —
-    // the current navigation behaviour, kept as an explicit action.
-    if (footnoteNote != null) {
-        val note = footnoteNote!!
-        val title = if (note.number.isNotBlank()) {
-            stringResource(R.string.footnote_title, note.number)
-        } else {
-            stringResource(R.string.footnote)
-        }
-        Dialog(onDismissRequest = { footnoteNote = null }) {
-            Card {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = note.text,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
-                        TextButton(onClick = {
-                            footnoteNote = null
-                            val vv = vm ?: return@TextButton
-                            scope.launch {
-                                if (note.chapterIdx == vv.index) {
-                                    if (note.fragment.isNotBlank()) jumpToAnchor(vv, note.fragment)
-                                } else {
-                                    if (note.fragment.isNotBlank()) pendingAnchor = note.fragment
-                                    gotoChapter(vv, note.chapterIdx)
-                                }
-                            }
-                        }) {
-                            Text(stringResource(R.string.footnote_view_in_text))
-                        }
-                        TextButton(onClick = { footnoteNote = null }) {
-                            Text(stringResource(R.string.close))
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // Image-save dialog: the tapped image (preview when it is a
     // file; data: images have no file to preview from) with the save
     // icon. Saving writes a copy to Pictures/Novelfa in the gallery
@@ -3195,3 +3306,238 @@ fun ReaderScreen(
     } // Close fontOpen
         } // Close particle Box
 } // Close ReaderScr
+
+// Moon+ Reader footnote bubble colors (A.java:187-188, verified from
+// the 10.8 decompile): pale-yellow bubble, near-black text, in every
+// theme — the bubble is a highlight color, not a theme surface.
+private val FOOTNOTE_BUBBLE_COLOR = Color(0xFFF6EA8C)
+private val FOOTNOTE_BUBBLE_TEXT_COLOR = Color(0xFF111111)
+
+/**
+ * The footnote bubble, Moon+ Reader style (PopupNoteLay / pop_note.xml,
+ * 10.8 decompiled 2026-11-08, studied 2026-11-09 — reimplemented here
+ * in Novelfa's own code, no Moon code copied):
+ *
+ * - A pale-yellow rounded bubble anchored to the tap point: below the
+ *   tap when the tap is in the top 38% of the reading area (50% in
+ *   landscape), otherwise above it, with a 14dp gap; horizontally
+ *   centered on the tap and clamped inside the area.
+ * - A 12x8dp triangle tail on the top or bottom edge, pointing at
+ *   the tap (clamped to stay 36dp inside the bubble's edges).
+ * - A spring scale pop-in/out pivoting at the tail (stiffness 200,
+ *   damping 0.625 — the caller's [scale]).
+ * - Header: the note number, large and bold, and — only when the
+ *   note carries a link — an OPEN button at the other end, in the
+ *   reader's link color, jumping to the note in the book. Regular
+ *   notes show no button at all.
+ * - Body: the note HTML as clickable text (back-link, nested
+ *   footnotes); long notes scroll inside the bubble. Long-press
+ *   copies the note text.
+ *
+ * Deliberate differences from Moon: the body max height is capped
+ * at 55% of the area and the bubble is clamped vertically too, so a
+ * long note never runs off-screen; the exit is the same spring
+ * (Moon reverses its jelly animation).
+ */
+@Composable
+private fun FootnoteBubble(
+    note: FootnotePopup,
+    tap: Offset,
+    areaSize: IntSize,
+    bubbleSize: IntSize,
+    onBubbleSize: (IntSize) -> Unit,
+    scale: Float,
+    linkColor: Color,
+    fontSizeSp: Int,
+    lineHeight: Float,
+    onOpen: () -> Unit,
+    onNoteLink: (String, String) -> Unit,
+    onCopy: () -> Unit
+) {
+    val density = LocalDensity.current
+    val hasLink = remember(note.html) {
+        Regex("<a\\b", RegexOption.IGNORE_CASE).containsMatchIn(note.html)
+    }
+    // Geometry in px (Moon's PopupNoteLay.show / onPreDraw).
+    val gapPx = with(density) { 14.dp.toPx() }
+    val arrowWPx = with(density) { 12.dp.toPx() }
+    val minArrowPx = with(density) { 36.dp.toPx() }
+    val tapPx = with(density) { Offset(tap.x.dp.toPx(), tap.y.dp.toPx()) }
+    val isLandscape = areaSize.width > areaSize.height
+    val below = tapPx.y < areaSize.height * (if (isLandscape) 0.50f else 0.38f)
+    val leftPx = if (bubbleSize.width >= areaSize.width || areaSize.width <= 0) 0
+    else (tapPx.x - bubbleSize.width / 2f).toInt().coerceIn(0, areaSize.width - bubbleSize.width)
+    val topPx = if (below) (tapPx.y + gapPx).toInt()
+    else (tapPx.y - gapPx - bubbleSize.height).toInt()
+    val topClamped = if (areaSize.height <= 0) topPx
+    else topPx.coerceIn(0, (areaSize.height - bubbleSize.height).coerceAtLeast(0))
+    val arrowLeftPx = if (bubbleSize.width <= 0) minArrowPx
+    else (tapPx.x - leftPx - arrowWPx / 2f).coerceIn(
+        minArrowPx, (bubbleSize.width - minArrowPx).coerceAtLeast(minArrowPx)
+    )
+    val pivotX = if (bubbleSize.width <= 0) 0.5f
+    else ((arrowLeftPx + arrowWPx / 2f) / bubbleSize.width).coerceIn(0f, 1f)
+    val pivotY = if (below) 0f else 1f
+    val maxBubbleW = if (areaSize.width <= 0) 340.dp
+    else with(density) { (areaSize.width.toDp() - 32.dp).coerceAtLeast(120.dp) }
+    val maxBodyH = if (areaSize.height <= 0) 320.dp
+    else with(density) { (areaSize.height * 0.55f).toDp() }
+
+    val annotated = remember(note.html, note.text, linkColor, fontSizeSp) {
+        if (note.html.isBlank()) AnnotatedString(note.text)
+        else spannedNoteText(
+            Html.fromHtml(note.html, Html.FROM_HTML_MODE_COMPACT),
+            linkColor, fontSizeSp.toFloat()
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .offset { IntOffset(leftPx, topClamped) }
+            .widthIn(max = maxBubbleW)
+            .onSizeChanged { onBubbleSize(it) }
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                transformOrigin = TransformOrigin(pivotX, pivotY)
+            }
+            .combinedClickable(onClick = {}, onLongClick = onCopy)
+    ) {
+        if (below) FootnoteTail(arrowLeftPx)
+        Box(
+            modifier = Modifier
+                .shadow(4.dp, RoundedCornerShape(8.dp))
+                .background(FOOTNOTE_BUBBLE_COLOR, RoundedCornerShape(8.dp))
+                .padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 24.dp)
+        ) {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (note.number.isNotBlank()) note.number
+                        else stringResource(R.string.footnote),
+                        style = TextStyle(
+                            fontSize = (fontSizeSp * 1.25f).sp,
+                            fontWeight = FontWeight.Bold,
+                            color = FOOTNOTE_BUBBLE_TEXT_COLOR
+                        )
+                    )
+                    Spacer(Modifier.weight(1f))
+                    if (hasLink) {
+                        TextButton(
+                            onClick = onOpen,
+                            contentPadding = PaddingValues(8.dp)
+                        ) {
+                            Text(
+                                stringResource(R.string.footnote_open),
+                                color = linkColor
+                            )
+                        }
+                    }
+                }
+                ClickableText(
+                    text = annotated,
+                    style = TextStyle(
+                        fontSize = fontSizeSp.sp,
+                        lineHeight = (fontSizeSp * lineHeight).sp,
+                        color = FOOTNOTE_BUBBLE_TEXT_COLOR
+                    ),
+                    onClick = { offset ->
+                        annotated.getStringAnnotations("url", offset, offset)
+                            .firstOrNull()?.let { ann ->
+                                val label = annotated.text.substring(ann.start, ann.end)
+                                onNoteLink(ann.item, label)
+                            }
+                    },
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .heightIn(max = maxBodyH)
+                )
+            }
+        }
+        if (!below) FootnoteTail(arrowLeftPx, pointUp = false)
+    }
+}
+
+/** The bubble's 12x8dp triangle tail, pointing up or down. */
+@Composable
+private fun FootnoteTail(arrowLeftPx: Float, pointUp: Boolean = true) {
+    val density = LocalDensity.current
+    val arrowLeftDp = with(density) { arrowLeftPx.toDp() }
+    Canvas(
+        modifier = Modifier
+            .padding(start = arrowLeftDp)
+            .size(12.dp, 8.dp)
+    ) {
+        val path = Path().apply {
+            if (pointUp) {
+                moveTo(size.width / 2f, 0f)
+                lineTo(size.width, size.height)
+                lineTo(0f, size.height)
+            } else {
+                moveTo(0f, 0f)
+                lineTo(size.width, 0f)
+                lineTo(size.width / 2f, size.height)
+            }
+            close()
+        }
+        drawPath(path, FOOTNOTE_BUBBLE_COLOR)
+    }
+}
+
+/**
+ * Turns Android's Html.fromHtml output into a Compose
+ * AnnotatedString, keeping the spans the note popup needs:
+ * links (as "url" annotations), bold/italic/underline, super/
+ * subscript (footnote markers), relative size (<big>), strike-
+ * through, and foreground color. Anything else renders as plain
+ * text — the note body is prose, not a layout.
+ */
+private fun spannedNoteText(spanned: Spanned, linkColor: Color, baseSizeSp: Float): AnnotatedString {
+    return buildAnnotatedString {
+        append(spanned.toString())
+        val len = spanned.length
+        for (span in spanned.getSpans(0, len, Any::class.java)) {
+            val start = spanned.getSpanStart(span)
+            val end = spanned.getSpanEnd(span)
+            if (start < 0 || end <= start) continue
+            when (span) {
+                is URLSpan -> {
+                    addStringAnnotation("url", span.url, start, end)
+                    addStyle(
+                        SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline),
+                        start, end
+                    )
+                }
+                is StyleSpan -> {
+                    val bold = (span.style and Typeface.BOLD) != 0
+                    val italic = (span.style and Typeface.ITALIC) != 0
+                    addStyle(
+                        SpanStyle(
+                            fontWeight = if (bold) FontWeight.Bold else null,
+                            fontStyle = if (italic) FontStyle.Italic else null
+                        ),
+                        start, end
+                    )
+                }
+                is UnderlineSpan -> addStyle(
+                    SpanStyle(textDecoration = TextDecoration.Underline), start, end
+                )
+                is StrikethroughSpan -> addStyle(
+                    SpanStyle(textDecoration = TextDecoration.LineThrough), start, end
+                )
+                is SuperscriptSpan -> addStyle(
+                    SpanStyle(baselineShift = BaselineShift.Superscript), start, end
+                )
+                is SubscriptSpan -> addStyle(
+                    SpanStyle(baselineShift = BaselineShift.Subscript), start, end
+                )
+                is RelativeSizeSpan -> addStyle(
+                    SpanStyle(fontSize = (span.sizeChange * baseSizeSp).sp), start, end
+                )
+                is ForegroundColorSpan -> addStyle(
+                    SpanStyle(color = Color(span.foregroundColor)), start, end
+                )
+            }
+        }
+    }
+}

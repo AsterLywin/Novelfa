@@ -1960,7 +1960,12 @@ object HtmlBuilder {
         // The app resolves the note and shows it; when it cannot
         // find the note it navigates exactly as before. This check
         // runs before the '#frag' branch: most footnote links are
-        // fragment-only hrefs.
+        // fragment-only hrefs. The tap point (CSS px, WebView
+        // viewport) rides along so the popup can anchor to it like
+        // Moon+ Reader's: a real tap carries clientX/clientY, but
+        // the paged mode's synthetic el.click() has none (0,0), so
+        // it falls back to window.__rdrLastTapX/Y, which the native
+        // tap handler sets before dispatching the synthetic click.
         if (window.__rdrFootnotePopup && a.getAttribute('data-novelfa-footnote') !== null) {
             e.preventDefault();
             var fci = -1;
@@ -1971,7 +1976,12 @@ object HtmlBuilder {
             }
             var label = '';
             try { label = a.textContent || ''; } catch (err) { }
-            try { if (window.Android && Android.onFootnoteLink) Android.onFootnoteLink(h, fci, label); } catch (err) { }
+            var ftx = 0, fty = 0;
+            try {
+                ftx = e.clientX || window.__rdrLastTapX || 0;
+                fty = e.clientY || window.__rdrLastTapY || 0;
+            } catch (err) { }
+            try { if (window.Android && Android.onFootnoteLink) Android.onFootnoteLink(h, fci, label, ftx, fty); } catch (err) { }
             return;
         }
         if (h.charAt(0) === '#') {

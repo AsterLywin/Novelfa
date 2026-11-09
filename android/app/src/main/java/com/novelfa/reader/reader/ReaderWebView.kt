@@ -37,8 +37,15 @@ import androidx.compose.ui.viewinterop.AndroidView
 class ScrollBridge(
     private val onScroll: (Int, Int, Int, Int) -> Unit,
     private val onLinkClick: (String, Int) -> Unit = { _, _ -> },
-    /** Footnote tap in popup mode (LINK_JS): raw href + containing chapter + link text. */
-    private val onFootnoteClick: (String, Int, String) -> Unit = { _, _, _ -> },
+    /**
+     * Footnote tap in popup mode (LINK_JS): raw href + containing
+     * chapter + link text + tap point in CSS px (WebView viewport,
+     * for the Moon+ Reader anchored popup). A real tap carries its
+     * own coordinates; the paged mode's synthetic click has none,
+     * so LINK_JS falls back to window.__rdrLastTapX/Y, set by the
+     * native tap handler below before dispatching that click.
+     */
+    private val onFootnoteClick: (String, Int, String, Float, Float) -> Unit = { _, _, _, _, _ -> },
     /** Image-save tap (IMAGE_JS): raw <img> src + containing chapter index. */
     private val onImageClick: (String, Int) -> Unit = { _, _ -> },
     private val onChapterVisible: (Int, Int) -> Unit = { _, _ -> },
@@ -95,8 +102,8 @@ class ScrollBridge(
     }
 
     @JavascriptInterface
-    fun onFootnoteLink(href: String, chap: Long, label: String) {
-        onFootnoteClick(href, chap.toInt(), label)
+    fun onFootnoteLink(href: String, chap: Long, label: String, x: Double, y: Double) {
+        onFootnoteClick(href, chap.toInt(), label, x.toFloat(), y.toFloat())
     }
 
     @JavascriptInterface
@@ -463,10 +470,16 @@ fun ReaderWebView(
                                 } else if (hit == "link") {
                                     // Preserve the link: dispatch a click
                                     // on the hit element; LINK_JS (capture
-                                    // phase) owns it from here.
+                                    // phase) owns it from here. The
+                                    // synthetic click carries no
+                                    // coordinates (clientX/Y are 0), so
+                                    // the tap point is stashed first for
+                                    // LINK_JS to read as
+                                    // window.__rdrLastTapX/Y — the
+                                    // footnote popup anchors to it.
                                     host.evaluateJavascript(
                                         "(function(){var el=document.elementFromPoint($cssX,$cssY);" +
-                                            "if(el) el.click(); return 'ok';})();",
+                                            "if(el){window.__rdrLastTapX=$cssX;window.__rdrLastTapY=$cssY;el.click();} return 'ok';})();",
                                         null
                                     )
                                 } else if (zone == "left") {

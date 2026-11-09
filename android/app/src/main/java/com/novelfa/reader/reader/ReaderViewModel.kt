@@ -904,12 +904,14 @@ class ReaderViewModel(
             val number = label.trim().trim('[', ']').trim()
             val direct = HtmlText.footnoteText(readPrepared(resolved.first), frag)
             if (direct != null) {
-                return@withContext FootnotePopup(number, direct, resolved.first, frag)
+                val html = HtmlText.footnoteHtml(readPrepared(resolved.first), frag).orEmpty()
+                return@withContext FootnotePopup(number, direct, resolved.first, frag, html)
             }
             for (i in chapters.indices) {
                 if (i == resolved.first) continue
                 val text = HtmlText.footnoteText(readPrepared(i), frag) ?: continue
-                return@withContext FootnotePopup(number, text, i, frag)
+                val html = HtmlText.footnoteHtml(readPrepared(i), frag).orEmpty()
+                return@withContext FootnotePopup(number, text, i, frag, html)
             }
             null
         }
@@ -920,11 +922,16 @@ class ReaderViewModel(
 
 /**
  * A footnote note, resolved for the popup: its display number, its
- * plain text, and where it lives in the book (for "View in text").
+ * plain text, and where it lives in the book (for OPEN — the
+ * Moon+ Reader action that jumps to the note). [html] is the note
+ * element's inner HTML: the popup renders it with clickable links
+ * (the back-link, nested footnotes), and OPEN appears exactly when
+ * it carries a link. Empty when the note has no markup to keep.
  */
 data class FootnotePopup(
     val number: String,
     val text: String,
     val chapterIdx: Int,
-    val fragment: String
+    val fragment: String,
+    val html: String = ""
 )

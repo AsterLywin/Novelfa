@@ -364,16 +364,16 @@ object HtmlText {
     )
 
     /**
-     * The plain text of the element with id [fragId] in [html]
-     * (a footnote/endnote paragraph or list item), or null when the
-     * element is missing, unclosed, or empty. The element is bounded
-     * by its own closing tag — footnote containers are flat paragraphs
-     * or list items, so the first matching close tag ends it (a
+     * The inner HTML of the element with id [fragId] in [html] (a
+     * footnote/endnote paragraph or list item), or null when the
+     * element is missing or unclosed. The element is bounded by its
+     * own closing tag — footnote containers are flat paragraphs or
+     * list items, so the first matching close tag ends it (a
      * same-tag nest inside would cut early; that never occurs in a
-     * footnote). The DOCX back-link remnant ("↩") is stripped from
-     * the front; everything else is the note's own text.
+     * footnote). Shared by [footnoteText] (plain text) and the
+     * footnote popup (clickable links, Moon+ Reader parity).
      */
-    fun footnoteText(html: String, fragId: String): String? {
+    fun footnoteInnerHtml(html: String, fragId: String): String? {
         if (fragId.isBlank()) return null
         val idAt = Regex(
             "\\bid\\s*=\\s*[\"']" + Regex.escape(fragId) + "[\"']",
@@ -391,12 +391,35 @@ object HtmlText {
             "</" + Regex.escape(tagName) + "\\s*>",
             RegexOption.IGNORE_CASE
         ).find(html, contentStart + 1) ?: return null
-        val inner = html.substring(contentStart + 1, closeAt.range.first)
+        return html.substring(contentStart + 1, closeAt.range.first)
+    }
+
+    /**
+     * The plain text of the element with id [fragId] in [html]
+     * (a footnote/endnote paragraph or list item), or null when the
+     * element is missing, unclosed, or empty. The DOCX back-link
+     * remnant ("↩") is stripped from the front; everything else
+     * is the note's own text.
+     */
+    fun footnoteText(html: String, fragId: String): String? {
+        val inner = footnoteInnerHtml(html, fragId) ?: return null
         var text = htmlToPlainText(inner)
             .replace(Regex("\\s+"), " ")
             .trim()
         if (text.startsWith("↩")) text = text.substring(1).trim()
         return text.ifEmpty { null }
+    }
+
+    /**
+     * The note's inner HTML for the popup, or null when the element
+     * is missing. Unlike [footnoteText] the back-link stays: it is
+     * the note's own link (Moon+ Reader shows it as "[n←]" and
+     * keeps it tappable), and the popup's OPEN button appears
+     * exactly when this HTML carries a link.
+     */
+    fun footnoteHtml(html: String, fragId: String): String? {
+        val inner = footnoteInnerHtml(html, fragId) ?: return null
+        return inner.trim().ifEmpty { null }
     }
 
     /** Replacements copied EXACTLY from MainWindow.EscapeForJs. */
