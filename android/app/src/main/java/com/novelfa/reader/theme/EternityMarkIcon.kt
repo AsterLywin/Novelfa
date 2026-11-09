@@ -204,8 +204,8 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
             } else {
                 drawArc(
                     color = outline,
-                    startAngleDegrees = 271.74f,
-                    sweepAngleDegrees = -241.59f,
+                    startAngle = 271.74f,
+                    sweepAngle = -241.59f,
                     useCenter = false,
                     topLeft = outer.topLeft,
                     size = outer.size,
@@ -213,8 +213,8 @@ private fun DrawScope.drawEternityMark(index: Int, earned: Boolean, outline: Col
                 )
                 drawArc(
                     color = outline,
-                    startAngleDegrees = 64.94f,
-                    sweepAngleDegrees = 172.01f,
+                    startAngle = 64.94f,
+                    sweepAngle = 172.01f,
                     useCenter = false,
                     topLeft = inner.topLeft,
                     size = inner.size,
