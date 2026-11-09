@@ -13,10 +13,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
-import androidx.compose.ui.graphics.Stroke
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.unit.Dp
 import kotlin.math.cos
@@ -50,7 +50,9 @@ import kotlin.math.sin
 fun EternityMarkIcon(markIndex: Int, size: Dp, earned: Boolean, modifier: Modifier = Modifier) {
     val outline = MaterialTheme.colorScheme.onSurfaceVariant
     Canvas(modifier = modifier.size(size)) {
-        val scale = size.minDimension / 120f
+        // this.size is the canvas Size: the Dp parameter named `size`
+        // shadows DrawScope.size, and Dp has no minDimension.
+        val scale = this.size.minDimension / 120f
         withTransform({ scale(scale, scale) }) {
             drawEternityMark(markIndex.coerceIn(1, 10), earned, outline)
         }
