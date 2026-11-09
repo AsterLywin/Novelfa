@@ -1013,6 +1013,12 @@ fun BookCard(
             Column(modifier = Modifier.padding(8.dp)) {
                 Text(
                     text = title,
+                    // Windows parity (LibraryWindow.xaml: title Height="36"):
+                    // the title block is always two lines tall, so every
+                    // grid card has the same height whether its title wraps
+                    // to one line or two. minLines is the Compose equivalent
+                    // of that fixed height — no magic dp needed.
+                    minLines = 2,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.titleSmall
