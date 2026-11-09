@@ -71,7 +71,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -208,9 +207,10 @@ private fun hashFromSourceUri(context: Context, sourceUri: String?): String? {
  * pinch and stop the boxes from panning the same fingers a
  * second time. The scale math is the same as the box pinch
  * (start-referenced target on a smoothed span + focalPan
- * against the viewport); at gesture end it publishes the
- * settled scale once, so every strip page crosses the sharp
- * re-render threshold together.
+ * against the viewport). At gesture end nothing is published
+ * and no page re-renders: the zoom is a layout scale + list
+ * scroll, and the pages are decoded once (ComicScreen's rule,
+ * 2026-11-09 — see the viewer note).
  */
 /**
  * One-canvas strip zoom (2026-11-05): the strip is ONE box —
@@ -229,19 +229,16 @@ private fun hashFromSourceUri(context: Context, sourceUri: String?): String? {
  *   centroid.
  * A pinch may start anywhere over content (the centroid must
  * be over an item — over empty space below the last page
- * there is no content point to anchor). At gesture end the
- * settled scale is published once, so every strip page crosses
- * the sharp re-render threshold together.
+ * there is no content point to anchor).
  */
 private fun Modifier.stripPinchDetector(
     stripZoomState: MutableState<PageZoomState>,
-    stripSettledZoom: MutableFloatState,
     listState: LazyListState,
     horizontal: Boolean,
     viewportWidthPx: Float,
     viewportHeightPx: Float,
     fitFraction: Float
-): Modifier = pointerInput(stripZoomState, stripSettledZoom, listState, horizontal, viewportWidthPx, viewportHeightPx, fitFraction) {
+): Modifier = pointerInput(stripZoomState, listState, horizontal, viewportWidthPx, viewportHeightPx, fitFraction) {
     // awaitPointerEvent is a member of AwaitPointerEventScope,
     // not of PointerInputScope, so the loop lives inside this
     // scope (same pattern as the box loop in ZoomableImage).
@@ -351,9 +348,10 @@ private fun Modifier.stripPinchDetector(
                 pressed.forEach { it.consume() }
             }
         } else if (pinching) {
+            // The pinch ended: nothing to settle — the zoom is
+            // a layout scale + list scroll, and no page
+            // re-renders on gesture end (ComicScreen's rule).
             pinching = false
-            val settled = stripZoomState.value.scale
-            if (stripSettledZoom.floatValue != settled) stripSettledZoom.floatValue = settled
         }
     }
     }
@@ -700,8 +698,7 @@ internal fun NativeImageBookViewer(
 
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage)
     // One-canvas strip zoom (2026-11-05): ONE shared state for
-    // the whole strip — scale + shared cross-axis pan — and one
-    // settled scale for every page's sharp re-render. The zoom
+    // the whole strip — scale + shared cross-axis pan. The zoom
     // changes the layout (each item is fit size x the shared
     // scale), so the pages stay stuck together with no gap and
     // no overlap by construction; the main-axis pan is the list
@@ -712,7 +709,6 @@ internal fun NativeImageBookViewer(
     // original complaint all over again. Paged mode keeps its
     // own per-box states and is untouched.
     val stripZoomState = remember(book.id) { mutableStateOf(PageZoomState(pageId = "strip")) }
-    val stripSettledZoom = remember(book.id) { mutableFloatStateOf(1f) }
     val pagerState = rememberPagerState(
         initialPage = initialPage,
         pageCount = { pagerPageCount }
@@ -1826,7 +1822,7 @@ internal fun NativeImageBookViewer(
                     modifier = Modifier.fillMaxSize()
                         .background(pageBg)
                         .stripPinchDetector(
-                            stripZoomState, stripSettledZoom, listState, horizontal = false,
+                            stripZoomState, listState, horizontal = false,
                             screenWidthPx.toFloat(), screenHeightPx.toFloat(),
                             stripFitFraction
                         ),
@@ -1865,7 +1861,6 @@ internal fun NativeImageBookViewer(
                                 sessionKey = book.id,
                                 zoomPageId = "strip-$page",
                                 externalZoomState = stripZoomState,
-                                externalSettledZoom = stripSettledZoom,
                                 stripHost = stripHost,
                                 bitmapCache = pageBitmapCache
                             )

@@ -44,7 +44,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -737,16 +736,15 @@ internal fun NativePageItem(
     // a paged box remembers its own zoom state, and a strip
     // box renders the ONE shared strip state the viewer owns
     // for the whole strip (passed in below as
-    // externalZoomState, with externalSettledZoom publishing
-    // the gesture-end scale for the sharp re-render
-    // threshold) — the one-canvas model (2026-11-05): the zoom
-    // changes the layout, so every page zooms together and the
-    // pages stay stuck together. The viewer passes the
-    // identity keys below: sessionKey drops the state when the
-    // reader's content changes, slotKey/activeSlotKey drive
-    // the paged reset (both null in strips, where no
-    // auto-reset applies), zoomPageId labels the box inside
-    // this session. Defaults keep old callers compiling.
+    // externalZoomState) — the one-canvas model (2026-11-05):
+    // the zoom changes the layout, so every page zooms
+    // together and the pages stay stuck together. The viewer
+    // passes the identity keys below: sessionKey drops the
+    // state when the reader's content changes, slotKey/
+    // activeSlotKey drive the paged reset (both null in
+    // strips, where no auto-reset applies), zoomPageId labels
+    // the box inside this session. Defaults keep old callers
+    // compiling.
     sessionKey: Any? = null,
     slotKey: Int? = null,
     activeSlotKey: Int? = null,
@@ -755,12 +753,7 @@ internal fun NativePageItem(
     // passes the ONE shared strip state (one scale + one shared
     // cross-axis pan for the whole strip — the one-canvas model,
     // 2026-11-05). Null = per-box zoom (paged mode, unchanged).
-    // externalSettledZoom publishes the strip's gesture-end
-    // scale (see onPinchScale below): one settled scale for all
-    // pages, so every visible page crosses the sharp re-render
-    // threshold together.
     externalZoomState: MutableState<PageZoomState>? = null,
-    externalSettledZoom: MutableFloatState? = null,
     // One-canvas strip host (see ZoomableImage.StripZoomHost):
     // the viewer passes its strip host here; the strip
     // containers below hand it to ZoomablePageContainer. Null
@@ -817,54 +810,23 @@ internal fun NativePageItem(
     // which is what a screenshot of this screen needs to carry.
     var failMessage by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) { mutableStateOf<String?>(null) }
     var retry by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) { mutableIntStateOf(0) }
-    // Zoom re-render (ComicScreen's tile refinement,
-    // coarse-grained): the pipeline sizes the bitmap to the
-    // display width, so a 2x pinch would otherwise just upscale
-    // that bitmap on the GPU and go soft. When the pinch passes
-    // 1.75x the page re-renders at 2x display width (bicubic
-    // from the native pixels, not from the 1x bitmap), and when
-    // it falls back under 1.25x it re-renders at 1x. The
-    // hysteresis stops flapping at the threshold. renderScale
-    // is deliberately NOT in the bitmap/drawables' remember
-    // keys: a re-render must swap the bitmap under the live
-    // zoom container (which keeps its scale), not dispose the
-    // container and snap the page back to 1x mid-pinch.
-    var renderScale by remember(page, renderWidthPx, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) { mutableIntStateOf(1) }
-    // Threshold-guarded: the container reports only the
-    // settled scale (once per gesture), and only a threshold
-    // crossing re-renders — so a re-render never runs
-    // mid-pinch and stalls the gesture. The settled scale
-    // stays inside THIS item: there is no global zoom to
-    // report to anymore, so zooming one page never moves
-    // another page's render.
-    val onPinchScale: (Float) -> Unit = { s ->
-        if (s > 1.75f && renderScale != 2) {
-            renderScale = 2
-        } else if (s < 1.25f && renderScale != 1) {
-            renderScale = 1
-        }
-        // Strip: publish the settled scale (this callback only
-        // ever fires at gesture end, never mid-pinch) to the
-        // ONE shared settled holder, so a page that only just
-        // composed while already zoomed decodes sharp from the
-        // start instead of staying soft until first touched —
-        // and so every visible page crosses the sharp
-        // re-render threshold together. Guarded against
-        // no-change writes, so the observing effect below can
-        // never loop back here.
-        externalSettledZoom?.let { if (it.floatValue != s) it.floatValue = s }
-    }
-    // The strip's settled scale (one shared holder): when a
-    // strip pinch ends, every item crosses the sharp re-render
-    // threshold together — including a page that only just
-    // composed while already zoomed, which then decodes sharp
-    // from the start instead of staying soft until first
-    // touched. Keyed on the settled holder only, so a mid-pinch
-    // scale never re-renders anything.
-    val settledPageScale = externalSettledZoom?.floatValue
-    LaunchedEffect(settledPageScale) {
-        if (settledPageScale != null) onPinchScale(settledPageScale)
-    }
+    // No settled zoom re-render — ComicScreen's rule (see the
+    // viewer note, 2026-11-09): the page is decoded ONCE, at
+    // the button-zoom render width, and finger zoom (pinch /
+    // double-tap) and pan are pure GPU transforms of that one
+    // bitmap — PhotoView's matrix, no re-decode on zoom, ever.
+    // The old mechanism re-ran the whole pipeline (zip stream
+    // + decode + Sobel crop + resize + sharpen + filters) for
+    // the page — and in strips for EVERY visible page at once
+    // — each time a pinch settled past 1.75x or fell back under
+    // 1.25x, so zooming in AND out both froze the reader after
+    // the gesture. That is gone: a pinch settles instantly
+    // now, and the settled scale is reported nowhere. The
+    // trade-off is the same one ComicScreen makes: at 2-4x
+    // finger zoom the once-decoded bitmap is upscaled by the
+    // GPU and goes soft. The sharp path is the sheet's zoom
+    // steps (1.5x / 2x), which re-render the book at a higher
+    // decode width on a deliberate tap — not a gesture.
     // Known page ratio (width / height) from the source's
     // bounds-only size — ComicScreen's dimension prefetch:
     // CBZ reads image headers, PDF reads PDFium points, both
@@ -888,18 +850,15 @@ internal fun NativePageItem(
         }
     }
 
-    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect, renderScale) {
+    LaunchedEffect(page, renderWidthPx, retry, cropMargin, cropPadH, cropPadV, fitMode, sharpen, sharpenLevel, screenWidthPx, screenHeightPx, halfSide, upscaleMode, filterGray, filterContrast, filterInvert, viewRotation, manualCropRect) {
         // No bitmap/drawable nulling here on purpose: every key
-        // above except renderScale is also a remember key, so a
-        // page/parameter change already resets the states to
-        // null through remember — and a renderScale change must
-        // keep the old bitmap on screen until the sharper one
-        // arrives, or the zoom container would dispose mid-pinch
-        // (see renderScale). Only the failure flags reset: a
-        // re-render that fails must not leave a stale failure
-        // screen over a still-valid old bitmap (the branch below
-        // shows the bitmap before the failure, so the old page
-        // simply stays until its replacement arrives).
+        // above is also a remember key, so a page/parameter
+        // change already resets the states to null through
+        // remember. Only the failure flags reset: a re-render
+        // that fails must not leave a stale failure screen over
+        // a still-valid old bitmap (the branch below shows the
+        // bitmap before the failure, so the old page simply
+        // stays until its replacement arrives).
         failed = false
         failMessage = null
         // Park hit: this item already holds its finished
@@ -914,9 +873,9 @@ internal fun NativePageItem(
             return@LaunchedEffect
         }
         // The bitmap this run replaces, recycled once its
-        // replacement lands (not in onDispose: the dispose
-        // effect below is keyed without renderScale, so it
-        // would otherwise recycle the replacement too).
+        // replacement lands (not in onDispose: a retry
+        // re-runs this effect without disposing, so the
+        // dispose would never see the replaced bitmap).
         val previousBitmap = bitmap
         // Animated path first: for a GIF page the drawable
         // replaces the bitmap path wholesale. For every other
@@ -1017,13 +976,16 @@ internal fun NativePageItem(
                 // did. The budget is re-checked per step, on
                 // the current size: a page resized down first
                 // is small by the time sharpen runs.
-                // Display width for this item: the screen width
-                // times the zoom re-render scale (1x, or 2x once
-                // the pinch passes 1.75x), halved for a dual-page
+                // Display width for this item: the button-zoom
+                // render width (screen width x the sheet's zoom
+                // step, 1x / 1.5x / 2x), halved for a dual-page
                 // half item — its slot is half the screen, and
                 // resizing to the full screen would only make
-                // the GPU downscale it back in the slot.
-                val displayWidthPx = (screenWidthPx * renderScale)
+                // the GPU downscale it back in the slot. Finger
+                // zoom never changes this: it is a GPU transform
+                // of this bitmap, never a re-render (see the
+                // note above).
+                val displayWidthPx = renderWidthPx
                     .let { if (halfSide != 0) it / 2 else it }
                 val resizeTarget: Pair<Int, Int>? = when {
                     !paged && displayWidthPx > 0 ->
@@ -1134,14 +1096,11 @@ internal fun NativePageItem(
         }
         rendered.onSuccess {
             bitmap = it
-            // A re-render (zoom scale change) replaces a live
-            // bitmap: the replaced one goes now, or every zoom
-            // re-render leaks a full-size bitmap beside its
-            // replacement. The dispose effect below is keyed
-            // without renderScale, so it never fires on a
-            // re-render — this is the only place the replaced
-            // bitmap is freed, and the dispose effect frees the
-            // final one.
+            // A re-render replaces a live bitmap: the replaced
+            // one goes now, or every re-render leaks a
+            // full-size bitmap beside its replacement. The
+            // dispose effect frees the final bitmap; this is
+            // the only place a swapped-out one is freed.
             if (previousBitmap != null && previousBitmap !== it) {
                 previousBitmap.recycle()
             }
@@ -1154,16 +1113,13 @@ internal fun NativePageItem(
     // Hand the bitmap this item owns back when it leaves
     // composition: park it in the viewer's cache for a return
     // visit, or recycle it when there is no park (or the park
-    // refuses it — closed viewer, oversized bitmap). Only a
-    // 1x bitmap parks: a 2x zoom re-render is a zoom artefact,
-    // not the page's base render, and parking it would serve
-    // a double-size bitmap as the page's next 1x view. The
+    // refuses it — closed viewer, oversized bitmap). Every
+    // bitmap parks now: there is no zoom re-render anymore, so
+    // there is no 2x artefact to keep out of the park. The
     // read is live on purpose: the state object this closure
     // captures belongs to this remember instance, so a key
     // change (new page/parameters) disposes against the OLD
-    // instance's bitmap under the OLD key, while a zoom
-    // re-render — which is NOT a key of this effect — swaps
-    // the bitmap without disposing, and the dispose then
+    // instance's bitmap under the OLD key, and the dispose
     // parks or frees the final bitmap, not a stale one (the
     // swapped-out ones were freed in onSuccess above).
     // Reading state in onDispose is safe here precisely
@@ -1173,7 +1129,7 @@ internal fun NativePageItem(
         onDispose {
             val owned = bitmap
             if (owned != null && !owned.isRecycled) {
-                val parked = bitmapCache != null && renderScale == 1 &&
+                val parked = bitmapCache != null &&
                     bitmapCache.park(cacheKey, owned)
                 if (!parked) owned.recycle()
             }
@@ -1339,16 +1295,15 @@ internal fun NativePageItem(
                     // the shared strip scale, so the zoomed
                     // strip stays one continuous box.
                     modifier = Modifier.requiredWidth(stripCrossDp(shrink)).aspectRatio(ratio),
-                    // Animated pages have no bitmap re-render
-                    // to trigger, so the settled scale is
-                    // reported nowhere: the zoom lives and dies
-                    // inside this box (see ZoomablePageContainer).
+                    // Animated pages have no bitmap to render,
+                    // so there is nothing to re-render on zoom:
+                    // the zoom lives and dies inside this box
+                    // (see ZoomablePageContainer).
                     sessionKey = sessionKey,
                     zoomPageId = zoomPageId,
                     externalZoomState = externalZoomState,
                     stripHost = stripHost,
                     stripPageIndex = page,
-                    onScaleChange = {},
                     onDoubleTap = onDoubleTap,
                     onTap = onTap,
                 ) {
@@ -1519,7 +1474,6 @@ internal fun NativePageItem(
                                         // a pan (see
                                         // ZoomablePageContainer).
                                         edgeHandoff = false,
-                                        onScaleChange = onPinchScale,
                                         onDoubleTap = onDoubleTap,
                                         onTap = onTap,
                                     ) {
@@ -1561,7 +1515,6 @@ internal fun NativePageItem(
                     // the pan); no auto-reset applies (slot
                     // keys are null).
                     edgeHandoff = true,
-                    onScaleChange = onPinchScale,
                     onDoubleTap = onDoubleTap,
                     onTap = onTap,
                 ) {

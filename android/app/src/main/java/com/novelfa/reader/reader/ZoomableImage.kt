@@ -11,7 +11,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -70,8 +69,7 @@ import androidx.compose.ui.unit.IntSize
  * - Paged reset. The viewer passes the displayed pager item as
  *   activeSlotKey and each box its own slotKey. When they differ
  *   the box is no longer displayed, so it resets to 1x with zero
- *   pan and reports 1x (so the item's sharp re-render drops back
- *   to 1x too). The reset is tied to the real page change, not
+ *   pan. The reset is tied to the real page change, not
  *   to scroll offsets: a partial swipe that settles back resets
  *   nothing. In strips both keys are null and no auto-reset
  *   happens — the strip keeps each page's own zoom instead.
@@ -136,16 +134,20 @@ import androidx.compose.ui.unit.IntSize
  * are read only inside the graphicsLayer {} block, which
  * updates the layer's transform without recomposing the
  * content at all: pinch and pan are a GPU transform of a
- * static texture, as they should be. (2) onScaleChange used
- * to fire on every pinch move, so a pinch crossing 1.75x
- * kicked off a full page re-decode + resize + GPU texture
- * upload MID-GESTURE, and every in/out crossing did it
- * again — the hitch the user felt as "zooming is slow".
- * Now the caller is told the scale only once the gesture
- * settles (fingers up, or a double-tap): during the pinch
- * the 1x bitmap is simply upscaled by the GPU (soft for a
- * moment, fast throughout), and the sharper re-render lands
- * once, after the gesture, if the settled scale needs it.
+ * static texture, as they should be. (2) The settled scale
+ * used to trigger a full page re-render (zip stream + decode
+ * + Sobel crop + resize + sharpen + filters) — in strips for
+ * every visible page at once — each time a pinch settled past
+ * 1.75x or fell back under 1.25x, so zooming in AND out both
+ * froze the reader after the gesture. That is gone since
+ * 2026-11-09 (ComicScreen's rule, decoded from the
+ * ComicScreen 2309 source: decode once, zoom with the matrix
+ * only — see NativePageItem): the container reports nothing
+ * on settle, the bitmap is simply upscaled by the GPU while
+ * zoomed, and no re-render ever lands. The trade-off is
+ * ComicScreen's too: at 2-4x the page goes soft, and the
+ * sharp path is the sheet's zoom steps, which re-render the
+ * book at a higher decode width on a deliberate tap.
  */
 
 /**
@@ -250,17 +252,6 @@ fun ZoomablePageContainer(
     // it reports a confirmed double-tap (onDoubleTap) so the
     // viewer drops the pending chrome toggle for exactly
     // that case, never for a second tap on its own.
-    // Reports the SETTLED scale (1..4) — once per gesture, when
-    // the fingers lift, plus once per double-tap, plus once on
-    // a paged reset back to 1x. The caller uses it to re-render
-    // the page sharper once the settled scale passes a
-    // threshold (ComicScreen's tile refinement, coarse-grained:
-    // a full-page re-render at 2x display width instead of
-    // per-tile re-decodes — same visible result, far less
-    // machinery). It deliberately does NOT fire per pinch move:
-    // a mid-gesture re-render stalls the gesture itself (see
-    // the performance note above).
-    onScaleChange: (Float) -> Unit = {},
     // Confirmed double-tap (same spot, within 300ms): the
     // viewer uses it to suppress the pending chrome toggle.
     onDoubleTap: () -> Unit = {},
@@ -321,23 +312,17 @@ fun ZoomablePageContainer(
     var lastTapPos by remember(sessionKey, zoomPageId) {
         mutableStateOf(Offset.Zero)
     }
-    // Scale last reported to onScaleChange, so a gesture that
-    // ends at the same scale it started at reports nothing.
-    var lastReportedScale by remember(sessionKey, zoomPageId) {
-        mutableFloatStateOf(1f)
-    }
 
     fun clampCurrent(oX: Float, oY: Float, s: Float): Pair<Float, Float> =
         clampPan(oX, oY, s, boxSize.width.toFloat(), boxSize.height.toFloat())
 
     // Paged reset: when the displayed pager item moves away
     // from this box's item, this box is no longer displayed,
-    // so its zoom and pan return to the fit-size identity and
-    // the settled scale is reported once as 1x. Guarded, so a
-    // box that was never zoomed reports nothing, and a
-    // double-tap animation still running on the outgoing box
-    // is cancelled instead of overwriting the reset after it.
-    // A partial swipe that settles back never changes
+    // so its zoom and pan return to the fit-size identity.
+    // Guarded, so a box that was never zoomed resets nothing,
+    // and a double-tap animation still running on the outgoing
+    // box is cancelled instead of overwriting the reset after
+    // it. A partial swipe that settles back never changes
     // activeSlotKey, so it resets nothing.
     LaunchedEffect(activeSlotKey) {
         if (shouldResetZoom(slotKey, activeSlotKey) &&
@@ -345,10 +330,6 @@ fun ZoomablePageContainer(
         ) {
             zoomAnimTarget = null
             zoomState = zoomState.reset()
-            if (lastReportedScale != 1f) {
-                lastReportedScale = 1f
-                onScaleChange(1f)
-            }
         }
     }
 
@@ -392,13 +373,12 @@ fun ZoomablePageContainer(
     // duration (~120ms): the scale animates from the scale
     // the page had to the double-tap target, around the tap
     // point, instead of snapping — the snap was the visible
-    // "zoom is not smooth" hitch. The settled scale is
-    // reported only when the animation completes, never per
-    // frame, so the sharper re-render still runs once, after
-    // the gesture, never during it. Cancelling (a new down
-    // sets the target to null) leaves the scale at its
-    // intermediate value, and the next gesture starts from
-    // there — the animation never snaps back.
+    // "zoom is not smooth" hitch. Nothing is reported when the
+    // animation completes: there is no re-render anymore
+    // (ComicScreen's rule — see the performance note above).
+    // Cancelling (a new down sets the target to null) leaves
+    // the scale at its intermediate value, and the next gesture
+    // starts from there — the animation never snaps back.
     LaunchedEffect(zoomAnimTarget) {
         val target = zoomAnimTarget ?: return@LaunchedEffect
         val center = Offset(
@@ -423,8 +403,6 @@ fun ZoomablePageContainer(
             )
             zoomState = zoomState.copy(scale = value, offsetX = x, offsetY = y)
         }
-        lastReportedScale = target.toScale
-        onScaleChange(target.toScale)
         zoomAnimTarget = null
     }
 
@@ -437,11 +415,9 @@ fun ZoomablePageContainer(
     // offset (see PageZoomState.stripScrollDelta /
     // stripCrossOffset). A manual frame loop, not animate():
     // the loop must scroll the list per frame, and scrollBy
-    // is suspend — animate()'s per-frame block is not. The
-    // settled scale is reported only when the animation
-    // completes, exactly like the per-page path. If the tapped
-    // page has scrolled out of the layout by the time the
-    // effect runs, the scale is set directly instead.
+    // is suspend — animate()'s per-frame block is not. If the
+    // tapped page has scrolled out of the layout by the time
+    // the effect runs, the scale is set directly instead.
     LaunchedEffect(stripZoomAnimTarget) {
         val target = stripZoomAnimTarget ?: return@LaunchedEffect
         val host = stripHost ?: return@LaunchedEffect
@@ -455,8 +431,6 @@ fun ZoomablePageContainer(
             .firstOrNull { it.index == page }
         if (item == null) {
             zoomState = zoomState.copy(scale = target.toScale)
-            lastReportedScale = target.toScale
-            onScaleChange(target.toScale)
             stripZoomAnimTarget = null
             return@LaunchedEffect
         }
@@ -502,8 +476,6 @@ fun ZoomablePageContainer(
             prevScale = value
             if (t >= 1f) break
         }
-        lastReportedScale = target.toScale
-        onScaleChange(target.toScale)
         stripZoomAnimTarget = null
     }
 
@@ -692,11 +664,6 @@ fun ZoomablePageContainer(
                                 zoomState = zoomState.copy(
                                     scale = newScale, offsetX = nx, offsetY = ny
                                 )
-                                // No onScaleChange here: the
-                                // settled scale is reported once
-                                // at gesture end below, so a
-                                // mid-pinch re-render never
-                                // stalls the gesture.
                                 prevCentroid = centroid
                                 pressed.forEach { it.consume() }
                             }
@@ -793,15 +760,9 @@ fun ZoomablePageContainer(
                         }
                     }
                     // The gesture ended (no pointers pressed).
-                    // Settle first: a pinch/drag that moved the
-                    // scale reports it exactly once here, so the
-                    // caller's re-render runs after the gesture,
-                    // never during it. A tap has not moved the
-                    // scale, so this reports nothing for taps.
-                    if (zoomState.scale != lastReportedScale) {
-                        lastReportedScale = zoomState.scale
-                        onScaleChange(zoomState.scale)
-                    }
+                    // Nothing to settle: the zoom is a GPU
+                    // transform of the once-decoded bitmap, and
+                    // no page re-renders on gesture end.
                     // A tap is a gesture that never passed slop
                     // and never pinched: it was never consumed
                     // above. Only this container knows the
@@ -822,10 +783,8 @@ fun ZoomablePageContainer(
                             // tap point (same focal math as the
                             // pinch). The zoom itself is NOT set
                             // here: the animation effect above
-                            // animates it over 120ms and reports
-                            // the settled scale only when it
-                            // completes, so the sharper re-render
-                            // kicks in once, after the zoom.
+                            // animates it over 120ms instead of
+                            // snapping.
                             lastTapUpMs = 0L
                             if (layoutZoom) {
                                 // One-canvas: the animation (see
