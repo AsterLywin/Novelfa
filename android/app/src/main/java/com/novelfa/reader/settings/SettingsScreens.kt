@@ -77,6 +77,7 @@ import com.novelfa.reader.NovelfaApplication
 import com.novelfa.reader.domain.RankService
 import com.novelfa.reader.theme.RanksDialog
 import com.novelfa.reader.theme.EternityMarkIcon
+import com.novelfa.reader.theme.RankIcon
 import com.novelfa.reader.theme.StarRow
 import com.novelfa.reader.domain.XpRank
 import java.text.SimpleDateFormat
@@ -855,12 +856,22 @@ private fun RankSection(viewModel: SettingsViewModel) {
             // eternity marks): this is the fix for settings showing
             // "تازه‌وارد" while home showed "کتاب‌باز ★☆☆☆☆" for the same
             // user, because settings used the old finished-books rank.
-            Text(
-                text = level.title.displayName(isEnglishUi),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary
-            )
+            // Like the eternity mark below, the current title shows its
+            // own drawn icon next to its name.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RankIcon(
+                    rankIndex = level.titleIndex,
+                    size = 28.dp,
+                    earned = true
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = level.title.displayName(isEnglishUi),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             Spacer(modifier = Modifier.height(4.dp))
             StarRow(fill = level.starFill, starSize = 18.dp)
             Spacer(modifier = Modifier.height(6.dp))

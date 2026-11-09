@@ -117,6 +117,11 @@ private fun RankTitleRow(title: XpTitle, level: XpLevel, isEnglishUi: Boolean) {
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Like the eternity marks below (RankMarkRow), each title has
+        // its own drawn icon: filled when achieved or current, outline
+        // only while locked.
+        RankIcon(rankIndex = title.index, size = 30.dp, earned = !locked)
+        Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title.displayName(isEnglishUi),

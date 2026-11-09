@@ -72,8 +72,9 @@ fun EternityMarkIcon(markIndex: Int, size: Dp, earned: Boolean, modifier: Modifi
     }
 }
 
-/** The three stops of a mark's gradient + its light/dark details. */
-private data class MarkColors(val light: Color, val mid: Color, val dark: Color)
+/** The three stops of a mark's gradient + its light/dark details.
+ * Shared with RankIcon (same accent mechanism, same stops). */
+internal data class MarkColors(val light: Color, val mid: Color, val dark: Color)
 
 /** 4-point sparkle, concave diamond, first point at the top. */
 private fun star4Path(cx: Float, cy: Float, r: Float): Path {
