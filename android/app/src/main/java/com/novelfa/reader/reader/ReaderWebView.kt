@@ -1,13 +1,18 @@
 package com.novelfa.reader.reader
 
+import android.content.Context
 import android.util.Log
+import android.view.ActionMode
 import android.view.GestureDetector
+import android.view.Menu
+import android.view.MenuItem
 import android.view.MotionEvent
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.novelfa.reader.R
 import kotlin.math.abs
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
@@ -185,6 +190,81 @@ fun WebView.scrollToAnchor(frag: String) {
 }
 
 /**
+ * Selection-menu actions the floating text-selection ActionMode
+ * gains beside the system's Copy — ReadEra's selection popup
+ * model (Copy, Quote, Translate, …): Novelfa adds the two its
+ * menu lacks. Copy is the system's own item and stays as is.
+ */
+enum class SelectionMenuAction { QUOTE, TRANSLATE }
+
+/**
+ * The reader's WebView: its floating text-selection ActionMode
+ * gains Quote and Translate items (added in onCreate/onPrepare
+ * AFTER the system's items, so they land after Copy). The mode
+ * is NOT finished here — the native handler resolves the live
+ * selection first (evaluateJavascript is async, and finishing
+ * the mode would clear the selection before the JS runs) and
+ * clears the selection itself afterwards, which ends the mode.
+ */
+class SelectionWebView(context: Context) : WebView(context) {
+    var onSelectionAction: ((SelectionMenuAction) -> Unit)? = null
+
+    override fun startActionMode(callback: ActionMode.Callback, type: Int): ActionMode? {
+        if (type != ActionMode.TYPE_FLOATING) return super.startActionMode(callback, type)
+        return super.startActionMode(
+            SelectionActionModeCallback(callback, onSelectionAction), type
+        )
+    }
+}
+
+private class SelectionActionModeCallback(
+    private val original: ActionMode.Callback,
+    private val onAction: ((SelectionMenuAction) -> Unit)?
+) : ActionMode.Callback {
+    override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+        val created = original.onCreateActionMode(mode, menu)
+        addItems(menu)
+        return created
+    }
+
+    override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean {
+        val prepared = original.onPrepareActionMode(mode, menu)
+        addItems(menu)
+        return prepared
+    }
+
+    override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+        return when (item.itemId) {
+            MENU_QUOTE -> {
+                onAction?.invoke(SelectionMenuAction.QUOTE)
+                true
+            }
+            MENU_TRANSLATE -> {
+                onAction?.invoke(SelectionMenuAction.TRANSLATE)
+                true
+            }
+            else -> original.onActionItemClicked(mode, item)
+        }
+    }
+
+    override fun onDestroyActionMode(mode: ActionMode) = original.onDestroyActionMode(mode)
+
+    private fun addItems(menu: Menu) {
+        if (menu.findItem(MENU_QUOTE) == null) {
+            menu.add(Menu.NONE, MENU_QUOTE, Menu.NONE, R.string.selection_quote)
+        }
+        if (menu.findItem(MENU_TRANSLATE) == null) {
+            menu.add(Menu.NONE, MENU_TRANSLATE, Menu.NONE, R.string.selection_translate)
+        }
+    }
+
+    companion object {
+        private const val MENU_QUOTE = 1001
+        private const val MENU_TRANSLATE = 1002
+    }
+}
+
+/**
  * WebView owner. JS enabled, no zoom buttons, base URL = chapter folder URI
  * so relative images resolve. Reloads only when [html] changes; continuous
  * appends/prepends go through evaluateJavascript so scroll position is kept.
@@ -235,6 +315,10 @@ fun ReaderWebView(
     // Highlight-mark tap (paged native hit test; vertical mode
     // reports it through SELECT_JS's click listener instead).
     onHighlightTap: (String) -> Unit = {},
+    // Floating selection-menu action (Quote / Translate): the
+    // WebView's own ActionMode gains the items beside Copy (see
+    // SelectionWebView); the caller resolves the live selection.
+    onSelectionAction: (SelectionMenuAction) -> Unit = {},
     // True while the user has text selected (SELECT_JS reports it):
     // page-turn gestures must not fire then, or a drag would turn
     // the page instead of extending the selection, and a tap would
@@ -246,6 +330,7 @@ fun ReaderWebView(
     val pagedNow = rememberUpdatedState(paged)
     val onImageTapNow = rememberUpdatedState(onImageTap)
     val onHighlightTapNow = rememberUpdatedState(onHighlightTap)
+    val onSelectionActionNow = rememberUpdatedState(onSelectionAction)
     val onTapMiddleNow = rememberUpdatedState(onTapMiddle)
     val selectionActiveNow = rememberUpdatedState(selectionActive)
     // Tracks the mode the WebView settings below were last applied for.
@@ -267,7 +352,7 @@ fun ReaderWebView(
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
-            WebView(ctx).apply {
+            SelectionWebView(ctx).apply {
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 settings.javaScriptEnabled = true
                 // No functional need for DOM storage in the reader; leaving it
@@ -556,6 +641,10 @@ fun ReaderWebView(
         },
         update = { wv ->
             onWebView(wv)
+            // The factory runs once; the selection-menu callback
+            // must stay the current one (it closes over fresh
+            // Compose state on every recomposition).
+            (wv as? SelectionWebView)?.onSelectionAction = { onSelectionActionNow.value(it) }
             if (lastPagedSettings.value != paged) {
                 // Paged mode lays the chapter out as an N×100vw multicol
                 // strip. Overview mode would zoom out to fit ALL pages side

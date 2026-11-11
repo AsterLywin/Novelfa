@@ -51,6 +51,10 @@ enum class AppIconKind(val data: String, val duo: Boolean = false) {
     Moon("M13.5,10 A6,6 0 1 1 6,2.5 A4.8,4.8 0 0 0 13.5,10 Z", duo = true),
     Play("M5,3 L13,8 L5,13 Z", duo = true),
     Plus("M8,2.5 V13.5 M2.5,8 H13.5"),
+    // Quotation marks (Material format_quote, 24-unit glyph scaled
+    // to this set's 16-unit box): two comma-shaped marks, used for
+    // the quotes list entry and dialog.
+    Quote("M4,11.3 H6 L7.3,8.7 V4.7 H3.3 V8.7 H5.3 Z M9.3,11.3 H11.3 L12.7,8.7 V4.7 H8.7 V8.7 H10.7 Z", duo = true),
     Pages("M1.7,3.6 H7.15 V12.4 H1.7 Z M8.85,3.6 H14.3 V12.4 H8.85 Z M3.55,6.9 H5.3 M3.55,9.1 H5.3 M10.7,6.9 H12.45 M10.7,9.1 H12.45", duo = true),
     Reading("M8,4 C6,2.5 3,2.5 1.5,3 V13 C3,12.5 6,12.5 8,14 C10,12.5 13,12.5 14.5,13 V3 C13,2.5 10,2.5 8,4 Z M8,4 V14 M3.6,6.4 C4.8,5.9 6.2,5.9 7.3,6.3 M3.6,9.3 C4.8,8.8 6.2,8.8 7.3,9.2 M8.7,6.3 C9.8,5.9 11.2,5.9 12.4,6.4 M8.7,9.2 C9.8,8.8 11.2,8.8 12.4,9.3", duo = true),
     Scroll("M4,2 H12 V14 H4 Z M6,5 H10 M6,8 H10 M6,11 H9", duo = true),

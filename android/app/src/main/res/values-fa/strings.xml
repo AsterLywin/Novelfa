@@ -385,6 +385,16 @@
     <string name="reader_bookmark_remove">حذف نشانک</string>
     <string name="reader_bookmarks">نشانک‌ها</string>
     <string name="reader_no_bookmarks">هنوز نشانکی نیست</string>
+    <!-- منوی انتخاب (ریدر متنی): منوی شناور سیستم از قبل «کپی»
+         دارد؛ «نقل‌قول» و «ترجمه» کنار آن اضافه می‌شوند، مثل
+         پنجره‌ی انتخاب ریدرا. -->
+    <string name="selection_quote">نقل‌قول</string>
+    <string name="selection_translate">ترجمه</string>
+    <string name="quote_saved">نقل‌قول ذخیره شد</string>
+    <string name="quote_remove">حذف نقل‌قول</string>
+    <string name="quotes_title">نقل‌قول‌ها</string>
+    <string name="quotes_empty">هنوز نقل‌قولی نیست — روی متن نگه دار و «نقل‌قول» را بزن تا ذخیره شود.</string>
+    <string name="translate_no_app">مترجمی پیدا نشد</string>
     <string name="comic_capture">ذخیره‌ی صفحه</string>
     <string name="comic_page_saved">صفحه ذخیره شد: %1$s</string>
     <string name="comic_save_failed">ذخیره‌ی صفحه ممکن نشد</string>

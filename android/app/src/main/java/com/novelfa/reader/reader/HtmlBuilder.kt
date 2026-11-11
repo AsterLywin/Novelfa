@@ -2161,6 +2161,73 @@ object HtmlBuilder {
         }
         return 'ok';
     };
+    // Quote landing (quotes list tap): wrap the quote's first words
+    // in a search-hit mark and turn/scroll to it — the same landing
+    // rdrSearchGo does, but WITHOUT touching search state: it must
+    // not set __rdrFind (a stale re-apply would re-mark the quote's
+    // words on every later chapter load) and must not clear the
+    // user's search marks. The mark is class rdr-find (same yellow)
+    // with data-quote, so a later search clears it like any hit.
+    // In paged mode the pages may not exist yet (the pager builds
+    // after onPageFinished): then the request is queued in
+    // __rdrPendingQuote and __rdrAfterBuild runs it once the build
+    // finishes — the mark is NOT wrapped yet, a build would drop it.
+    window.rdrGoToQuote = function (chap, text) {
+        try {
+            if (!text) return 'miss';
+            // chapDiv falls back to document.body when the chapter
+            // is not loaded: that fallback would search the whole
+            // document and could land in the WRONG chapter, so a
+            // missing chapter div is a miss, not a body search.
+            var div = chapDiv(chap);
+            if (div === document.body && document.querySelector('.rdr-chap')) return 'miss';
+            var root = searchRoot(chap);
+            if (!root) return 'miss';
+            if (window.rdrGoToPage && root.querySelectorAll('.rdr-page').length === 0) {
+                window.__rdrPendingQuote = { c: chap, t: text };
+                return 'queued';
+            }
+            var nodes = textNodes(root), full = '', starts = [];
+            for (var ni = 0; ni < nodes.length; ni++) {
+                starts.push(full.length);
+                full += nodes[ni].nodeValue;
+            }
+            var at = full.toLowerCase().indexOf(text.toLowerCase());
+            if (at < 0) return 'miss';
+            var node = null, off = 0;
+            for (var si = 0; si < nodes.length; si++) {
+                if (starts[si] + nodes[si].nodeValue.length > at) {
+                    node = nodes[si]; off = at - starts[si]; break;
+                }
+            }
+            if (!node) return 'miss';
+            var prev = root.querySelectorAll('mark.rdr-find[data-quote]');
+            for (var pi = 0; pi < prev.length; pi++) {
+                var pm = prev[pi], pp = pm.parentNode;
+                while (pm.firstChild) pp.insertBefore(pm.firstChild, pm);
+                pp.removeChild(pm);
+                if (pp.normalize) pp.normalize();
+            }
+            var range = document.createRange();
+            range.setStart(node, off);
+            range.setEnd(node, Math.min(node.nodeValue.length, off + text.length));
+            var mark = document.createElement('mark');
+            mark.className = 'rdr-find';
+            mark.setAttribute('data-quote', '1');
+            try { range.surroundContents(mark); }
+            catch (e2) { var f = range.extractContents(); mark.appendChild(f); range.insertNode(mark); }
+            var page = mark.closest ? mark.closest('.rdr-page') : null;
+            if (page && window.rdrGoToPage) {
+                var pages = root.querySelectorAll('.rdr-page');
+                for (var p = 0; p < pages.length; p++) {
+                    if (pages[p] === page) { window.rdrGoToPage(p); break; }
+                }
+            } else {
+                try { mark.scrollIntoView({ block: 'center' }); } catch (e3) { mark.scrollIntoView(); }
+            }
+            return 'ok';
+        } catch (e) { return 'err'; }
+    };
     // Page of every in-chapter match (document order, same order as
     // rdrSearchAll's data-find numbering): 0-based page inside the
     // chapter, or -1 when the match is not inside a paginated page
@@ -2282,6 +2349,15 @@ object HtmlBuilder {
             if (window.__rdrFind) {
                 window.rdrSearchAll(window.__rdrFind, window.__rdrFindChap);
                 if (window.__rdrFindCur >= 0) window.rdrSearchGo(window.__rdrFindCur, window.__rdrFindChap);
+            }
+            // A quote landing requested before the pager finished
+            // building: the pages exist now, so run it once. The
+            // chapter check drops a stale pending (a load that
+            // raced a newer one) instead of jumping a wrong chapter.
+            var pq = window.__rdrPendingQuote;
+            if (pq) {
+                window.__rdrPendingQuote = null;
+                if (document.querySelector('.rdr-chap[data-idx="' + pq.c + '"]')) window.rdrGoToQuote(pq.c, pq.t);
             }
         } catch (e) { }
     };

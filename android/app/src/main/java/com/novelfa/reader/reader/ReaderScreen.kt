@@ -126,6 +126,7 @@ import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.ReaderExtrasStore
 import com.novelfa.reader.data.TextBookmark
 import com.novelfa.reader.data.TextHighlight
+import com.novelfa.reader.data.TextQuote
 import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.PdfImageBook
@@ -154,6 +155,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.net.URLEncoder
 import java.util.Locale
 import androidx.compose.material3.rememberDrawerState
 import coil.compose.AsyncImage
@@ -456,6 +458,16 @@ fun ReaderScreen(
     // removes it.
     val textBookmarks by extrasStore.textBookmarks(bookId).collectAsState(initial = emptyList())
     var bookmarksOpen by remember { mutableStateOf(false) }
+    // Saved quotes (selection menu → Quote, ReadEra model): the
+    // selected text + its chapter char offsets, so the quotes
+    // list can jump back to the passage. Listed from the drawer,
+    // next to Bookmarks (ReadEra groups Contents / Bookmarks /
+    // Quotes in one place).
+    val quotes by extrasStore.quotes(bookId).collectAsState(initial = emptyList())
+    var quotesOpen by remember { mutableStateOf(false) }
+    // A quote jump waiting for its chapter to load (same pattern
+    // as pendingBookmarkPos): consumed in onPageFinished.
+    var pendingQuote by remember { mutableStateOf<TextQuote?>(null) }
     // Bookmark to land on after its chapter loads (set by
     // jumpToBookmark, consumed and cleared by onPageFinished);
     // a jump inside the already-loaded document never sets it.
@@ -687,6 +699,132 @@ fun ReaderScreen(
         return highlights.firstOrNull { it.chapter == chap && it.start == s && it.end == e }
     }
 
+    /**
+     * Clears the live text selection. The WebView ends its
+     * floating ActionMode on its own when the selection
+     * collapses, so this is also how a selection-menu action
+     * dismisses the menu after it runs.
+     */
+    fun clearSelection() {
+        webView?.evaluateJavascript(
+            "try{window.getSelection().removeAllRanges();}catch(e){}",
+            null
+        )
+    }
+
+    /**
+     * Floating selection-menu action (Quote / Translate — see
+     * SelectionWebView). The ActionMode is NOT finished by the
+     * menu: finishing it would clear the selection before this
+     * async read runs, so the action resolves the live selection
+     * first (rdrSelectionRange + the selected text, one JS call)
+     * and clears it only after the action ran.
+     */
+    fun handleSelectionAction(action: SelectionMenuAction) {
+        val wv = webView ?: return
+        wv.evaluateJavascript(
+            "(function(){try{var r=window.rdrSelectionRange?window.rdrSelectionRange():'';" +
+                "var t=window.getSelection?window.getSelection().toString():'';" +
+                "return JSON.stringify({r:r,t:t});}catch(e){return '';}})();"
+        ) { raw ->
+            val info = HtmlText.parseSelectionInfo(raw) ?: return@evaluateJavascript
+            when (action) {
+                SelectionMenuAction.QUOTE -> saveQuote(info)
+                SelectionMenuAction.TRANSLATE -> translateSelection(info.text)
+            }
+        }
+    }
+
+    /**
+     * Quote (ReadEra model): save the selected text with its
+     * chapter char offsets, so the quotes list can jump back to
+     * it. The same range quoted twice stores once. The selection
+     * is cleared after saving, like ReadEra clearing it after
+     * Copy.
+     */
+    fun saveQuote(info: HtmlText.SelectionInfo) {
+        val chap = info.range.substringBefore(':').toIntOrNull() ?: return
+        val range = info.range.substringAfter(':').split('-')
+        if (range.size != 2) return
+        val s = range[0].toIntOrNull() ?: return
+        val e = range[1].toIntOrNull() ?: return
+        val text = info.text.trim()
+        if (text.isEmpty()) return
+        if (quotes.none { it.chapter == chap && it.start == s && it.end == e }) {
+            val q = TextQuote(chap, s, e, text, System.currentTimeMillis())
+            scope.launch { extrasStore.setQuotes(bookId, quotes + q) }
+        }
+        clearSelection()
+        scope.launch { snackbar.showSnackbar(quoteSavedMsg) }
+    }
+
+    /**
+     * Translate (ReadEra model: hand the text to the user's
+     * translator): the Google Translate app first, via its
+     * share target (no URL length limit); the Translate web
+     * page in the browser as fallback (its URL caps the text
+     * at 1500 chars); a notice when neither exists.
+     */
+    fun translateSelection(text: String) {
+        val t = text.trim()
+        if (t.isEmpty()) {
+            clearSelection()
+            return
+        }
+        val appIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, t)
+            setPackage("com.google.android.apps.translate")
+        }
+        val launched = runCatching { context.startActivity(appIntent); true }
+            .getOrDefault(false)
+        if (!launched) {
+            val short = t.take(1500)
+            val url = "https://translate.google.com/?sl=auto&text=" +
+                URLEncoder.encode(short, "UTF-8") + "&op=translate"
+            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            val webLaunched = runCatching { context.startActivity(webIntent); true }
+                .getOrDefault(false)
+            if (!webLaunched) {
+                scope.launch { snackbar.showSnackbar(translateNoAppMsg) }
+            }
+        }
+        clearSelection()
+    }
+
+    /** Jump to a saved quote: its chapter, then the passage (see [goToQuote]). */
+    fun jumpToQuote(q: TextQuote) {
+        val v = vm ?: return
+        quotesOpen = false
+        scope.launch {
+            // The dialog opens from the drawer: a jump must close
+            // the drawer too, or the landing stays hidden behind it.
+            drawerState.close()
+            if (q.chapter == v.index) {
+                goToQuote(q)
+            } else {
+                pendingQuote = q
+                gotoChapter(v, q.chapter)
+                if (v.index != q.chapter) pendingQuote = null
+            }
+        }
+    }
+
+    /**
+     * Land on a quote's passage: rdrGoToQuote wraps the quote's
+     * first words in a search-hit mark and turns/scrolls to it.
+     * In paged mode with an unbuilt pager it queues itself for
+     * __rdrAfterBuild instead (see HtmlBuilder) — the call below
+     * does not need to know which case it is.
+     */
+    fun goToQuote(q: TextQuote) {
+        val needle = HtmlText.escapeForJs(q.text.take(60))
+        webView?.evaluateJavascript(
+            "window.rdrGoToQuote(${q.chapter}, '$needle');",
+            null
+        )
+    }
+
     // Re-apply highlights + active search marks whenever the live
     // document (re)loads: chapter change, mode switch, settings
     // reload, torn-down pager, or a new chapter scrolling into the
@@ -750,6 +888,8 @@ fun ReaderScreen(
     val fontMissingMsg = stringResource(R.string.reader_font_missing)
     val linkTargetMsg = stringResource(R.string.link_target_not_found)
     val copiedMsg = stringResource(R.string.copied)
+    val quoteSavedMsg = stringResource(R.string.quote_saved)
+    val translateNoAppMsg = stringResource(R.string.translate_no_app)
     val imageSavedTemplate = stringResource(R.string.image_saved)
     val imageSaveFailedMsg = stringResource(R.string.image_save_failed)
 
@@ -1942,6 +2082,33 @@ fun ReaderScreen(
                         )
                     }
                 }
+                // Quotes entry: same shape as Bookmarks (the dialog
+                // lives here too, not in the top bar — the bar already
+                // carries seven icons). ReadEra groups Contents /
+                // Bookmarks / Quotes in one place; the drawer is
+                // Novelfa's equivalent.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { quotesOpen = true }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AppIcon(AppIconKind.Quote, tint = LocalContentColor.current, size = 18.dp)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = stringResource(R.string.quotes_title),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    if (quotes.isNotEmpty()) {
+                        Text(
+                            text = quotes.size.toString(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 val v = vm
                 if (v == null) {
                     Text(
@@ -2302,6 +2469,9 @@ fun ReaderScreen(
                         },
                         selectionActive = selectionActive,
                         onHighlightTap = { id -> tappedHighlightId = id },
+                        // Floating selection menu (Quote / Translate):
+                        // resolves the live selection, then acts.
+                        onSelectionAction = { action -> handleSelectionAction(action) },
                         onError = { details ->
                             scope.launch { snackbar.showSnackbar(chapterErr + details) }
                         },
@@ -2389,6 +2559,19 @@ fun ReaderScreen(
                                     if (vm?.index == pos.chapter) {
                                         goToBookmarkPage(pos.fraction)
                                     }
+                                }
+                            }
+                            // Quote landing: the chapter just loaded, so
+                            // turn/scroll to the quote's passage. The
+                            // chapter check drops a stale pending (a
+                            // failed load, or a load that raced a newer
+                            // one) instead of jumping a different
+                            // chapter; rdrGoToQuote queues itself when
+                            // the pager has not built yet.
+                            pendingQuote?.let { q ->
+                                pendingQuote = null
+                                if (vm?.index == q.chapter) {
+                                    goToQuote(q)
                                 }
                             }
                             // Text-point restore for a same-chapter
@@ -3049,6 +3232,89 @@ fun ReaderScreen(
             },
             confirmButton = {
                 TextButton(onClick = { bookmarksOpen = false }) {
+                    Text(stringResource(R.string.close))
+                }
+            }
+        )
+    }
+
+    // Quotes list (selection menu → Quote): the saved passages
+    // for this book. A row tap jumps to the passage (same
+    // chapter-turn + landing the bookmarks dialog uses); the
+    // trash deletes that one quote. Same dialog shape as
+    // Bookmarks, opened from the same drawer row.
+    if (quotesOpen) {
+        AlertDialog(
+            onDismissRequest = { quotesOpen = false },
+            title = { Text(stringResource(R.string.quotes_title)) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (quotes.isEmpty()) {
+                        Text(stringResource(R.string.quotes_empty))
+                    } else {
+                        quotes.forEach { q ->
+                            val isCurrent = q.chapter == vm?.index
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { jumpToQuote(q) }
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = q.text,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = if (isCurrent) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            LocalContentColor.current
+                                        }
+                                    )
+                                    Text(
+                                        text = vm?.chapters?.getOrNull(q.chapter)?.title
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?: stringResource(
+                                                R.string.chapter_fallback, q.chapter + 1
+                                            ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                val removeQuoteDesc = stringResource(
+                                    R.string.quote_remove
+                                )
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            extrasStore.setQuotes(bookId, quotes - q)
+                                        }
+                                    },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = removeQuoteDesc
+                                    }
+                                ) {
+                                    AppIcon(
+                                        AppIconKind.Trash,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        size = 18.dp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { quotesOpen = false }) {
                     Text(stringResource(R.string.close))
                 }
             }

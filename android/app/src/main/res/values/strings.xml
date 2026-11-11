@@ -385,6 +385,16 @@
     <string name="reader_bookmark_remove">Remove bookmark</string>
     <string name="reader_bookmarks">Bookmarks</string>
     <string name="reader_no_bookmarks">No bookmarks yet</string>
+    <!-- Selection menu (text reader): the system's floating menu
+         already offers Copy; Quote and Translate are added beside
+         it, like ReadEra's selection popup. -->
+    <string name="selection_quote">Quote</string>
+    <string name="selection_translate">Translate</string>
+    <string name="quote_saved">Quote saved</string>
+    <string name="quote_remove">Remove quote</string>
+    <string name="quotes_title">Quotes</string>
+    <string name="quotes_empty">No quotes yet — long-press text and choose Quote to save one.</string>
+    <string name="translate_no_app">No translator found</string>
     <string name="comic_capture">Save page</string>
     <string name="comic_page_saved">Page saved: %1$s</string>
     <string name="comic_save_failed">Could not save the page</string>

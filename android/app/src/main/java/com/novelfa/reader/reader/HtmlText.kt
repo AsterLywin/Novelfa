@@ -434,4 +434,103 @@ object HtmlText {
             .replace(0x2028.toChar().toString(), "\\u2028")
             .replace(0x2029.toChar().toString(), "\\u2029")
     }
+
+    /**
+     * Decodes one JSON string literal (what WebView
+     * evaluateJavascript returns for a JS string: the value
+     * JSON-encoded, e.g. "\"a\\n b\""). Returns null when the
+     * input is not a well-formed string literal. Pure Kotlin,
+     * no org.json dependency, so it runs on the JVM harness.
+     */
+    fun decodeJsString(raw: String?): String? {
+        val s = raw?.trim() ?: return null
+        if (s.length < 2 || s.first() != '"' || s.last() != '"') return null
+        val out = StringBuilder(s.length)
+        var i = 1
+        while (i < s.length - 1) {
+            val c = s[i]
+            if (c != '\\') {
+                out.append(c)
+                i++
+                continue
+            }
+            if (i + 1 >= s.length - 1) return null
+            when (val e = s[i + 1]) {
+                '"' -> out.append('"')
+                '\\' -> out.append('\\')
+                '/' -> out.append('/')
+                'b' -> out.append('\b')
+                'f' -> out.append('\u000C')
+                'n' -> out.append('\n')
+                'r' -> out.append('\r')
+                't' -> out.append('\t')
+                'u' -> {
+                    if (i + 5 >= s.length) return null
+                    val code = s.substring(i + 2, i + 6).toIntOrNull(16) ?: return null
+                    out.append(code.toChar())
+                    i += 4
+                }
+                else -> return null
+            }
+            i += 2
+        }
+        return out.toString()
+    }
+
+    /** One live text selection: the "chap:start-end" range id plus the selected text. */
+    data class SelectionInfo(val range: String, val text: String)
+
+    /**
+     * Parses the evaluateJavascript result of
+     * `JSON.stringify({r: <range>, t: <text>})` — an outer JSON
+     * string literal wrapping an inner JSON object with exactly
+     * those two fields. Returns null on any malformed input, an
+     * empty range, or empty text (a collapsed selection reports
+     * both empty and must not act).
+     */
+    fun parseSelectionInfo(raw: String?): SelectionInfo? {
+        val inner = decodeJsString(raw) ?: return null
+        val range = extractJsonStringField(inner, "r") ?: return null
+        val text = extractJsonStringField(inner, "t") ?: return null
+        if (range.isEmpty() || text.isBlank()) return null
+        return SelectionInfo(range, text)
+    }
+
+    /** Reads one string field out of a small JSON object literal ("key":"value"), escape-aware. */
+    private fun extractJsonStringField(json: String, key: String): String? {
+        val needle = "\"$key\":\""
+        val at = json.indexOf(needle)
+        if (at < 0) return null
+        val start = at + needle.length
+        val out = StringBuilder()
+        var i = start
+        while (i < json.length) {
+            val c = json[i]
+            if (c == '"') return out.toString()
+            if (c == '\\' && i + 1 < json.length) {
+                when (val e = json[i + 1]) {
+                    '"' -> out.append('"')
+                    '\\' -> out.append('\\')
+                    '/' -> out.append('/')
+                    'b' -> out.append('\b')
+                    'f' -> out.append('\u000C')
+                    'n' -> out.append('\n')
+                    'r' -> out.append('\r')
+                    't' -> out.append('\t')
+                    'u' -> {
+                        if (i + 5 >= json.length) return null
+                        val code = json.substring(i + 2, i + 6).toIntOrNull(16) ?: return null
+                        out.append(code.toChar())
+                        i += 4
+                    }
+                    else -> return null
+                }
+                i += 2
+                continue
+            }
+            out.append(c)
+            i++
+        }
+        return null
+    }
 }

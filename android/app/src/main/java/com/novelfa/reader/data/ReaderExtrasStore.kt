@@ -12,6 +12,7 @@ import com.novelfa.reader.reader.parseSectionPosition
 import com.novelfa.reader.reader.serializeSectionPosition
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import java.util.Base64
 
 /**
  * Small per-book reader extras for the native viewer, kept out
@@ -70,6 +71,61 @@ internal fun parseHighlights(raw: String?): List<TextHighlight> {
 internal fun serializeHighlights(highlights: List<TextHighlight>): String {
     return highlights.sortedWith(compareBy({ it.chapter }, { it.start }))
         .joinToString(";") { "${it.chapter}:${it.start}-${it.end}:${it.color}" }
+}
+
+/**
+ * One saved quote in the text reader (ReadEra's Quote action):
+ * the selected text plus the same chapter char offsets a
+ * highlight carries, so the quotes list can jump back to the
+ * passage. [createdAt] is epoch millis, the list's display
+ * order tiebreak (newest last). The text is stored, not
+ * re-derived: re-parsing the chapter to recover it would fail
+ * whenever the file changed since the quote was saved.
+ */
+data class TextQuote(
+    val chapter: Int,
+    val start: Int,
+    val end: Int,
+    val text: String,
+    val createdAt: Long
+)
+
+/**
+ * Pure quote-list codec, unit-testable without DataStore.
+ * Format: "chapter:start-end:createdAt:base64;…" — the text is
+ * Base64 (java.util, no Android dependency, so the codec runs
+ * on the JVM harness) because raw text may contain ';' and ':',
+ * the codec's own separators. Malformed entries are dropped,
+ * never guessed; the list sorts by (chapter, start, createdAt).
+ */
+internal fun parseQuotes(raw: String?): List<TextQuote> {
+    if (raw.isNullOrBlank()) return emptyList()
+    val out = mutableListOf<TextQuote>()
+    for (entry in raw.split(';')) {
+        val parts = entry.split(':')
+        if (parts.size != 4) continue
+        val chapter = parts[0].toIntOrNull() ?: continue
+        val range = parts[1].split('-')
+        if (range.size != 2) continue
+        val start = range[0].toIntOrNull() ?: continue
+        val end = range[1].toIntOrNull() ?: continue
+        val createdAt = parts[2].toLongOrNull() ?: continue
+        val text = runCatching {
+            String(Base64.getDecoder().decode(parts[3]), Charsets.UTF_8)
+        }.getOrNull() ?: continue
+        if (chapter < 0 || start < 0 || end <= start) continue
+        if (text.isBlank()) continue
+        out += TextQuote(chapter, start, end, text, createdAt)
+    }
+    return out.sortedWith(compareBy({ it.chapter }, { it.start }, { it.createdAt }))
+}
+
+internal fun serializeQuotes(quotes: List<TextQuote>): String {
+    return quotes.sortedWith(compareBy({ it.chapter }, { it.start }, { it.createdAt }))
+        .joinToString(";") {
+            val b64 = Base64.getEncoder().encodeToString(it.text.toByteArray(Charsets.UTF_8))
+            "${it.chapter}:${it.start}-${it.end}:${it.createdAt}:$b64"
+        }
 }
 
 /** Pure bookmark-list codec, unit-testable without DataStore. */
@@ -261,6 +317,20 @@ class ReaderExtrasStore(private val context: Context) {
     suspend fun setHighlights(bookId: String, highlights: List<TextHighlight>) {
         context.readerExtrasDataStore.edit { prefs ->
             prefs[highlightsKey(bookId)] = serializeHighlights(highlights)
+        }
+    }
+
+    private fun quotesKey(bookId: String) = stringPreferencesKey("qt_$bookId")
+
+    /** Saved quotes for [bookId], in (chapter, start) order. The `qt_` key is swept by [clearBook]. */
+    fun quotes(bookId: String): Flow<List<TextQuote>> =
+        context.readerExtrasDataStore.data.map {
+            parseQuotes(it[quotesKey(bookId)])
+        }
+
+    suspend fun setQuotes(bookId: String, quotes: List<TextQuote>) {
+        context.readerExtrasDataStore.edit { prefs ->
+            prefs[quotesKey(bookId)] = serializeQuotes(quotes)
         }
     }
 
@@ -477,6 +547,7 @@ class ReaderExtrasStore(private val context: Context) {
             prefs.remove(textBookmarksKey(bookId))
             prefs.remove(scrollOffsetKey(bookId))
             prefs.remove(highlightsKey(bookId))
+            prefs.remove(quotesKey(bookId))
             prefs.remove(zoomKey(bookId))
             prefs.remove(cropRectsKey(bookId))
             prefs.remove(searchHistoryKey(bookId))
