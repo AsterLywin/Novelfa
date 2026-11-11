@@ -8,14 +8,16 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 /**
- * Nested archives (ZIP-in-ZIP): a comic or book pack whose chapters
- * are themselves ZIP files inside one outer ZIP — e.g. one file per
- * chapter, each holding its chapter's images in its own folder, all
- * zipped again into a single file (and sometimes zipped once more).
- * ComicScreen does not open that shape at all, and Novelfa used to
- * fail it the same way: the top-level listing holds only `.zip`
- * entries, so the classifier saw no images and no book and the file
- * was "nothing readable".
+ * Nested archives (ZIP-in-ZIP, and the cross-container shapes:
+ * a ZIP inside a RAR, a RAR inside a ZIP): a comic or book pack
+ * whose chapters are themselves archives inside one outer
+ * archive — e.g. one file per chapter, each holding its
+ * chapter's images in its own folder, all zipped again into a
+ * single file (and sometimes zipped once more). ComicScreen does
+ * not open that shape at all, and Novelfa used to fail it the
+ * same way: the top-level listing holds only archive entries,
+ * so the classifier saw no images and no book and the file was
+ * "nothing readable".
  *
  * Model: a nested archive is a transparent directory. A page inside
  * one is named by its virtual path, archive segments joined with
@@ -76,12 +78,36 @@ object NestedArchive {
         return base.substringAfterLast('.', "").lowercase() in ARCHIVE_EXTENSIONS
     }
 
+    /** Container extensions that can hold nested content: ZIP
+     *  archives plus RAR archives (a RAR inside a ZIP, or a ZIP
+     *  inside a RAR — the cross-container shapes). */
+    val CONTAINER_EXTENSIONS = ARCHIVE_EXTENSIONS + setOf("rar", "cbr")
+
+    /** True for a non-directory nested container of any kind. */
+    fun isContainerName(name: String): Boolean {
+        if (name.endsWith('/')) return false
+        val base = name.substringAfterLast('/')
+        if (base.startsWith('.')) return false
+        if (name.startsWith("__MACOSX/")) return false
+        return base.substringAfterLast('.', "").lowercase() in CONTAINER_EXTENSIONS
+    }
+
     /** True when a virtual path dives into a nested archive: any
      *  segment but the last is an archive name. */
     fun isVirtualPath(name: String): Boolean {
         val parts = name.split('/')
         if (parts.size < 2) return false
         return parts.dropLast(1).any { isArchiveName(it) }
+    }
+
+    /** True when a virtual path dives into a nested container of
+     *  any kind (ZIP or RAR): any segment but the last is a
+     *  container name. The RAR twin of [isVirtualPath], which
+     *  covers ZIP archives only. */
+    fun isContainerPath(name: String): Boolean {
+        val parts = name.split('/')
+        if (parts.size < 2) return false
+        return parts.dropLast(1).any { isContainerName(it) }
     }
 
     /**
@@ -118,22 +144,48 @@ object NestedArchive {
     }
 
     /**
+     * Cache key for one entry of a file-backed archive: the
+     * parent's identity (path, length, mtime) plus the entry
+     * name, so an unchanged parent reuses the materialized file
+     * and a changed parent re-materializes instead of serving
+     * stale pages.
+     */
+    fun fileSignatureKey(source: File, entryName: String): String =
+        cacheKey(
+            source.absolutePath, source.length().toString(),
+            source.lastModified().toString(), entryName
+        )
+
+    /** Cache extension for a nested entry: RAR entries keep a
+     *  `.rar` name so a materialized file never wears the wrong
+     *  container's extension; ZIP entries keep `.zip`. */
+    private fun cacheExt(entryName: String): String =
+        if (entryName.substringAfterLast('.', "").lowercase() in setOf("rar", "cbr")) {
+            "rar"
+        } else {
+            "zip"
+        }
+
+    /**
      * Materializes one nested archive entry of a file-backed
      * archive into [cacheDir] and returns the materialized file,
      * or null when the entry cannot be served (encrypted, unknown
-     * method, corrupt, over the size cap, not a ZIP). A cached
+     * method, corrupt, over the size cap, not an archive). A cached
      * file is returned as-is when the parent still matches its
      * signature (length + mtime), so the inflate is paid once.
      */
     fun materialize(source: File, entryName: String, cacheDir: File): File? {
-        val key = cacheKey(
-            source.absolutePath, source.length().toString(),
-            source.lastModified().toString(), entryName
-        )
-        return materializeIntoCache(
-            cacheDir, key,
-            openStream = { CbzBook.openEntryStream(source, entryName) }
-        )
+        return materializeFile(
+            cacheDir, fileSignatureKey(source, entryName), cacheExt(entryName)
+        ) { dest ->
+            val stream = CbzBook.openEntryStream(source, entryName)
+                ?: return@materializeFile -1
+            try {
+                streamCopyCapped(stream, dest)
+            } finally {
+                runCatching { stream.close() }
+            }
+        }
     }
 
     /**
@@ -146,42 +198,79 @@ object NestedArchive {
      */
     fun materialize(stream: InputStream, key: String, cacheDir: File): File? {
         val fileKey = cacheKey("stream", key)
-        return materializeIntoCache(cacheDir, fileKey, openStream = { stream })
+        return materializeFile(cacheDir, fileKey, "zip") { dest ->
+            streamCopyCapped(stream, dest)
+        }
     }
 
-    private fun materializeIntoCache(
-        cacheDir: File,
-        key: String,
-        openStream: () -> InputStream?
-    ): File? {
-        runCatching { cacheDir.mkdirs() }
-        val dest = File(cacheDir, "$key.zip")
-        if (dest.isFile && dest.length() > 0) return dest
-        pruneStale(cacheDir)
-        val stream = openStream() ?: return null
-        val tmp = File(cacheDir, "$key.tmp")
-        try {
+    /** Copies [stream] to [dest], capped at [ZipExtract.MAX_BYTES].
+     *  Returns 0 on success, -1 when the cap is hit, the stream
+     *  is empty, or the copy fails. The caller owns the stream. */
+    private fun streamCopyCapped(stream: InputStream, dest: File): Int {
+        return try {
             var total = 0L
-            tmp.outputStream().use { out ->
+            dest.outputStream().use { out ->
                 val buf = ByteArray(8192)
                 while (true) {
                     val n = stream.read(buf)
                     if (n < 0) break
                     total += n
-                    if (total > ZipExtract.MAX_BYTES) return null
+                    if (total > ZipExtract.MAX_BYTES) return -1
                     out.write(buf, 0, n)
                 }
             }
-            if (total <= 0) return null
-            // A materialized nested archive must BE a ZIP: an
-            // entry that only wears the extension (a misnamed
-            // RAR, a truncated download) is refused here, not
-            // passed on to list as an empty archive.
-            val head = ByteArray(2)
-            tmp.inputStream().use {
-                if (it.read(head) < 2) return null
+            if (total <= 0) -1 else 0
+        } catch (e: Exception) {
+            -1
+        }
+    }
+
+    /**
+     * The shared materialization core: [write] produces the
+     * archive file at the given temp path and returns 0 on
+     * success (any other value fails). Both writers — a stream
+     * copy (ZIP entries) and the native extractor (RAR entries,
+     * whose ERAR_SUCCESS is 0) — share the cache lookup, the
+     * head check, the atomic rename and the stale prune, so a
+     * new container kind cannot silently skip any of them.
+     *
+     * A materialized nested archive must BE an archive: an entry
+     * that only wears the extension (a misnamed file, a
+     * truncated download) is refused here, not passed on to list
+     * as an empty archive. ZIP heads are `PK`, RAR heads `Rar!`.
+     */
+    fun materializeFile(
+        cacheDir: File,
+        key: String,
+        ext: String,
+        write: (File) -> Int
+    ): File? {
+        runCatching { cacheDir.mkdirs() }
+        val dest = File(cacheDir, "$key.$ext")
+        if (dest.isFile && dest.length() > 0) return dest
+        pruneStale(cacheDir)
+        val tmp = File(cacheDir, "$key.tmp")
+        try {
+            if (write(tmp) != 0) {
+                runCatching { tmp.delete() }
+                return null
             }
-            if (!(head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte())) {
+            if (!tmp.isFile || tmp.length() <= 0) {
+                runCatching { tmp.delete() }
+                return null
+            }
+            val head = ByteArray(4)
+            tmp.inputStream().use {
+                if (it.read(head) < 2) {
+                    runCatching { tmp.delete() }
+                    return null
+                }
+            }
+            val isZip = head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte()
+            val isRar = head[0] == 'R'.code.toByte() && head[1] == 'a'.code.toByte() &&
+                head[2] == 'r'.code.toByte() && head[3] == '!'.code.toByte()
+            if (!isZip && !isRar) {
+                runCatching { tmp.delete() }
                 return null
             }
             if (!tmp.renameTo(dest)) {
@@ -194,8 +283,71 @@ object NestedArchive {
         } catch (e: Exception) {
             runCatching { tmp.delete() }
             return null
-        } finally {
-            runCatching { stream.close() }
+        }
+    }
+
+    /**
+     * Materializes a whole archive chain and returns the final
+     * archive file: `inner.zip/pack.rar` becomes the materialized
+     * `pack.rar` file. Null when any level fails, or when the
+     * path does not name an archive (its last segment must be a
+     * container name). The twin of [resolveFile], which instead
+     * returns the deepest file plus the entry inside it.
+     */
+    fun materializeArchive(source: File, virtualPath: String, cacheDir: File): File? {
+        val parts = virtualPath.split('/')
+        var current = source
+        var pending = ""
+        for (segment in parts) {
+            if (isContainerName(segment)) {
+                current = materialize(current, pending + segment, cacheDir)
+                    ?: return null
+                pending = ""
+            } else {
+                pending += "$segment/"
+            }
+        }
+        return if (pending.isEmpty()) current else null
+    }
+
+    /**
+     * Nested container entries anywhere in the ZIP tree, as
+     * virtual paths (`inner.zip/pack.rar`) — the container
+     * search for cross-container nesting. ZIP recursion only:
+     * a RAR's own contents are [com.novelfa.reader.parser.engine.RarEngine]'s
+     * job, reached through the materialized RAR file. Unreadable
+     * nested archives are skipped.
+     */
+    fun containerEntries(
+        archiveFile: File,
+        cacheDir: File,
+        depth: Int = MAX_DEPTH
+    ): List<String> {
+        val out = ArrayList<String>()
+        collectContainers(archiveFile, cacheDir, depth, "", out)
+        return out.distinct().sortedWith { a, b -> CbzBook.compareNatural(a, b) }
+    }
+
+    private fun collectContainers(
+        archiveFile: File,
+        cacheDir: File,
+        depth: Int,
+        prefix: String,
+        out: MutableList<String>
+    ) {
+        val names = runCatching { CbzBook.allEntryNames(archiveFile) }.getOrNull()
+            ?: return
+        for (name in names) {
+            if (isContainerName(name)) out += prefix + name
+        }
+        if (depth <= 1) return
+        val nested = names.filter { isArchiveName(it) }
+            .sortedWith { a, b -> CbzBook.compareNatural(a, b) }
+        for (entry in nested) {
+            val file = runCatching {
+                materialize(archiveFile, entry, cacheDir)
+            }.getOrNull() ?: continue
+            collectContainers(file, cacheDir, depth - 1, prefix + entry + "/", out)
         }
     }
 

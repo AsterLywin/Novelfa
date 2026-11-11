@@ -829,6 +829,7 @@ class Importer(
                 }
                 when (ZipEngine.classify(destFile)) {
                     is ZipKind.ImageOnly -> imageBookPages = meta.chapterCount
+                    is ZipKind.SingleNestedRar -> imageBookPages = meta.chapterCount
                     else -> zipIsBook = true
                 }
                 ParsedBook(title = meta.title, chapters = emptyList(), coverFile = meta.coverFile)

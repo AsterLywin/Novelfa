@@ -95,7 +95,9 @@ object CoverBackfill {
                             ZipEngine.metadata(resolvedFile, current.title, scratchDir) {}
                         }.getOrNull()
                         val isImageOnly = runCatching {
-                            ZipEngine.classify(resolvedFile) is ZipKind.ImageOnly
+                            ZipEngine.classify(resolvedFile).let {
+                                it is ZipKind.ImageOnly || it is ZipKind.SingleNestedRar
+                            }
                         }.getOrDefault(false)
                         if (isImageOnly) meta?.coverFile else null
                     }

@@ -35,6 +35,7 @@ import com.novelfa.reader.data.InPlaceSource
 import java.io.IOException
 import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.parser.BookFormat
+import com.novelfa.reader.parser.NestedArchive
 import com.novelfa.reader.parser.engine.ZipEngine
 import com.novelfa.reader.parser.engine.ZipKind
 import java.io.File
@@ -407,14 +408,37 @@ private fun ZipReaderRoute(
 ) {
     var kind by remember { mutableStateOf<ZipKind?>(null) }
     var failed by remember { mutableStateOf(false) }
+    var nestedRarFile by remember { mutableStateOf<File?>(null) }
+    var nestedRarFailed by remember { mutableStateOf(false) }
     LaunchedEffect(book.id, resolvedFile) {
         kind = withContext(Dispatchers.IO) {
             runCatching { ZipEngine.classify(resolvedFile) }.getOrNull()
         }
         if (kind == null) failed = true
     }
+    // A ZIP whose comic lives in a single nested RAR: the RAR
+    // is materialized once (cached by parent signature) and the
+    // native RAR viewer opens that file. A failed
+    // materialization is the error screen, not a silent
+    // fallback to the text reader.
+    LaunchedEffect(kind) {
+        val single = kind as? ZipKind.SingleNestedRar ?: run {
+            nestedRarFile = null
+            nestedRarFailed = false
+            return@LaunchedEffect
+        }
+        nestedRarFile = withContext(Dispatchers.IO) {
+            runCatching {
+                NestedArchive.materializeArchive(
+                    resolvedFile, single.entryName,
+                    NestedArchive.defaultCacheDir()
+                )?.takeIf { CbzBook.archiveKind(it) == "RAR" }
+            }.getOrNull()
+        }
+        if (nestedRarFile == null) nestedRarFailed = true
+    }
     when {
-        failed -> {
+        failed || nestedRarFailed -> {
             Scaffold { padding ->
                 Box(
                     modifier = Modifier.fillMaxSize().padding(padding),
@@ -448,6 +472,27 @@ private fun ZipReaderRoute(
                 errorRes = R.string.cbz_native_error,
                 resolvedFile = resolvedFile
             )
+        }
+        kind is ZipKind.SingleNestedRar -> {
+            val rarFile = nestedRarFile
+            if (rarFile == null) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
+                }
+            } else {
+                NativeImageBookViewer(
+                    book = book,
+                    repo = repo,
+                    onClose = onClose,
+                    sourceFactory = { pw -> RarNativeSource(rarFile, pw) },
+                    loadingRes = R.string.cbz_native_loading,
+                    errorRes = R.string.cbz_native_error,
+                    resolvedFile = resolvedFile
+                )
+            }
         }
         else -> {
             ReaderScreen(bookId = book.id, repo = repo, onClose = onClose, support = support)

@@ -5,9 +5,13 @@ import android.graphics.BitmapFactory
 import com.novelfa.reader.model.ParsedBook
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CbzBook
+import com.novelfa.reader.parser.NestedArchive
 import com.novelfa.reader.parser.RarEntry
 import com.novelfa.reader.parser.RarNative
+import com.novelfa.reader.parser.engine.ZipExtract
+import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.InputStream
 
 /**
  * The RAR comic engine (.cbr, .rar): a RAR of page images, the
@@ -33,6 +37,15 @@ import java.io.File
  *   per-entry cap as [CbzBook.readEntryBytes].
  * - a RAR with zero image pages is not a book: import rejects
  *   it with the existing no-readable-sections path.
+ * - nested archives ([NestedArchive], applied here the same way
+ *   as for ZIP/CBZ): a RAR holding chapter ZIPs — or a nested
+ *   RAR — contributes their images under virtual paths
+ *   (`ch01.zip/ch01/001.jpg`), flattened in natural order, and
+ *   a ZIP holding a single image-carrying RAR routes here
+ *   through [ZipEngine] instead of failing as unreadable.
+ *   Nested containers materialize once into the shared nested
+ *   cache (same caps: 4 levels, 500 MB per container); an
+ *   unreadable nested container is skipped, never fatal.
  * - when the native lib is absent ([RarNative.available] is
  *   false) every function here throws IllegalStateException
  *   with a stable internal message; the importer maps that to
@@ -65,6 +78,213 @@ object RarEngine : BookEngine {
     /** Chapters for a RAR listing, from its image entries alone. */
     fun chapters(entries: List<RarEntry>): List<CbzBook.CbzChapter> =
         CbzBook.chaptersForEntries(imageEntryNames(entries))
+
+    /**
+     * Materializes one nested container entry of a RAR into
+     * [cacheDir] and returns the materialized file, or null when
+     * the entry cannot be served (engine absent, wrong password,
+     * corrupt entry, over the size cap, not an archive). The
+     * native extract-to-file writes straight to disk — no
+     * in-memory cap is hit — but the entry is refused BEFORE
+     * extracting when its unpacked size exceeds
+     * [ZipExtract.MAX_BYTES], so a hostile entry cannot fill
+     * the cache. The cache key is the same parent-signature
+     * scheme [NestedArchive] uses for ZIP entries, so the same
+     * nested container is extracted once. The password is a
+     * transient String for the native call only, never stored.
+     */
+    fun materializeNested(
+        source: File,
+        entry: RarEntry,
+        cacheDir: File,
+        password: String? = null
+    ): File? {
+        if (!RarNative.available) return null
+        if (entry.unpackedSize <= 0 || entry.unpackedSize > ZipExtract.MAX_BYTES) {
+            return null
+        }
+        val ext = if (entry.name.substringAfterLast('.', "").lowercase() in
+                setOf("rar", "cbr")
+        ) {
+            "rar"
+        } else {
+            "zip"
+        }
+        return NestedArchive.materializeFile(
+            cacheDir, NestedArchive.fileSignatureKey(source, entry.name), ext
+        ) { dest ->
+            RarNative.nExtractEntryToFile(
+                source.absolutePath, password, entry.name,
+                entry.headerOffset, entry.isSolid, dest.absolutePath
+            )
+        }
+    }
+
+    /**
+     * Flattened image list for a RAR, nested containers included:
+     * its own images plus, for each nested container (natural
+     * order), that container's images with the virtual prefix.
+     * A nested ZIP lists through [NestedArchive]; a nested RAR
+     * lists through this function again — the two recursions
+     * compose, so ZIP-in-RAR-in-ZIP chains flatten the same way
+     * as pure ZIP chains. Unreadable nested containers are
+     * skipped, exactly like the ZIP path.
+     */
+    fun nestedImageEntryNames(
+        source: File,
+        entries: List<RarEntry>,
+        cacheDir: File,
+        password: String? = null,
+        depth: Int = NestedArchive.MAX_DEPTH
+    ): List<String> {
+        val out = imageEntryNames(entries).toMutableList()
+        if (depth <= 1) return out.sortedWith(CbzBook::compareNatural)
+        val containers = entries
+            .filter { !it.isDirectory && NestedArchive.isContainerName(it.name) }
+            .sortedWith { a, b -> CbzBook.compareNatural(a.name, b.name) }
+        for (entry in containers) {
+            val file = runCatching {
+                materializeNested(source, entry, cacheDir, password)
+            }.getOrNull() ?: continue
+            val nested = when (CbzBook.archiveKind(file)) {
+                "ZIP" -> runCatching {
+                    NestedArchive.imageEntries(file, cacheDir, depth - 1)
+                }.getOrNull().orEmpty()
+                "RAR" -> {
+                    val sub = listEntries(file) ?: continue
+                    nestedImageEntryNames(file, sub, cacheDir, password, depth - 1)
+                }
+                else -> continue
+            }
+            out += nested.map { "${entry.name}/$it" }
+            if (out.size >= ZipExtract.MAX_ENTRIES) break
+        }
+        return out.sortedWith(CbzBook::compareNatural).take(ZipExtract.MAX_ENTRIES)
+    }
+
+    /** Image count for a RAR file, nested containers included;
+     *  0 when the engine is absent or the archive cannot be
+     *  listed — the graceful shape [ZipEngine] needs to decide
+     *  whether a nested RAR carries a comic at all. */
+    fun nestedImageCount(source: File, cacheDir: File): Int {
+        if (!RarNative.available) return 0
+        return runCatching {
+            val entries = listEntries(source) ?: return 0
+            nestedImageEntryNames(source, entries, cacheDir).size
+        }.getOrDefault(0)
+    }
+
+    /**
+     * One page's bytes by virtual path, or null when any level
+     * fails. Direct names read straight from this RAR;
+     * virtual names resolve through the materialized chain.
+     * The same 64 MiB per-entry cap as [readEntryBytes]
+     * applies to pages read from a RAR level.
+     */
+    fun readPageBytes(
+        source: File,
+        entries: List<RarEntry>,
+        name: String,
+        cacheDir: File,
+        password: String? = null
+    ): ByteArray? {
+        if (!NestedArchive.isContainerPath(name)) {
+            val entry = entries.firstOrNull { it.name == name } ?: return null
+            return readEntryBytes(source, entry, password)
+        }
+        return openNestedEntry(source, entries, name, cacheDir, password)
+            ?.use { it.readBytes() }
+    }
+
+    /** A stream over one virtual entry of a RAR, or null when
+     *  any level fails. The resolver walks the chain one
+     *  container at a time: a RAR level materializes through
+     *  the bridge, a ZIP level through [NestedArchive], so
+     *  mixed chains (RAR → ZIP → RAR) resolve the same way as
+     *  pure ones. The terminal level reads the image itself —
+     *  from the RAR bridge, or from the ZIP reader. */
+    fun openNestedEntry(
+        source: File,
+        entries: List<RarEntry>,
+        virtualPath: String,
+        cacheDir: File,
+        password: String? = null
+    ): InputStream? {
+        return openFromRar(
+            source, entries, virtualPath, cacheDir, password,
+            NestedArchive.MAX_DEPTH
+        )
+    }
+
+    private fun openFromRar(
+        rarFile: File,
+        entries: List<RarEntry>,
+        path: String,
+        cacheDir: File,
+        password: String?,
+        depth: Int
+    ): InputStream? {
+        if (depth <= 0) return null
+        val parts = path.split('/')
+        val firstContainerAt = parts.dropLast(1)
+            .indexOfFirst { NestedArchive.isContainerName(it) }
+        if (firstContainerAt < 0) {
+            val entry = entries.firstOrNull { it.name == path } ?: return null
+            val bytes = readEntryBytes(rarFile, entry, password) ?: return null
+            return ByteArrayInputStream(bytes)
+        }
+        val prefixParts = parts.take(firstContainerAt)
+        val prefix = if (prefixParts.isEmpty()) "" else
+            prefixParts.joinToString("/") + "/"
+        val entry = entries.firstOrNull {
+            it.name == prefix + parts[firstContainerAt]
+        } ?: return null
+        val file = materializeNested(rarFile, entry, cacheDir, password) ?: return null
+        val rest = parts.drop(firstContainerAt + 1).joinToString("/")
+        return when (CbzBook.archiveKind(file)) {
+            "ZIP" -> openFromZip(file, rest, cacheDir, depth - 1)
+            "RAR" -> {
+                val sub = listEntries(file) ?: return null
+                openFromRar(file, sub, rest, cacheDir, password, depth - 1)
+            }
+            else -> null
+        }
+    }
+
+    private fun openFromZip(
+        zipFile: File,
+        path: String,
+        cacheDir: File,
+        depth: Int
+    ): InputStream? {
+        if (depth <= 0) return null
+        val parts = path.split('/')
+        val firstContainerAt = parts.dropLast(1)
+            .indexOfFirst { NestedArchive.isContainerName(it) }
+        if (firstContainerAt < 0) {
+            return CbzBook.openEntryStream(zipFile, path)
+        }
+        val prefixParts = parts.take(firstContainerAt)
+        val prefix = if (prefixParts.isEmpty()) "" else
+            prefixParts.joinToString("/") + "/"
+        val containerName = prefix + parts[firstContainerAt]
+        val file = NestedArchive.materialize(zipFile, containerName, cacheDir)
+            ?: return null
+        val rest = parts.drop(firstContainerAt + 1).joinToString("/")
+        return when (CbzBook.archiveKind(file)) {
+            "ZIP" -> openFromZip(file, rest, cacheDir, depth - 1)
+            "RAR" -> {
+                // A password-protected RAR this deep cannot be
+                // opened: the viewer holds a password only for
+                // the outer container, and a ZIP level carries
+                // no password context. It fails per-page, like
+                // any other unreadable nested container.
+                val sub = listEntries(file) ?: return null
+                openFromRar(file, sub, rest, cacheDir, null, depth - 1)
+            }
+            else -> null
+        }
+    }
 
     /**
      * The RAR version of [source] from the native bridge
@@ -130,7 +350,11 @@ object RarEngine : BookEngine {
         )
         val entries = listEntries(source)
             ?: throw IllegalArgumentException("Cannot list RAR archive: $displayName")
-        val pages = imageEntryNames(entries)
+        // Nested containers count: a RAR of chapter ZIPs is a
+        // comic with those chapters' pages, not an empty archive.
+        val pages = nestedImageEntryNames(
+            source, entries, NestedArchive.defaultCacheDir()
+        )
         if (pages.isEmpty()) throw IllegalArgumentException(
             "Comic archive has no readable images: $displayName"
         )
@@ -174,10 +398,13 @@ object RarEngine : BookEngine {
         pageNames: List<String>,
         scratchDir: File
     ): File? {
-        val byName = entries.associateBy { it.name }
+        // Virtual names (pages inside nested containers) read
+        // through the chain; direct names read straight from
+        // this RAR. Either way the first READABLE page is the
+        // cover, exactly as before.
+        val cacheDir = NestedArchive.defaultCacheDir()
         for (name in pageNames) {
-            val entry = byName[name] ?: continue
-            val bytes = readEntryBytes(source, entry) ?: continue
+            val bytes = readPageBytes(source, entries, name, cacheDir) ?: continue
             if (bytes.isEmpty()) continue
             scratchDir.mkdirs()
             if (bytes.size <= MAX_COVER_BYTES) {

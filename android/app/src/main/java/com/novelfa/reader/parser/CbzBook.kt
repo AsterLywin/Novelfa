@@ -777,10 +777,11 @@ object CbzBook {
             // A nested archive segment names its chapter without
             // the extension: `ch01.zip` is chapter `ch01`, not
             // `ch01.zip` (the same strip the common-prefix rule
-            // already gives the outer archive level).
+            // already gives the outer archive level). RAR
+            // segments strip the same way.
             val rawKey = stripped.substringBefore('/')
             val key = if (rawKey.substringAfterLast('.', "").lowercase()
-                    in NestedArchive.ARCHIVE_EXTENSIONS
+                    in NestedArchive.CONTAINER_EXTENSIONS
             ) {
                 rawKey.substringBeforeLast('.')
             } else {

@@ -726,13 +726,24 @@ internal class CbzNativeSource(
  * never learns the container is a RAR. The store holds the
  * listing the source already made, so no second native listing
  * is paid per page. No persistent handle exists to close.
+ *
+ * Virtual names (pages inside nested containers) resolve
+ * through the materialized chain ([RarEngine.readPageBytes]);
+ * direct names read straight from this RAR, as before.
  */
 internal class RarEntryStore(
     private val archiveFile: File,
     private val entriesByName: Map<String, RarEntry>,
-    private val password: String?
+    private val password: String?,
+    private val cacheDir: File = NestedArchive.defaultCacheDir()
 ) : CbzEntryStore {
     override fun openEntry(name: String): InputStream? {
+        if (NestedArchive.isContainerPath(name)) {
+            val bytes = RarEngine.readPageBytes(
+                archiveFile, entriesByName.values.toList(), name, cacheDir, password
+            ) ?: return null
+            return ByteArrayInputStream(bytes)
+        }
         val entry = entriesByName[name] ?: return null
         val bytes = RarEngine.readEntryBytes(archiveFile, entry, password)
             ?: return null
@@ -781,7 +792,14 @@ internal class RarNativeSource(
             ?: throw IllegalArgumentException(
                 "Cannot list RAR archive: ${archiveFile.name}"
             )
-        pageNames = RarEngine.imageEntryNames(listed)
+        // Nested containers count: a RAR of chapter ZIPs reads
+        // as one flat book, in the same natural order as a flat
+        // archive. The pages are served through the store's
+        // virtual-path resolution, so this list is the only
+        // place that needs to know about nesting.
+        pageNames = RarEngine.nestedImageEntryNames(
+            archiveFile, listed, NestedArchive.defaultCacheDir(), passwordString
+        )
         if (pageNames.isEmpty()) {
             throw IllegalArgumentException(
                 "RAR archive has no readable images: ${archiveFile.name}"
@@ -801,12 +819,16 @@ internal class RarNativeSource(
      * first TWO pages are tried — a poisoned first page must
      * not ask for a password the book does not have. Called on
      * IO by the viewer before the source is shown, exactly like
-     * [CbzNativeSource.probePassword].
+     * [CbzNativeSource.probePassword]. Virtual first pages
+     * (inside nested containers) read through the chain, so a
+     * nested book never asks for a password it does not have.
      */
     fun probePassword(): Boolean {
         for (name in pageNames.take(2)) {
-            val entry = entriesByName[name] ?: continue
-            val bytes = RarEngine.readEntryBytes(archiveFile, entry, passwordString)
+            val bytes = RarEngine.readPageBytes(
+                archiveFile, entriesByName.values.toList(), name,
+                NestedArchive.defaultCacheDir(), passwordString
+            )
             if (bytes != null && bytes.isNotEmpty()) return true
         }
         return false

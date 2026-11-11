@@ -39,6 +39,18 @@ sealed class ZipKind {
      *  instead of a silent first-file open. */
     data class MultiBook(val candidates: List<ArchiveCandidate>) : ZipKind()
 
+    /**
+     * Exactly one nested RAR/CBR inside carries images: the
+     * comic lives in that RAR, reached through the RAR engine
+     * ([RarEngine]) after the entry is materialized. [entryName]
+     * is the RAR's virtual path inside this ZIP; [pageCount] is
+     * its flattened image count, nested containers included.
+     * Several image-carrying nested RARs stay unreadable: they
+     * would need a multi-source viewer, and silently opening
+     * the first one would hide chapters.
+     */
+    data class SingleNestedRar(val entryName: String, val pageCount: Int) : ZipKind()
+
     /** Neither a book nor images: import fails, it never opens. */
     data object NothingReadable : ZipKind()
 }
@@ -59,7 +71,9 @@ sealed class ZipKind {
  *   the HTML reader;
  * - nested archives ([NestedArchive]) are transparent: images and
  *   books hiding inside a `.zip`/`.cbz` entry count exactly like
- *   top-level ones, under virtual paths.
+ *   top-level ones, under virtual paths; a single nested
+ *   `.rar`/`.cbr` carrying images is the same comic through the
+ *   RAR engine instead ([ZipKind.SingleNestedRar]).
  */
 object ZipEngine : BookEngine {
     override val format: BookFormat = BookFormat.ZIP
@@ -115,6 +129,29 @@ object ZipEngine : BookEngine {
             return if (nestedCandidates.size == 1) ZipKind.SingleBook(nestedCandidates[0])
             else ZipKind.MultiBook(nestedCandidates)
         }
+        // A single nested RAR/CBR carrying images: the comic
+        // lives in that RAR (possibly itself inside a nested
+        // ZIP). The RAR engine counts its flattened pages; a
+        // missing engine (no native lib) counts zero, so the
+        // file degrades to unreadable instead of crashing.
+        // Several image-carrying nested RARs stay unreadable:
+        // they would need a multi-source viewer.
+        val rarCandidates = runCatching {
+            NestedArchive.containerEntries(source, cache)
+        }.getOrNull().orEmpty()
+            .filter {
+                it.substringAfterLast('.', "").lowercase() in setOf("rar", "cbr")
+            }
+        val rarWithImages = rarCandidates.mapNotNull { entry ->
+            val rarFile = runCatching {
+                NestedArchive.materializeArchive(source, entry, cache)
+            }.getOrNull() ?: return@mapNotNull null
+            val count = RarEngine.nestedImageCount(rarFile, cache)
+            if (count > 0) entry to count else null
+        }
+        if (rarWithImages.size == 1) {
+            return ZipKind.SingleNestedRar(rarWithImages[0].first, rarWithImages[0].second)
+        }
         return ZipKind.NothingReadable
     }
 
@@ -140,6 +177,17 @@ object ZipEngine : BookEngine {
     ): EngineMetadata {
         return when (val kind = classify(source)) {
             is ZipKind.ImageOnly -> CbzEngine.metadata(source, displayName, scratchDir, cancelCheck)
+            is ZipKind.SingleNestedRar -> {
+                // The comic lives in the nested RAR: its own
+                // engine supplies the title and the first-page
+                // cover, nested containers included.
+                val rarFile = NestedArchive.materializeArchive(
+                    source, kind.entryName, NestedArchive.defaultCacheDir()
+                ) ?: throw IllegalArgumentException(
+                    "Nested RAR not found in archive: $displayName"
+                )
+                RarEngine.metadata(rarFile, displayName, scratchDir, cancelCheck)
+            }
             is ZipKind.SingleBook -> EngineMetadata(
                 title = File(kind.candidate.displayName).nameWithoutExtension
                     .takeIf { it.isNotBlank() } ?: kind.candidate.displayName,
@@ -175,6 +223,9 @@ object ZipEngine : BookEngine {
             )
             is ZipKind.ImageOnly -> throw IllegalStateException(
                 "Image-only ZIP archives open in the native image viewer"
+            )
+            is ZipKind.SingleNestedRar -> throw IllegalStateException(
+                "ZIP archives whose comic lives in a nested RAR open in the native image viewer"
             )
             ZipKind.NothingReadable -> throw IllegalArgumentException(
                 "ZIP archive has no readable book or images"
