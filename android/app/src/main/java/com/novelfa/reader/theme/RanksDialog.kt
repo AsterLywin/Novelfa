@@ -111,18 +111,23 @@ private fun RankTitleRow(title: XpTitle, level: XpLevel, isEnglishUi: Boolean) {
     } else {
         emptyList()
     }
-    Row(
+    // The icon must sit level with the TITLE line, not with the middle
+    // of the whole multi-line row: the old CenterVertically row centred
+    // the 30dp icon on the title + unlocks + progress block, so on rows
+    // with extra lines the icon sat a full line below the rank name.
+    // The title row (icon + name + stars) is one centred row; the
+    // secondary lines live below it, indented under the title.
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 6.dp)
     ) {
-        // Like the eternity marks below (RankMarkRow), each title has
-        // its own drawn icon: filled when achieved or current, outline
-        // only while locked.
-        RankIcon(rankIndex = title.index, size = 30.dp, earned = !locked)
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Like the eternity marks below (RankMarkRow), each title has
+            // its own drawn icon: filled when achieved or current, outline
+            // only while locked.
+            RankIcon(rankIndex = title.index, size = 30.dp, earned = !locked)
+            Spacer(modifier = Modifier.width(12.dp))
             Text(
                 text = title.displayName(isEnglishUi),
                 style = MaterialTheme.typography.bodyLarge,
@@ -130,8 +135,13 @@ private fun RankTitleRow(title: XpTitle, level: XpLevel, isEnglishUi: Boolean) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
                     MaterialTheme.colorScheme.onSurface
-                }
+                },
+                modifier = Modifier.weight(1f)
             )
+            Spacer(modifier = Modifier.width(8.dp))
+            StarRow(fill = fill, starSize = 15.dp)
+        }
+        Column(modifier = Modifier.padding(start = 42.dp)) {
             if (unlockedThemes.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
@@ -179,8 +189,6 @@ private fun RankTitleRow(title: XpTitle, level: XpLevel, isEnglishUi: Boolean) {
                 )
             }
         }
-        Spacer(modifier = Modifier.width(8.dp))
-        StarRow(fill = fill, starSize = 15.dp)
     }
 }
 
@@ -191,13 +199,15 @@ private fun RankMarkRow(mark: EternityMark, level: XpLevel, isEnglishUi: Boolean
     val isCurrent = pastCap && mark.index == level.eternityMarks + 1
     val locked = !earned && !isCurrent
     val markXp = XpRank.CAP_XP + mark.index * XpRank.MARK_STEP_XP
-    Row(
+    // Same alignment rule as RankTitleRow above: the mark icon sits
+    // level with the mark NAME, not with the middle of the whole
+    // multi-line row.
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 6.dp)
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = mark.displayName(isEnglishUi),
                 style = MaterialTheme.typography.bodyLarge,
@@ -205,8 +215,13 @@ private fun RankMarkRow(mark: EternityMark, level: XpLevel, isEnglishUi: Boolean
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
                     MaterialTheme.colorScheme.onSurface
-                }
+                },
+                modifier = Modifier.weight(1f)
             )
+            Spacer(modifier = Modifier.width(8.dp))
+            EternityMarkIcon(markIndex = mark.index, size = 30.dp, earned = !locked)
+        }
+        Column(modifier = Modifier.padding(end = 38.dp)) {
             Spacer(modifier = Modifier.height(2.dp))
             when {
                 earned -> Text(
@@ -240,7 +255,5 @@ private fun RankMarkRow(mark: EternityMark, level: XpLevel, isEnglishUi: Boolean
                 )
             }
         }
-        Spacer(modifier = Modifier.width(8.dp))
-        EternityMarkIcon(markIndex = mark.index, size = 30.dp, earned = !locked)
     }
 }
