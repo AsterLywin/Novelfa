@@ -55,6 +55,7 @@
     <string name="import_error_cbr_is_zip">This file is actually a ZIP archive, not a RAR archive. Rename it to .cbz and import it again.</string>
     <string name="import_error_old_format">This old book format is not supported.</string>
     <string name="import_error_cannot_read">Couldn\'t read the file.</string>
+    <string name="import_error_no_space">The device storage is full; free some space to import the book.</string>
     <string name="import_error_access_denied">File access was denied.</string>
     <string name="import_error_generic">Couldn\'t open the book.</string>
     <string name="couldn_t_display_the_chapter">"Couldn\'t display the section:
