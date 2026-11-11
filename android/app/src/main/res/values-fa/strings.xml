@@ -55,6 +55,7 @@
     <string name="import_error_cbr_is_zip">این فایل در واقع یک آرشیو ZIP است، نه RAR. آن را به .cbz تغییر نام دهید و دوباره وارد کنید.</string>
     <string name="import_error_old_format">این قالب قدیمی کتاب پشتیبانی نمی‌شود.</string>
     <string name="import_error_cannot_read">فایل خوانده نشد.</string>
+    <string name="import_error_no_space">حافظه‌ی دستگاه پر است؛ برای ایمپورت کتاب جا خالی کنید.</string>
     <string name="import_error_access_denied">دسترسی به فایل رد شد.</string>
     <string name="import_error_generic">خطا در باز کردن کتاب</string>
     <string name="couldn_t_display_the_chapter">"خطا در نمایش بخش:
