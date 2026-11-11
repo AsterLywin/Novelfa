@@ -668,6 +668,15 @@ fun ReaderScreen(
         }
     }
 
+    fun parseHighlightId(id: String): TextHighlight? {
+        val chap = id.substringBefore(':').toIntOrNull() ?: return null
+        val range = id.substringAfter(':').split('-')
+        if (range.size != 2) return null
+        val s = range[0].toIntOrNull() ?: return null
+        val e = range[1].toIntOrNull() ?: return null
+        return highlights.firstOrNull { it.chapter == chap && it.start == s && it.end == e }
+    }
+
     /**
      * Removes one highlight by its data-hl id ("chap:start-end"):
      * the stored entry (when it exists) and the DOM mark move
@@ -690,15 +699,6 @@ fun ReaderScreen(
         selectedHighlightId = ""
     }
 
-    fun parseHighlightId(id: String): TextHighlight? {
-        val chap = id.substringBefore(':').toIntOrNull() ?: return null
-        val range = id.substringAfter(':').split('-')
-        if (range.size != 2) return null
-        val s = range[0].toIntOrNull() ?: return null
-        val e = range[1].toIntOrNull() ?: return null
-        return highlights.firstOrNull { it.chapter == chap && it.start == s && it.end == e }
-    }
-
     /**
      * Clears the live text selection. The WebView ends its
      * floating ActionMode on its own when the selection
@@ -712,28 +712,8 @@ fun ReaderScreen(
         )
     }
 
-    /**
-     * Floating selection-menu action (Quote / Translate — see
-     * SelectionWebView). The ActionMode is NOT finished by the
-     * menu: finishing it would clear the selection before this
-     * async read runs, so the action resolves the live selection
-     * first (rdrSelectionRange + the selected text, one JS call)
-     * and clears it only after the action ran.
-     */
-    fun handleSelectionAction(action: SelectionMenuAction) {
-        val wv = webView ?: return
-        wv.evaluateJavascript(
-            "(function(){try{var r=window.rdrSelectionRange?window.rdrSelectionRange():'';" +
-                "var t=window.getSelection?window.getSelection().toString():'';" +
-                "return JSON.stringify({r:r,t:t});}catch(e){return '';}})();"
-        ) { raw ->
-            val info = HtmlText.parseSelectionInfo(raw) ?: return@evaluateJavascript
-            when (action) {
-                SelectionMenuAction.QUOTE -> saveQuote(info)
-                SelectionMenuAction.TRANSLATE -> translateSelection(info.text)
-            }
-        }
-    }
+    val quoteSavedMsg = stringResource(R.string.quote_saved)
+    val translateNoAppMsg = stringResource(R.string.translate_no_app)
 
     /**
      * Quote (ReadEra model): save the selected text with its
@@ -792,37 +772,27 @@ fun ReaderScreen(
         clearSelection()
     }
 
-    /** Jump to a saved quote: its chapter, then the passage (see [goToQuote]). */
-    fun jumpToQuote(q: TextQuote) {
-        val v = vm ?: return
-        quotesOpen = false
-        scope.launch {
-            // The dialog opens from the drawer: a jump must close
-            // the drawer too, or the landing stays hidden behind it.
-            drawerState.close()
-            if (q.chapter == v.index) {
-                goToQuote(q)
-            } else {
-                pendingQuote = q
-                gotoChapter(v, q.chapter)
-                if (v.index != q.chapter) pendingQuote = null
+    /**
+     * Floating selection-menu action (Quote / Translate — see
+     * SelectionWebView). The ActionMode is NOT finished by the
+     * menu: finishing it would clear the selection before this
+     * async read runs, so the action resolves the live selection
+     * first (rdrSelectionRange + the selected text, one JS call)
+     * and clears it only after the action ran.
+     */
+    fun handleSelectionAction(action: SelectionMenuAction) {
+        val wv = webView ?: return
+        wv.evaluateJavascript(
+            "(function(){try{var r=window.rdrSelectionRange?window.rdrSelectionRange():'';" +
+                "var t=window.getSelection?window.getSelection().toString():'';" +
+                "return JSON.stringify({r:r,t:t});}catch(e){return '';}})();"
+        ) { raw ->
+            val info = HtmlText.parseSelectionInfo(raw) ?: return@evaluateJavascript
+            when (action) {
+                SelectionMenuAction.QUOTE -> saveQuote(info)
+                SelectionMenuAction.TRANSLATE -> translateSelection(info.text)
             }
         }
-    }
-
-    /**
-     * Land on a quote's passage: rdrGoToQuote wraps the quote's
-     * first words in a search-hit mark and turns/scrolls to it.
-     * In paged mode with an unbuilt pager it queues itself for
-     * __rdrAfterBuild instead (see HtmlBuilder) — the call below
-     * does not need to know which case it is.
-     */
-    fun goToQuote(q: TextQuote) {
-        val needle = HtmlText.escapeForJs(q.text.take(60))
-        webView?.evaluateJavascript(
-            "window.rdrGoToQuote(${q.chapter}, '$needle');",
-            null
-        )
     }
 
     // Re-apply highlights + active search marks whenever the live
@@ -888,8 +858,7 @@ fun ReaderScreen(
     val fontMissingMsg = stringResource(R.string.reader_font_missing)
     val linkTargetMsg = stringResource(R.string.link_target_not_found)
     val copiedMsg = stringResource(R.string.copied)
-    val quoteSavedMsg = stringResource(R.string.quote_saved)
-    val translateNoAppMsg = stringResource(R.string.translate_no_app)
+    val highlightRemoveMsg = stringResource(R.string.highlight_remove)
     val imageSavedTemplate = stringResource(R.string.image_saved)
     val imageSaveFailedMsg = stringResource(R.string.image_save_failed)
 
@@ -1196,6 +1165,39 @@ fun ReaderScreen(
             rev++
         } else {
             showVmError(v)
+        }
+    }
+
+    /**
+     * Land on a quote's passage: rdrGoToQuote wraps the quote's
+     * first words in a search-hit mark and turns/scrolls to it.
+     * In paged mode with an unbuilt pager it queues itself for
+     * __rdrAfterBuild instead (see HtmlBuilder) — the call below
+     * does not need to know which case it is.
+     */
+    fun goToQuote(q: TextQuote) {
+        val needle = HtmlText.escapeForJs(q.text.take(60))
+        webView?.evaluateJavascript(
+            "window.rdrGoToQuote(${q.chapter}, '$needle');",
+            null
+        )
+    }
+
+    /** Jump to a saved quote: its chapter, then the passage (see [goToQuote]). */
+    fun jumpToQuote(q: TextQuote) {
+        val v = vm ?: return
+        quotesOpen = false
+        scope.launch {
+            // The dialog opens from the drawer: a jump must close
+            // the drawer too, or the landing stays hidden behind it.
+            drawerState.close()
+            if (q.chapter == v.index) {
+                goToQuote(q)
+            } else {
+                pendingQuote = q
+                gotoChapter(v, q.chapter)
+                if (v.index != q.chapter) pendingQuote = null
+            }
         }
     }
 
@@ -3081,8 +3083,7 @@ fun ReaderScreen(
                             IconButton(
                                 onClick = { removeHighlight(selectedHighlightId) },
                                 modifier = Modifier.semantics {
-                                    contentDescription =
-                                        stringResource(R.string.highlight_remove)
+                                    contentDescription = highlightRemoveMsg
                                 }
                             ) {
                                 AppIcon(
