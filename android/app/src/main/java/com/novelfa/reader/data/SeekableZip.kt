@@ -4,7 +4,10 @@ import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import com.novelfa.reader.parser.CbzBook
+import com.novelfa.reader.parser.NestedArchive
+import com.novelfa.reader.parser.engine.ZipExtract
 import java.io.Closeable
+import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
@@ -71,6 +74,85 @@ class SeekableZip private constructor(
             .sortedWith { a, b -> CbzBook.compareNatural(a, b) }
 
     fun hasEncryptedEntries(): Boolean = entries.any { it.isEncrypted }
+
+    /**
+     * Flattened image list, nested archives included: a chapter
+     * ZIP inside this archive contributes its images under
+     * virtual paths (`ch01.zip/ch01/001.jpg`), in the same
+     * natural order as the file-backed listing. Nested archives
+     * are materialized once into [cacheDir] ([NestedArchive]);
+     * [sourceKey] identifies this source (URI) so a changed
+     * source misses the cache instead of serving stale pages.
+     * Unreadable nested archives are skipped, exactly like the
+     * file-backed path.
+     */
+    fun nestedImageEntryNames(cacheDir: File, sourceKey: String): List<String> {
+        val out = imageEntryNames().toMutableList()
+        val archives = entries.map { it.name }
+            .filter { NestedArchive.isArchiveName(it) }
+            .sortedWith { a, b -> CbzBook.compareNatural(a, b) }
+        for (arc in archives) {
+            val entry = entries.firstOrNull { it.name == arc } ?: continue
+            val stream = openEntry(arc) ?: continue
+            val file = NestedArchive.materialize(
+                stream, "$sourceKey|$arc|${entry.compressedSize}", cacheDir
+            ) ?: continue
+            out += NestedArchive.imageEntries(file, cacheDir)
+                .map { "$arc/$it" }
+            if (out.size >= ZipExtract.MAX_ENTRIES) break
+        }
+        return out.sortedWith { a, b -> CbzBook.compareNatural(a, b) }
+            .take(ZipExtract.MAX_ENTRIES)
+    }
+
+    /** A stream over one virtual entry, or null when any level fails. */
+    fun openNestedEntry(
+        virtualPath: String,
+        cacheDir: File,
+        sourceKey: String
+    ): InputStream? {
+        val parts = virtualPath.split('/')
+        if (parts.size < 2) return openEntry(virtualPath)
+        val first = parts.first()
+        val entry = entries.firstOrNull { it.name == first } ?: return null
+        val stream = openEntry(first) ?: return null
+        val file = NestedArchive.materialize(
+            stream, "$sourceKey|$first|${entry.compressedSize}", cacheDir
+        ) ?: return null
+        val rest = parts.drop(1).joinToString("/")
+        return NestedArchive.openPage(file, rest, cacheDir)
+    }
+
+    /** True when a book file hides anywhere in the nested tree. */
+    fun hasNestedBook(cacheDir: File, sourceKey: String): Boolean {
+        for (arc in entries.map { it.name }.filter { NestedArchive.isArchiveName(it) }) {
+            val entry = entries.firstOrNull { it.name == arc } ?: continue
+            val stream = openEntry(arc) ?: continue
+            val file = NestedArchive.materialize(
+                stream, "$sourceKey|$arc|${entry.compressedSize}", cacheDir
+            ) ?: continue
+            if (NestedArchive.containsBook(file, cacheDir)) return true
+        }
+        return false
+    }
+
+    /**
+     * True when any image inside a nested archive uses a method
+     * this reader cannot serve. The direct route declines such
+     * archives; the working-copy backends fail only the bad
+     * pages instead of the whole book.
+     */
+    fun hasNestedUnservableImages(cacheDir: File, sourceKey: String): Boolean {
+        for (arc in entries.map { it.name }.filter { NestedArchive.isArchiveName(it) }) {
+            val entry = entries.firstOrNull { it.name == arc } ?: continue
+            val stream = openEntry(arc) ?: continue
+            val file = NestedArchive.materialize(
+                stream, "$sourceKey|$arc|${entry.compressedSize}", cacheDir
+            ) ?: continue
+            if (NestedArchive.hasUnservableImages(file, cacheDir)) return true
+        }
+        return false
+    }
 
     /**
      * True when an image entry uses a compression method this

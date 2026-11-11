@@ -3,6 +3,7 @@ package com.novelfa.reader.parser.engine
 import com.novelfa.reader.model.ParsedBook
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CbzBook
+import com.novelfa.reader.parser.NestedArchive
 import java.io.File
 
 /**
@@ -55,14 +56,17 @@ sealed class ZipKind {
  * - a single candidate opens directly; several candidates require
  *   an explicit user choice ([openCandidate]);
  * - image-only archives delegate to [CbzEngine] and never reach
- *   the HTML reader.
+ *   the HTML reader;
+ * - nested archives ([NestedArchive]) are transparent: images and
+ *   books hiding inside a `.zip`/`.cbz` entry count exactly like
+ *   top-level ones, under virtual paths.
  */
 object ZipEngine : BookEngine {
     override val format: BookFormat = BookFormat.ZIP
 
     private val imageExtensions = setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")
 
-    fun classify(source: File): ZipKind {
+    fun classify(source: File, nestedCacheDir: File? = null): ZipKind {
         // Tolerant listing (CbzBook.allEntryNames): one entry
         // with an unusual compression method must not fail the
         // whole classification, exactly as for CBZ imports.
@@ -71,17 +75,7 @@ object ZipEngine : BookEngine {
             .filter { !it.startsWith("__MACOSX/") }
             .filter { !it.substringAfterLast('/').startsWith(".") }
         val candidates = names.mapNotNull { name ->
-            val format = when (name.substringAfterLast('.', "").lowercase()) {
-                "epub" -> BookFormat.EPUB
-                "docx" -> BookFormat.DOCX
-                "pdf" -> BookFormat.PDF
-                "txt", "text" -> BookFormat.TXT
-                "md", "markdown", "mdown" -> BookFormat.MARKDOWN
-                "fb2" -> BookFormat.FB2
-                "fbz" -> BookFormat.FBZ
-                "rtf" -> BookFormat.RTF
-                else -> return@mapNotNull null
-            }
+            val format = bookFormatFor(name) ?: return@mapNotNull null
             ArchiveCandidate(name, format, name.substringAfterLast('/'))
         }.distinctBy { it.entryName }
         if (candidates.isNotEmpty()) {
@@ -93,11 +87,50 @@ object ZipEngine : BookEngine {
         }
         if (images > 0) {
             // CbzBook applies the same natural-order and junk
-            // rules to the count the viewer will actually use.
+            // rules to the count the viewer will actually use —
+            // and since imageEntryNames is nested-aware, the
+            // count already includes images inside nested
+            // archives when top-level images exist too.
             return ZipKind.ImageOnly(CbzBook.imageEntryNames(source).size)
+        }
+        // Nested archives: no direct images or books at the top
+        // level, but chapters may hide inside nested containers
+        // (one ZIP per chapter, all zipped again into this file).
+        // The flattened list decides: images first, then books.
+        val cache = nestedCacheDir ?: NestedArchive.defaultCacheDir()
+        val nestedImages = runCatching {
+            NestedArchive.imageEntries(source, cache)
+        }.getOrNull().orEmpty()
+        if (nestedImages.isNotEmpty()) {
+            return ZipKind.ImageOnly(nestedImages.size)
+        }
+        val nestedBooks = runCatching {
+            NestedArchive.bookEntries(source, cache)
+        }.getOrNull().orEmpty()
+        val nestedCandidates = nestedBooks.mapNotNull { name ->
+            val format = bookFormatFor(name) ?: return@mapNotNull null
+            ArchiveCandidate(name, format, name.substringAfterLast('/'))
+        }.distinctBy { it.entryName }
+        if (nestedCandidates.isNotEmpty()) {
+            return if (nestedCandidates.size == 1) ZipKind.SingleBook(nestedCandidates[0])
+            else ZipKind.MultiBook(nestedCandidates)
         }
         return ZipKind.NothingReadable
     }
+
+    /** Book format for one entry name, or null when it is not a book. */
+    private fun bookFormatFor(name: String): BookFormat? =
+        when (name.substringAfterLast('.', "").lowercase()) {
+            "epub" -> BookFormat.EPUB
+            "docx" -> BookFormat.DOCX
+            "pdf" -> BookFormat.PDF
+            "txt", "text" -> BookFormat.TXT
+            "md", "markdown", "mdown" -> BookFormat.MARKDOWN
+            "fb2" -> BookFormat.FB2
+            "fbz" -> BookFormat.FBZ
+            "rtf" -> BookFormat.RTF
+            else -> null
+        }
 
     override fun metadata(
         source: File,
@@ -153,7 +186,9 @@ object ZipEngine : BookEngine {
      * Opens one chosen book from inside [source]: the entry is
      * extracted once, into the book's cache directory, and then
      * handed to that book's own engine. The archive itself is
-     * never fully extracted.
+     * never fully extracted. A virtual entry name (a book inside
+     * a nested archive) resolves through the materialized chain
+     * first, into the book's `nested` cache.
      */
     suspend fun openCandidate(
         source: File,
@@ -166,7 +201,17 @@ object ZipEngine : BookEngine {
     ): ParsedBook {
         val ext = candidate.entryName.substringAfterLast('.', candidate.format.extension)
         val extracted = File(outDir, "_candidate.$ext")
-        if (!ZipExtract.extractOne(source, candidate.entryName, extracted)) {
+        val found = if (NestedArchive.isVirtualPath(candidate.entryName)) {
+            val (archiveFile, innerName) = NestedArchive.resolveFile(
+                source, candidate.entryName, File(outDir, "nested")
+            ) ?: throw IllegalArgumentException(
+                "Book entry not found in archive: ${candidate.entryName}"
+            )
+            ZipExtract.extractOne(archiveFile, innerName, extracted)
+        } else {
+            ZipExtract.extractOne(source, candidate.entryName, extracted)
+        }
+        if (!found) {
             throw IllegalArgumentException("Book entry not found in archive: ${candidate.entryName}")
         }
         return EngineRegistry.engineFor(candidate.format).open(

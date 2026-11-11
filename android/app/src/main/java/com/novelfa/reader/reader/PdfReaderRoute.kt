@@ -145,17 +145,28 @@ fun PdfReaderRoute(
                     // fixed). Such archives fall through to the
                     // working copy below, whose backends serve the
                     // readable pages instead. See
-                    // SeekableZip.hasUnservableImageEntries.
+                    // SeekableZip.hasUnservableImageEntries. The
+                    // same rule covers nested archives, whose
+                    // images are listed and served from
+                    // materialized copies ([NestedArchive]).
                     if (seekable != null && !seekable.hasEncryptedEntries() &&
                         !seekable.hasUnservableImageEntries()
                     ) {
-                        val direct = if (ext == "cbz") {
-                            seekable.imageEntryNames().isNotEmpty()
-                        } else {
+                        val nestedCache = File(context.cacheDir, "nested-archives")
+                        val sourceKey = uriStr
+                        val direct = withContext(Dispatchers.IO) {
+                            if (seekable.hasNestedUnservableImages(nestedCache, sourceKey)) {
+                                return@withContext false
+                            }
+                            val images = seekable.nestedImageEntryNames(nestedCache, sourceKey)
+                            if (images.isEmpty()) return@withContext false
+                            if (ext == "cbz") return@withContext true
                             // ZIP: only image-only archives go
                             // direct — a ZIP carrying a book must
                             // still resolve, so the archive engine
-                            // can open the book inside it.
+                            // can open the book inside it. The
+                            // book may hide inside a nested
+                            // archive too.
                             val names = seekable.entries
                                 .filter { !it.isDirectory }
                                 .map { it.name }
@@ -165,10 +176,11 @@ fun PdfReaderRoute(
                                 it.substringAfterLast('.', "").lowercase() in
                                     setOf(
                                         "epub", "docx", "pdf", "txt", "text",
-                                        "md", "markdown", "mdown"
+                                        "md", "markdown", "mdown",
+                                        "fb2", "fbz", "rtf"
                                     )
-                            }
-                            seekable.imageEntryNames().isNotEmpty() && !hasBook
+                            } || seekable.hasNestedBook(nestedCache, sourceKey)
+                            !hasBook
                         }
                         if (direct) {
                             directCbz = seekable
@@ -280,7 +292,13 @@ fun PdfReaderRoute(
                 book = book!!,
                 repo = repo,
                 onClose = onClose,
-                sourceFactory = { _ -> CbzNativeSource(directCbz!!) },
+                sourceFactory = { _ ->
+                    CbzNativeSource(
+                        directCbz!!,
+                        File(context.cacheDir, "nested-archives"),
+                        book!!.sourceUri ?: book!!.id
+                    )
+                },
                 loadingRes = R.string.cbz_native_loading,
                 errorRes = R.string.cbz_native_error
             )

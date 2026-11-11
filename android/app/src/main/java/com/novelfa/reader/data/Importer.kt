@@ -17,6 +17,7 @@ import com.novelfa.reader.parser.CacheStamp
 import com.novelfa.reader.parser.PdfParser
 import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.parser.Fb2Parser
+import com.novelfa.reader.parser.NestedArchive
 import com.novelfa.reader.parser.engine.CbzEngine
 import com.novelfa.reader.parser.engine.RarEngine
 import com.novelfa.reader.parser.RarNative
@@ -1096,10 +1097,14 @@ class Importer(
             }
             BookFormat.CBZ, BookFormat.ZIP -> {
                 SeekableZip.openFromUri(context, sourceUri)?.use { seekable ->
+                    val nestedCache = File(context.cacheDir, "nested-archives")
+                    val sourceKey = sourceUri.toString()
                     if (format == BookFormat.ZIP) {
                         // A ZIP carrying a book has no cover of
                         // its own — only image-only ZIPs are
                         // comics (same rule as the route probe).
+                        // The book may hide inside a nested
+                        // archive too.
                         val names = seekable.entries
                             .filter { !it.isDirectory }
                             .map { it.name }
@@ -1112,12 +1117,19 @@ class Importer(
                                     "md", "markdown", "mdown",
                                     "fb2", "fbz", "rtf"
                                 )
-                        }
+                        } || seekable.hasNestedBook(nestedCache, sourceKey)
                         if (hasBook) return@runCatching null
                     }
-                    val first = seekable.imageEntryNames().firstOrNull()
+                    val first = seekable.nestedImageEntryNames(nestedCache, sourceKey)
+                        .firstOrNull()
                         ?: return@runCatching null
-                    val bytes = seekable.openEntry(first)?.use { it.readBytes() }
+                    val bytes = (
+                        if (NestedArchive.isVirtualPath(first)) {
+                            seekable.openNestedEntry(first, nestedCache, sourceKey)
+                        } else {
+                            seekable.openEntry(first)
+                        }
+                    )?.use { it.readBytes() }
                         ?: return@runCatching null
                     if (bytes.isEmpty()) return@runCatching null
                     val ext = first.substringAfterLast('.', "jpg")

@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.flow.first
 import com.novelfa.reader.parser.CbzBook
 import com.novelfa.reader.parser.CbzBook.CbzChapter
+import com.novelfa.reader.parser.NestedArchive
 import com.novelfa.reader.parser.RarEntry
 import com.novelfa.reader.parser.RarNative
 import com.novelfa.reader.parser.engine.RarEngine
@@ -320,10 +321,18 @@ internal class ZipFileStore(
 }
 
 internal class SeekableEntryStore(
-    private val seekable: SeekableZip
+    private val seekable: SeekableZip,
+    private val cacheDir: File,
+    private val sourceKey: String
 ) : CbzEntryStore {
     override fun openEntry(name: String): InputStream? =
-        runCatching { seekable.openEntry(name) }.getOrNull()
+        runCatching {
+            if (NestedArchive.isVirtualPath(name)) {
+                seekable.openNestedEntry(name, cacheDir, sourceKey)
+            } else {
+                seekable.openEntry(name)
+            }
+        }.getOrNull()
 
     // The caller only builds this store when the archive has no
     // encrypted entries (they need zip4j), so this is constant.
@@ -347,9 +356,9 @@ internal class CbzNativeSource(
         CbzBook.imageEntryNames(zipFile)
     )
 
-    constructor(seekable: SeekableZip) : this(
-        SeekableEntryStore(seekable),
-        seekable.imageEntryNames()
+    constructor(seekable: SeekableZip, cacheDir: File, sourceKey: String) : this(
+        SeekableEntryStore(seekable, cacheDir, sourceKey),
+        seekable.nestedImageEntryNames(cacheDir, sourceKey)
     )
 
     private val lock = Any()

@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import com.novelfa.reader.parser.BookFormat
+import com.novelfa.reader.parser.NestedArchive
 import com.shockwave.pdfium.PdfiumCore
 import com.novelfa.reader.parser.engine.CbzEngine
 import com.novelfa.reader.parser.engine.RarEngine
@@ -253,10 +254,19 @@ object CoverBackfill {
                     context.cacheDir,
                     "cover_backfill" + File.separatorChar + book.id
                 ).apply { mkdirs() }
-                val first = seekable.imageEntryNames().firstOrNull()
+                val nestedCache = File(context.cacheDir, "nested-archives")
+                val sourceKey = book.sourceUri ?: book.id
+                val first = seekable.nestedImageEntryNames(nestedCache, sourceKey)
+                    .firstOrNull()
                 val realCover = first?.let { name ->
                     runCatching {
-                        val bytes = seekable.openEntry(name)?.use { it.readBytes() }
+                        val bytes = (
+                            if (NestedArchive.isVirtualPath(name)) {
+                                seekable.openNestedEntry(name, nestedCache, sourceKey)
+                            } else {
+                                seekable.openEntry(name)
+                            }
+                        )?.use { it.readBytes() }
                             ?: return@runCatching null
                         val ext = name.substringAfterLast('.', "jpg")
                             .takeIf { it.isNotBlank() } ?: "jpg"

@@ -134,11 +134,25 @@ object CbzBook {
      * archive, the central directory is scanned directly and
      * only the truly unreadable entries fail later, one page at
      * a time ([openEntryStream], [readEntryBytes]).
+     *
+     * Nested archives ([NestedArchive]): when the archive holds
+     * `.zip`/`.cbz` entries, their images are listed too, under
+     * virtual paths (`ch01.zip/ch01/001.jpg`), in the same
+     * natural order — a chapter-per-ZIP pack reads as one flat
+     * book. [nestedCacheDir] is where nested archives are
+     * materialized; null uses the shared nested cache.
      */
-    fun imageEntryNames(zipFile: File): List<String> {
-        return allEntryNames(zipFile)
-            .filter { isImageEntry(it) }
-            .sortedWith(::compareNatural)
+    fun imageEntryNames(
+        zipFile: File,
+        nestedCacheDir: File? = null
+    ): List<String> {
+        val top = allEntryNames(zipFile)
+        if (top.none { NestedArchive.isArchiveName(it) }) {
+            return top.filter { isImageEntry(it) }.sortedWith(::compareNatural)
+        }
+        return NestedArchive.imageEntries(
+            zipFile, nestedCacheDir ?: NestedArchive.defaultCacheDir()
+        )
     }
 
     /**
@@ -172,10 +186,11 @@ object CbzBook {
     fun readEntryBytes(
         zipFile: File,
         entryName: String,
-        maxBytes: Long = 64L * 1024 * 1024
+        maxBytes: Long = 64L * 1024 * 1024,
+        nestedCacheDir: File? = null
     ): ByteArray? {
         return try {
-            openEntryStream(zipFile, entryName)?.use { stream ->
+            openEntryStream(zipFile, entryName, nestedCacheDir)?.use { stream ->
                 val out = ByteArrayOutputStream()
                 val buf = ByteArray(8192)
                 var total = 0L
@@ -200,8 +215,23 @@ object CbzBook {
      * closing it closes the channel; the caller owns the stream.
      * STORED and DEFLATED only — the same rule as SeekableZip's
      * in-place reader, with the same per-entry failure shape.
+     *
+     * Virtual paths ([NestedArchive], e.g.
+     * `ch01.zip/ch01/001.jpg`) resolve through the materialized
+     * nested archives; [nestedCacheDir] is where they are
+     * materialized, null uses the shared nested cache.
      */
-    fun openEntryStream(zipFile: File, entryName: String): InputStream? {
+    fun openEntryStream(
+        zipFile: File,
+        entryName: String,
+        nestedCacheDir: File? = null
+    ): InputStream? {
+        if (NestedArchive.isVirtualPath(entryName)) {
+            return NestedArchive.openPage(
+                zipFile, entryName,
+                nestedCacheDir ?: NestedArchive.defaultCacheDir()
+            )
+        }
         val entry = recoveredEntries(zipFile)
             ?.firstOrNull { it.name == entryName } ?: return null
         if (entry.isEncrypted || (entry.method != 0 && entry.method != 8)) return null
@@ -744,7 +774,18 @@ object CbzBook {
             // substringBefore with its default: a single-segment
             // folder IS the chapter name (an explicit "" here
             // would have thrown single-segment chapters away).
-            val key = stripped.substringBefore('/')
+            // A nested archive segment names its chapter without
+            // the extension: `ch01.zip` is chapter `ch01`, not
+            // `ch01.zip` (the same strip the common-prefix rule
+            // already gives the outer archive level).
+            val rawKey = stripped.substringBefore('/')
+            val key = if (rawKey.substringAfterLast('.', "").lowercase()
+                    in NestedArchive.ARCHIVE_EXTENSIONS
+            ) {
+                rawKey.substringBeforeLast('.')
+            } else {
+                rawKey
+            }
             if (key.isNotEmpty() && key !in firstPage) {
                 firstPage[key] = index
             }
@@ -753,8 +794,8 @@ object CbzBook {
     }
 
     /** Chapters for an archive file, in reading order. */
-    fun chapters(zipFile: File): List<CbzChapter> =
-        chaptersForEntries(imageEntryNames(zipFile))
+    fun chapters(zipFile: File, nestedCacheDir: File? = null): List<CbzChapter> =
+        chaptersForEntries(imageEntryNames(zipFile, nestedCacheDir))
 
     /**
      * Natural order, ComicScreen's way: compare path SEGMENT by
