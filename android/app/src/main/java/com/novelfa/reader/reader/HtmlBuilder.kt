@@ -2290,6 +2290,34 @@ object HtmlBuilder {
     /** Selection reporting + highlight taps, injected into EVERY reader document. */
     private const val SELECT_JS = """// Novelfa selection + highlight-tap reporting — injected into EVERY reader document
 (function () {
+    function markOf(node) {
+        try {
+            var n = node;
+            while (n) {
+                if (n.nodeType === 1 && n.closest) {
+                    var m = n.closest('mark.rdr-hl');
+                    if (m) return m;
+                }
+                n = n.parentNode || n.parentElement;
+            }
+        } catch (e) { }
+        return null;
+    }
+    // The highlight the live selection overlaps, if any: the
+    // mark under the selection's anchor, then its focus, then
+    // the range's common ancestor. A long-press on highlighted
+    // text selects inside the mark instead of clicking it, so
+    // without this the app could never tell WHICH highlight
+    // the selection bar should offer to delete.
+    function selectionHighlightId() {
+        try {
+            var sel = window.getSelection();
+            if (!sel || sel.rangeCount === 0) return '';
+            var m = markOf(sel.anchorNode) || markOf(sel.focusNode);
+            if (!m) m = markOf(sel.getRangeAt(0).commonAncestorContainer);
+            return m ? (m.getAttribute('data-hl') || '') : '';
+        } catch (e) { return ''; }
+    }
     function reportSel() {
         try {
             var sel = window.getSelection();
@@ -2297,6 +2325,11 @@ object HtmlBuilder {
             if (active !== window.__rdrSelActive) {
                 window.__rdrSelActive = active;
                 if (window.Android && Android.onSelection) Android.onSelection(active ? 1 : 0);
+            }
+            var hl = active ? selectionHighlightId() : '';
+            if (hl !== window.__rdrSelHl) {
+                window.__rdrSelHl = hl;
+                if (window.Android && Android.onSelectionHighlight) Android.onSelectionHighlight(hl);
             }
         } catch (e) { }
     }

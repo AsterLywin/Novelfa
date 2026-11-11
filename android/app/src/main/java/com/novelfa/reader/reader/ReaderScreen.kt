@@ -461,6 +461,10 @@ fun ReaderScreen(
     // a jump inside the already-loaded document never sets it.
     var pendingBookmarkPos by remember { mutableStateOf<SectionPosition?>(null) }
     var selectionActive by remember { mutableStateOf(false) }
+    // The highlight the live selection overlaps (SELECT_JS):
+    // its data-hl id, or "" when the selection touches none.
+    // Drives the delete button in the highlight bar.
+    var selectedHighlightId by remember { mutableStateOf("") }
     var tappedHighlightId by remember { mutableStateOf<String?>(null) }
 
     /** Snippet with the match highlighted, same yellow as the in-page current match (#FFD400). */
@@ -644,7 +648,34 @@ fun ReaderScreen(
             val next = (highlights + TextHighlight(chap, s, e, color))
                 .distinctBy { Triple(it.chapter, it.start, it.end) }
             scope.launch { extrasStore.setHighlights(bookId, next) }
+            // The selection now belongs to the NEW mark, whose id
+            // the JS reports only on the next selection change:
+            // clear the bar's delete target instead of leaving a
+            // stale id that would delete the wrong highlight.
+            selectedHighlightId = ""
         }
+    }
+
+    /**
+     * Removes one highlight by its data-hl id ("chap:start-end"):
+     * the stored entry (when it exists) and the DOM mark move
+     * together, exactly like the tapped-highlight dialog's
+     * Remove — a stale mark with no stored entry still unwraps
+     * from the page. The selection is cleared afterwards, so the
+     * highlight bar closes instead of offering to delete a mark
+     * that no longer exists.
+     */
+    fun removeHighlight(id: String) {
+        val h = parseHighlightId(id)
+        if (h != null) {
+            scope.launch { extrasStore.setHighlights(bookId, highlights - h) }
+        }
+        webView?.evaluateJavascript(
+            "try{window.rdrRemoveHighlight('$id');}catch(e){} " +
+                "try{window.getSelection().removeAllRanges();}catch(e){}",
+            null
+        )
+        selectedHighlightId = ""
     }
 
     fun parseHighlightId(id: String): TextHighlight? {
@@ -1567,6 +1598,9 @@ fun ReaderScreen(
             // Text selection state (SELECT_JS): drives the highlight
             // bar and suspends page-turn gestures while selecting.
             onSelection = { active -> selectionActive = active },
+            // The highlight the live selection overlaps: drives
+            // the delete button in the highlight bar.
+            onSelectionHighlight = { id -> selectedHighlightId = id },
             // Highlight-mark tap (SELECT_JS click / paged hit test):
             // opens the change/remove dialog for that highlight.
             onHighlightTap = { id -> tappedHighlightId = id }
@@ -2830,7 +2864,12 @@ fun ReaderScreen(
                 // Highlight bar: while text is selected, one tap on a
                 // color wraps the selection in that highlight color
                 // (persisted per book). The WebView's own selection
-                // ActionMode still offers Copy alongside it.
+                // ActionMode still offers Copy alongside it. When
+                // the selection overlaps an existing highlight, a
+                // trash button deletes it — the one action the bar
+                // could never do before: a long-press selects
+                // instead of clicking, so the tap dialog never
+                // opened for it.
                 if (selectionActive && vm != null) {
                     Row(
                         modifier = Modifier
@@ -2854,6 +2893,21 @@ fun ReaderScreen(
                                     .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
                                     .clickable { createHighlight(color) }
                             )
+                        }
+                        if (selectedHighlightId.isNotEmpty()) {
+                            IconButton(
+                                onClick = { removeHighlight(selectedHighlightId) },
+                                modifier = Modifier.semantics {
+                                    contentDescription =
+                                        stringResource(R.string.highlight_remove)
+                                }
+                            ) {
+                                AppIcon(
+                                    AppIconKind.Trash,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    size = 20.dp
+                                )
+                            }
                         }
                     }
                 }
@@ -2910,13 +2964,7 @@ fun ReaderScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val h = existing
-                    if (h != null) {
-                        scope.launch {
-                            extrasStore.setHighlights(bookId, highlights - h)
-                        }
-                    }
-                    webView?.evaluateJavascript("window.rdrRemoveHighlight('$hlId');", null)
+                    removeHighlight(hlId)
                     tappedHighlightId = null
                 }) {
                     Text(stringResource(R.string.highlight_remove))

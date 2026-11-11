@@ -87,6 +87,8 @@ class ScrollBridge(
     private val onPagerReport: (Int, Int) -> Unit = { _, _ -> },
     /** Live text selection state (SELECT_JS): true while the user has text selected. */
     private val onSelection: (Boolean) -> Unit = {},
+    /** The highlight the live selection overlaps (SELECT_JS): its data-hl id, or "" when none. */
+    private val onSelectionHighlight: (String) -> Unit = {},
     /** Tap on a highlight mark (SELECT_JS / paged hit test): the mark's data-hl id ("chap:start-end"). */
     private val onHighlightTap: (String) -> Unit = {}
 ) {
@@ -149,6 +151,11 @@ class ScrollBridge(
     @JavascriptInterface
     fun onSelection(active: Long) {
         onSelection(active != 0L)
+    }
+
+    @JavascriptInterface
+    fun onSelectionHighlight(id: String) {
+        onSelectionHighlight(id)
     }
 
     @JavascriptInterface
