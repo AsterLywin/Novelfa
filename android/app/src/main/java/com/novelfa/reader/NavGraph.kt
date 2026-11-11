@@ -40,9 +40,16 @@ fun NavGraph(
     val navController = rememberNavController()
     // Instant reading: a file opened from outside the app starts on
     // the opening route, never on the library (see OpeningScreen).
-    // The start destination is fixed at first composition; later
-    // intents arrive through the effect below.
-    val startDestination = remember(openBookUri) {
+    // The start destination is fixed at FIRST composition only: it
+    // must never be recomputed from the consumable openBookUri.
+    // NavHost remembers its graph keyed on startDestination, so a
+    // recompute (opening route -> library, when the intake effect
+    // below consumes the URI) rebuilds the graph and resets the back
+    // stack to the library mid-import — the cold-start instant-reading
+    // bug (OpeningScreen destroyed ~0.5s in, the import cancelled,
+    // library with 0 books, no error). Later intents arrive only
+    // through the effect below, never through this value.
+    val startDestination = remember {
         openBookUri?.let { Routes.openingRoute(it) } ?: Routes.LIBRARY
     }
     // Warm intent (app already open, e.g. on the reader): the new

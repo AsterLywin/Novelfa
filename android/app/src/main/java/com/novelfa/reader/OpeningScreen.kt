@@ -54,7 +54,7 @@ import com.novelfa.reader.settings.PrefsStorePinPrefs
  */
 private sealed interface OpeningState {
     data object Opening : OpeningState
-    data class Failed(val reason: String) : OpeningState
+    data class Failed(val reason: String, val detail: String? = null) : OpeningState
 }
 
 @Composable
@@ -110,7 +110,7 @@ fun OpeningScreen(
                 }
             }
             is LibraryViewModel.OpenExternalResult.Failed -> {
-                state = OpeningState.Failed(result.reason)
+                state = OpeningState.Failed(result.reason, result.detail)
             }
         }
     }
@@ -162,6 +162,18 @@ fun OpeningScreen(
                         style = MaterialTheme.typography.bodyLarge,
                         textAlign = TextAlign.Center
                     )
+                    // Technical cause, when it adds anything: the
+                    // user cannot send logcat, so the exact failing
+                    // step has to be readable on this screen.
+                    if (current.detail != null && current.detail != current.reason) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = current.detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                     Spacer(modifier = Modifier.height(24.dp))
                     Button(onClick = { attempt++ }) {
                         Text(stringResource(R.string.opening_retry))
