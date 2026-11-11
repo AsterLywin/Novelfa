@@ -505,42 +505,59 @@ class Importer(
                 } else null
                 if (copyHash != null) importHashes[id] = copyHash
             } else {
-                val copyDigest = if (fastImport) MessageDigest.getInstance("SHA-256") else null
-                context.contentResolver.openInputStream(sourceUri)?.use { input ->
-                    tmpDest.outputStream().use { output ->
-                        // Cap the copy even when the provider didn't report a size:
-                        // copyTo with a byte budget instead of unbounded.
-                        var remaining = MAX_BOOK_BYTES
-                        var zeroReads = 0
-                        val buf = ByteArray(COPY_BUFFER_SIZE)
-                        while (true) {
-                            ioCtx.ensureActive()
-                            val n = input.read(buf)
-                            if (n < 0) break
-                            if (n == 0) {
-                                // A provider that returns 0 forever (never
-                                // data, never EOF) used to spin this loop
-                                // eternally with no progress at all.
-                                if (++zeroReads > 10000) {
-                                    throw IOException("stalled input stream: $sourceUri")
+                // A provider read can fail transiently (a pipe that
+                // drops mid-stream, a slow FileProvider): one retry,
+                // re-opening the stream from scratch and rewriting
+                // the temp file, before the import fails. The
+                // too-large ImportException is not an IOException,
+                // so it is never retried; cancellation is not
+                // caught at all. A partial temp file is deleted
+                // between attempts so a retry never appends to it.
+                for (copyAttempt in 1..2) {
+                    try {
+                        val copyDigest =
+                            if (fastImport) MessageDigest.getInstance("SHA-256") else null
+                        context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                            tmpDest.outputStream().use { output ->
+                                // Cap the copy even when the provider didn't report a size:
+                                // copyTo with a byte budget instead of unbounded.
+                                var remaining = MAX_BOOK_BYTES
+                                var zeroReads = 0
+                                val buf = ByteArray(COPY_BUFFER_SIZE)
+                                while (true) {
+                                    ioCtx.ensureActive()
+                                    val n = input.read(buf)
+                                    if (n < 0) break
+                                    if (n == 0) {
+                                        // A provider that returns 0 forever (never
+                                        // data, never EOF) used to spin this loop
+                                        // eternally with no progress at all.
+                                        if (++zeroReads > 10000) {
+                                            throw IOException("stalled input stream: $sourceUri")
+                                        }
+                                        continue
+                                    }
+                                    zeroReads = 0
+                                    remaining -= n
+                                    if (remaining < 0) {
+                                        throw ImportException(
+                                            "Book too large: exceeds $MAX_BOOK_BYTES bytes",
+                                            messageFa = context.getString(R.string.import_error_too_large)
+                                        )
+                                    }
+                                    output.write(buf, 0, n)
+                                    copyDigest?.update(buf, 0, n)
                                 }
-                                continue
                             }
-                            zeroReads = 0
-                            remaining -= n
-                            if (remaining < 0) {
-                                throw ImportException(
-                                    "Book too large: exceeds $MAX_BOOK_BYTES bytes",
-                                    messageFa = context.getString(R.string.import_error_too_large)
-                                )
-                            }
-                            output.write(buf, 0, n)
-                            copyDigest?.update(buf, 0, n)
-                        }
+                        } ?: throw IOException("Cannot open input stream: $sourceUri")
+                        copyHash = copyDigest?.digest()?.joinToString("") { "%02x".format(it) }
+                        if (copyHash != null) importHashes[id] = copyHash
+                        break
+                    } catch (e: IOException) {
+                        tmpDest.delete()
+                        if (copyAttempt == 2) throw e
                     }
-                } ?: throw IOException("Cannot open input stream: $sourceUri")
-                copyHash = copyDigest?.digest()?.joinToString("") { "%02x".format(it) }
-                if (copyHash != null) importHashes[id] = copyHash
+                }
             }
             // Keep the original file name: when a book has no internal
             // title, the parser falls back to the file name — the UUID
@@ -1571,6 +1588,12 @@ class Importer(
                     return R.string.import_error_pdf_encrypted
                 t.message?.contains("Unsupported book format", ignoreCase = true) == true ->
                     return R.string.import_error_unsupported_format
+                // A full device storage fails the copy / cover write
+                // with an IOException too, but "file could not be
+                // read" sends the user after the wrong thing — say
+                // plainly that the device is out of space.
+                t.message?.contains("no space", ignoreCase = true) == true ->
+                    return R.string.import_error_no_space
                 // NB: ZipException extends IOException — check it first.
                 t is ZipException -> return R.string.import_error_not_valid_epub
                 t is SecurityException -> return R.string.import_error_access_denied
