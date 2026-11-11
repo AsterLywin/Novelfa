@@ -2,7 +2,11 @@ package com.novelfa.reader
 
 import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -34,7 +38,37 @@ fun NavGraph(
     onBookUriConsumed: () -> Unit = {}
 ) {
     val navController = rememberNavController()
-    NavHost(navController = navController, startDestination = Routes.LIBRARY) {
+    // Instant reading: a file opened from outside the app starts on
+    // the opening route, never on the library (see OpeningScreen).
+    // The start destination is fixed at first composition; later
+    // intents arrive through the effect below.
+    val startDestination = remember(openBookUri) {
+        openBookUri?.let { Routes.openingRoute(it) } ?: Routes.LIBRARY
+    }
+    // Warm intent (app already open, e.g. on the reader): the new
+    // file must reach the opening route even though the library
+    // never composes — the old LaunchedEffect inside LibraryScreen
+    // dropped it in exactly that case. Consumed here for cold
+    // starts too, so a rotation never re-opens the file.
+    var lastHandledExternalUri by remember { mutableStateOf<Uri?>(null) }
+    LaunchedEffect(openBookUri) {
+        val uri = openBookUri ?: return@LaunchedEffect
+        if (uri == lastHandledExternalUri) return@LaunchedEffect
+        lastHandledExternalUri = uri
+        onBookUriConsumed()
+        val current = navController.currentDestination?.route
+        if (current != null && current != Routes.OPENING) {
+            navController.navigate(Routes.openingRoute(uri))
+        }
+    }
+    NavHost(navController = navController, startDestination = startDestination) {
+        composable(
+            route = Routes.OPENING,
+            arguments = listOf(navArgument("uri") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val encoded = backStackEntry.arguments?.getString("uri") ?: ""
+            OpeningScreen(encodedUri = encoded, navController = navController)
+        }
         composable(Routes.LIBRARY) {
             val context = LocalContext.current
             val db = remember { (context.applicationContext as NovelfaApplication).db }
@@ -56,9 +90,7 @@ fun NavGraph(
                 onOpenBook = { id -> navController.navigate("reader/$id") },
                 viewModel = viewModel,
                 onOpenCollections = { navController.navigate(Routes.COLLECTIONS) },
-                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                pendingImportUri = openBookUri,
-                onImportUriConsumed = onBookUriConsumed
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) }
             )
         }
         composable(Routes.COLLECTIONS) {

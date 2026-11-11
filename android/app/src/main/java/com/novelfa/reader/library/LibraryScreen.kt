@@ -168,10 +168,6 @@ fun LibraryScreen(
     viewModel: LibraryViewModel,
     onOpenCollections: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
-    // EPUB opened from a file manager (ACTION_VIEW intent, WPF
-    // file-association parity). Consumed once via onImportUriConsumed.
-    pendingImportUri: Uri? = null,
-    onImportUriConsumed: () -> Unit = {}
 ) {
     // Task 9: tab + query survive rotation/process death (DB is NOT
     // involved here — this is pure UI state).
@@ -315,8 +311,10 @@ fun LibraryScreen(
     // Library id of the book each pending duplicate matches, parallel
     // to pendingDuplicates (see ImportSummary.duplicateBookIds).
     var pendingDuplicateBookIds by remember { mutableStateOf<List<String?>>(emptyList()) }
-    // Encrypted-PDF password prompt (also covers the ACTION_VIEW path,
-    // which funnels through importUris below).
+    // Encrypted-PDF password prompt (manual imports through
+    // importUris below). Files opened from outside the app no
+    // longer come through here — they go through OpeningScreen,
+    // which has its own prompt.
     val pdfPasswordPrompt = rememberPdfPasswordPrompt()
 
     suspend fun importUris(uris: List<Uri>) {
@@ -447,21 +445,11 @@ fun LibraryScreen(
         )
     }
 
-    // Book handed in from a file manager (ACTION_VIEW). Imported once, then
-    // the URI is consumed so rotation doesn't re-import it. Consume AFTER the
-    // import: consuming first changes the effect key and Compose cancels the
-    // in-flight import.
-    LaunchedEffect(pendingImportUri) {
-        val uri = pendingImportUri ?: return@LaunchedEffect
-        try {
-            importUris(listOf(uri))
-        } finally {
-            // Consume even on cancel, or the pending URI would
-            // re-import on the next composition (e.g. rotation).
-            onImportUriConsumed()
-        }
-    }
-
+    // (Files opened from outside the app used to be imported here
+    // via a LaunchedEffect on pendingImportUri — library first, then
+    // the import dialog, and no navigation to the reader at all.
+    // That path now lives in OpeningScreen: the file opens straight
+    // into the reader and this screen never sees it.)
     val pinManager = viewModel.pinGate as? PinManager
     var unlocked by remember { mutableStateOf(PinSession.unlocked) }
     var pinOpen by remember { mutableStateOf(false) }

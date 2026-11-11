@@ -149,6 +149,9 @@
     <string name="import_summary_failed">%1$d ناموفق بود</string>
     <string name="import_summary_restored">پیشرفت %1$d کتاب بازیابی شد</string>
     <string name="import_in_progress">در حال ایمپورت کتاب…</string>
+    <string name="opening_book">در حال باز کردن کتاب…</string>
+    <string name="opening_retry">تلاش دوباره</string>
+    <string name="opening_back_to_library">بازگشت به کتابخانه</string>
 <string name="import_stage_copy">در حال کپی فایل…</string>
     <string name="import_stage_decrypt">در حال بررسی رمز…</string>
     <string name="import_stage_validate">در حال اعتبارسنجی فایل…</string>

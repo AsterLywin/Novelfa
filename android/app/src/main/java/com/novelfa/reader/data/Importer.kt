@@ -372,6 +372,13 @@ class Importer(
         sourceUri: Uri,
         overwrite: Boolean = false,
         passwordProvider: PdfPasswordProvider? = null,
+        // Instant reading (خوندن درجا): a file opened from outside
+        // the app is always read where it lives, whatever the
+        // in-place toggle says — ComicScreen opens the file directly
+        // in its reader and only copies on failure, and this path
+        // does the same (register-only for content://, no copy at
+        // all for file://). Manual import keeps the toggle.
+        forceInPlace: Boolean = false,
         // Stage reporter for the import dialog (null = no reporting):
         // the dialog shows which step a stuck import sits in, so a
         // "never finishes" report names the step instead of guessing.
@@ -408,7 +415,9 @@ class Importer(
         val id = UUID.randomUUID().toString()
         // In-place mode, read once per import like fastImport: the
         // toggle only affects imports started after it changes.
-        val wantInPlace = inPlaceImportEnabled()
+        // forceInPlace (instant reading) overrides the toggle: an
+        // external open is always in place, copy only as fallback.
+        val wantInPlace = forceInPlace || inPlaceImportEnabled()
         val booksDir = File(context.filesDir, "books").apply { mkdirs() }
         val tmpDest = File(booksDir, "$id.tmp")
         // Reader-open cache. Only TXT/Markdown are filled HERE at

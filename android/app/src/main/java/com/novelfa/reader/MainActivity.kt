@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.content.IntentCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -24,8 +25,11 @@ import kotlinx.coroutines.runBlocking
 class MainActivity : ComponentActivity() {
     /**
      * Book opened from a file manager (ACTION_VIEW, WPF file-association
-     * parity). singleTop + onNewIntent so tapping a file while the app is
-     * open reuses this activity instead of stacking a new one.
+     * parity) or shared to the app (ACTION_SEND, e.g. Telegram's Share:
+     * the file rides in EXTRA_STREAM). singleTop + onNewIntent so
+     * tapping a file while the app is open reuses this activity
+     * instead of stacking a new one. Both actions land on
+     * OpeningScreen, straight into the reader — never the library.
      */
     private var viewUri by mutableStateOf<Uri?>(null)
 
@@ -111,7 +115,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun extractBookUri(intent: Intent?): Uri? {
-        if (intent?.action != Intent.ACTION_VIEW) return null
-        return intent.data
+        return when (intent?.action) {
+            Intent.ACTION_VIEW -> intent.data
+            // Share: the file is EXTRA_STREAM (a text share has none
+            // and falls through as null — a normal launch).
+            Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(
+                intent, Intent.EXTRA_STREAM, Uri::class.java
+            )
+            else -> null
+        }
     }
 }

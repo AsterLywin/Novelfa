@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.novelfa.reader.data.BookRepository
 import com.novelfa.reader.domain.Book
 import com.novelfa.reader.data.Importer
+import com.novelfa.reader.data.ImportException
 import com.novelfa.reader.data.PdfPasswordProvider
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.data.SortFa
@@ -304,6 +305,95 @@ class LibraryViewModel(
      * be computed on either side falls back to the old name rule
      * (treat as duplicate) rather than importing a possible copy.
      */
+    /**
+     * Instant reading (خوندن درجا): open a file handed in from
+     * outside the app (file manager, Telegram, share) straight into
+     * the reader.
+     *
+     * ComicScreen model: the file is read where it lives — the import
+     * registers it in place ([Importer.importBook] with
+     * `forceInPlace`, head-only sniff, no full copy, no full hash)
+     * and the reader opens it from the source URI. A copy only
+     * happens as a fallback inside [Importer.importBook] (provider
+     * refuses a persistable permission, encrypted PDF on file://)
+     * or at first open inside the reader (working copy for formats
+     * the direct probe cannot serve). Manual import is untouched:
+     * it still goes through [importMultiple] with its dialog and
+     * its overwrite question.
+     *
+     * A file already in the library opens as-is — never an overwrite
+     * dialog on this path: the same name/size screen as
+     * [importMultiple], hash-confirmed when a candidate exists.
+     */
+    sealed interface OpenExternalResult {
+        data class Opened(val bookId: String) : OpenExternalResult
+        data class Failed(val reason: String) : OpenExternalResult
+    }
+
+    suspend fun openExternal(
+        uri: Uri,
+        passwordProvider: PdfPasswordProvider? = null
+    ): OpenExternalResult = withContext(Dispatchers.IO) {
+        val imp = requireNotNull(importer) { "Importer not provided" }
+        // Duplicate screen (same as importMultiple, single file):
+        // nominate by original name, else by declared size, and let
+        // a streaming hash decide.
+        val existingBooks = repo.books().first()
+        val displayName = imp.displayNameOf(uri)
+        val key = displayName?.lowercase()
+        suspend fun isSameContent(uri: Uri, book: Book): Boolean? {
+            val newHash = imp.sha256OfUri(uri) ?: return null
+            // A persisted content hash answers without re-reading
+            // the stored book at all.
+            book.contentHash?.let { return newHash == it }
+            val stored = File(book.filePath)
+            if (!stored.isFile) return null
+            val oldHash = imp.sha256OfStoredFile(stored) ?: return null
+            return newHash == oldHash
+        }
+        var duplicate: Book? = null
+        if (key != null) {
+            val byName = existingBooks.firstOrNull {
+                it.originalFileName?.lowercase() == key
+            }
+            if (byName != null) {
+                when (isSameContent(uri, byName)) {
+                    true -> duplicate = byName
+                    false -> duplicate = null
+                    // Unhashable: the name rule, as before.
+                    null -> duplicate = byName
+                }
+            }
+        }
+        if (duplicate == null) {
+            val size = imp.displaySizeOf(uri)
+            if (size != null) {
+                for (candidate in booksBySize(existingBooks)[size].orEmpty()) {
+                    when (isSameContent(uri, candidate)) {
+                        true -> { duplicate = candidate; break }
+                        false, null -> Unit
+                    }
+                }
+            }
+        }
+        if (duplicate != null) return@withContext OpenExternalResult.Opened(duplicate.id)
+        try {
+            val newId = imp.importBook(
+                uri,
+                passwordProvider = passwordProvider,
+                forceInPlace = true
+            )
+            imp.applyReadingRecord(newId)
+            OpenExternalResult.Opened(newId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ImportException) {
+            OpenExternalResult.Failed(e.messageFa)
+        } catch (e: Exception) {
+            OpenExternalResult.Failed(e.message ?: e.javaClass.simpleName)
+        }
+    }
+
     suspend fun importMultiple(
         uris: List<Uri>,
         overwriteDuplicates: Boolean = false,
