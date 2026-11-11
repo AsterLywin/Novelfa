@@ -327,7 +327,11 @@ class LibraryViewModel(
      */
     sealed interface OpenExternalResult {
         data class Opened(val bookId: String) : OpenExternalResult
-        data class Failed(val reason: String) : OpenExternalResult
+        // detail is the technical cause (ImportException.message),
+        // shown small under the reason on the opening screen so a
+        // phone test can name the exact failing step — the user
+        // cannot send logcat, so the reason alone is not enough.
+        data class Failed(val reason: String, val detail: String? = null) : OpenExternalResult
     }
 
     suspend fun openExternal(
@@ -388,7 +392,7 @@ class LibraryViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: ImportException) {
-            OpenExternalResult.Failed(e.messageFa)
+            OpenExternalResult.Failed(e.messageFa, detail = e.message)
         } catch (e: Exception) {
             OpenExternalResult.Failed(e.message ?: e.javaClass.simpleName)
         }
