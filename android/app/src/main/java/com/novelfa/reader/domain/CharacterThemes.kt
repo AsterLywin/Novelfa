@@ -83,9 +83,8 @@ data class CharacterTheme(
 }
 
 object CharacterThemes {
-    // Order follows the XP titles: subaru (first earned theme: rank 1
-    // / XP title 1 — a user with no rank at all must NOT have it open)
-    // to tsugi. requiredRank stays the OLD 0..6 finished-books rank and
+    // Order follows the XP titles: subaru (open from the start) to
+    // tsugi. requiredRank stays the OLD 0..6 finished-books rank and
     // xpTitle is the new title gate (0..11, see XpRank) — a theme unlocks
     // via EITHER gate, so no previously unlocked theme is lost.
     // Palette strings + fa texts copied VERBATIM from CharacterThemes.cs:129-170.
@@ -97,12 +96,11 @@ object CharacterThemes {
             "سبزِ شب و نارنجیِ گرم؛ هر بار از اول، با اراده‌ای نو",
             "Subaru",
             "Night green and warm orange; each time from the beginning, with a fresh resolve",
-            "embers", 1,
+            "embers", 0,
             ThemePalette.parse("#0C1210 #111A16 #17231D #E8F0EA #8AA095 #1F2F27 #26382F #3A2616 #1E2F25 #101A14 #FF8A3D #F26B1D #FFB066 #F26B1D #FF8A3D #2FBF71"),
             ThemePalette.parse("#F3F8F4 #FFFFFF #FFFFFF #14231B #5E7A6B #E9F3EC #D5E5DA #FFEBDB #EAF6EE #FFE7D1 #CC4A08 #A83806 #FF9A52 #E8590C #FF8A3D #2FBF71")
        ,
-            emblemData = "F1 M97,50 C97,75.96 75.96,97 50,97 C24.04,97 3,75.96 3,50 C3,24.04 24.04,3 50,3 C75.96,3 97,24.04 97,50 Z M91,50 C91,27.36 72.64,9 50,9 C27.36,9 9,27.36 9,50 C9,72.64 27.36,91 50,91 C72.64,91 91,72.64 91,50 Z M48.3,21 L48.3,13 L51.7,13 L51.7,21 Z M65.63,20.92 L67.63,17.46 L69.37,18.46 L67.37,21.92 Z M78.08,32.63 L81.54,30.63 L82.54,32.37 L79.08,34.37 Z M79,48.3 L87,48.3 L87,51.7 L79,51.7 Z M79.08,65.63 L82.54,67.63 L81.54,69.37 L78.08,67.37 Z M67.37,78.08 L69.37,81.54 L67.63,82.54 L65.63,79.08 Z M51.7,79 L51.7,87 L48.3,87 L48.3,79 Z M34.37,79.08 L32.37,82.54 L30.63,81.54 L32.63,78.08 Z M21.92,67.37 L18.46,69.37 L17.46,67.63 L20.92,65.63 Z M21,51.7 L13,51.7 L13,48.3 L21,48.3 Z M20.92,34.37 L17.46,32.37 L18.46,30.63 L21.92,32.63 Z M32.63,21.92 L30.63,18.46 L32.37,17.46 L34.37,20.92 Z M48.44,50.9 L33.44,24.92 L36.56,23.12 L51.56,49.1 Z M51.2,52.08 L33.88,62.08 L31.48,57.92 L48.8,47.92 Z M56,50 C56,53.31 53.31,56 50,56 C46.69,56 44,53.31 44,50 C44,46.69 46.69,44 50,44 C53.31,44 56,46.69 56,50 Z M41,69 L50,63.5 L50,74.5 Z M50,69 L59,63.5 L59,74.5 Z",
-            xpTitle = 1
+            emblemData = "F1 M97,50 C97,75.96 75.96,97 50,97 C24.04,97 3,75.96 3,50 C3,24.04 24.04,3 50,3 C75.96,3 97,24.04 97,50 Z M91,50 C91,27.36 72.64,9 50,9 C27.36,9 9,27.36 9,50 C9,72.64 27.36,91 50,91 C72.64,91 91,72.64 91,50 Z M48.3,21 L48.3,13 L51.7,13 L51.7,21 Z M65.63,20.92 L67.63,17.46 L69.37,18.46 L67.37,21.92 Z M78.08,32.63 L81.54,30.63 L82.54,32.37 L79.08,34.37 Z M79,48.3 L87,48.3 L87,51.7 L79,51.7 Z M79.08,65.63 L82.54,67.63 L81.54,69.37 L78.08,67.37 Z M67.37,78.08 L69.37,81.54 L67.63,82.54 L65.63,79.08 Z M51.7,79 L51.7,87 L48.3,87 L48.3,79 Z M34.37,79.08 L32.37,82.54 L30.63,81.54 L32.63,78.08 Z M21.92,67.37 L18.46,69.37 L17.46,67.63 L20.92,65.63 Z M21,51.7 L13,51.7 L13,48.3 L21,48.3 Z M20.92,34.37 L17.46,32.37 L18.46,30.63 L21.92,32.63 Z M32.63,21.92 L30.63,18.46 L32.37,17.46 L34.37,20.92 Z M48.44,50.9 L33.44,24.92 L36.56,23.12 L51.56,49.1 Z M51.2,52.08 L33.88,62.08 L31.48,57.92 L48.8,47.92 Z M56,50 C56,53.31 53.31,56 50,56 C46.69,56 44,53.31 44,50 C44,46.69 46.69,44 50,44 C53.31,44 56,46.69 56,50 Z M41,69 L50,63.5 L50,74.5 Z M50,69 L59,63.5 L59,74.5 Z"
         ),
         CharacterTheme(
             "ram", "رام",
