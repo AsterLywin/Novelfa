@@ -1,5 +1,6 @@
 package com.novelfa.reader
 
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,11 +60,20 @@ private sealed interface OpeningState {
 
 @Composable
 fun OpeningScreen(
+    directUri: Uri? = null,
     encodedUri: String,
     navController: NavController
 ) {
     val context = LocalContext.current
-    val uri = remember(encodedUri) { Routes.decodeOpeningUri(encodedUri) }
+    // The Uri object itself is the primary source: the route arg
+    // (Base64) is only a fallback for process-death restore. A
+    // Telegram open once reached the importer with an EMPTY uri
+    // ("No content provider:" and no address), and the route
+    // round-trip is the only lossy step in the chain — so the
+    // in-memory Uri wins whenever it is present. Keyless remember:
+    // the first value is kept even after the intake consumes the
+    // Uri (a keyed remember would re-resolve to the empty fallback).
+    val uri = remember { directUri ?: Routes.decodeOpeningUri(encodedUri) }
     val db = remember { (context.applicationContext as NovelfaApplication).db }
     val prefs = remember { PrefsStore(context.applicationContext) }
     val viewModel: LibraryViewModel = viewModel(
@@ -95,9 +105,13 @@ fun OpeningScreen(
     LaunchedEffect(uri, attempt) {
         if (openedId != null) return@LaunchedEffect
         val target = uri
-        if (target == null) {
+        if (target == null || target.toString().isEmpty()) {
+            // An empty URI (lost on the way in) used to reach the
+            // importer and fail as "No content provider:" with no
+            // address at all — fail here instead, naming the loss.
             state = OpeningState.Failed(
-                context.getString(R.string.import_error_generic)
+                context.getString(R.string.import_error_generic),
+                "empty file uri received"
             )
             return@LaunchedEffect
         }
@@ -110,7 +124,14 @@ fun OpeningScreen(
                 }
             }
             is LibraryViewModel.OpenExternalResult.Failed -> {
-                state = OpeningState.Failed(result.reason, result.detail)
+                // The attempted URI rides along in the detail: on
+                // a phone it is the only way to tell an empty/lost
+                // URI from a provider that really does not resolve.
+                val diag = listOfNotNull(
+                    result.detail,
+                    "URI: $target"
+                ).joinToString("\n")
+                state = OpeningState.Failed(result.reason, diag)
             }
         }
     }

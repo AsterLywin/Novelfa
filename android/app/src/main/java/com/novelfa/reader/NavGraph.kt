@@ -61,11 +61,21 @@ fun NavGraph(
     // never composes — the old LaunchedEffect inside LibraryScreen
     // dropped it in exactly that case. Consumed here for cold
     // starts too, so a rotation never re-opens the file.
+    // The Uri ALSO rides in-memory to OpeningScreen (directUri):
+    // the route carries it Base64-encoded, and a Telegram open
+    // failed with "No content provider:" and an EMPTY uri — the
+    // string round-trip through the route is the only lossy step
+    // between MainActivity (non-null Uri) and the importer, so the
+    // opening screen now takes the Uri object directly and only
+    // falls back to the route arg (process-death restore, where
+    // the in-memory value is gone).
+    var lastExternalUri by remember { mutableStateOf(openBookUri) }
     var lastHandledExternalUri by remember { mutableStateOf<Uri?>(null) }
     LaunchedEffect(openBookUri) {
         val uri = openBookUri ?: return@LaunchedEffect
         if (uri == lastHandledExternalUri) return@LaunchedEffect
         lastHandledExternalUri = uri
+        lastExternalUri = uri
         onBookUriConsumed()
         val current = navController.currentDestination?.route
         if (current != null && current != Routes.OPENING) {
@@ -102,7 +112,11 @@ fun NavGraph(
             arguments = listOf(navArgument("uri") { type = NavType.StringType }),
         ) { backStackEntry ->
             val encoded = backStackEntry.arguments?.getString("uri") ?: ""
-            OpeningScreen(encodedUri = encoded, navController = navController)
+            OpeningScreen(
+                directUri = lastExternalUri,
+                encodedUri = encoded,
+                navController = navController
+            )
         }
         composable(Routes.LIBRARY) {
             val context = LocalContext.current
