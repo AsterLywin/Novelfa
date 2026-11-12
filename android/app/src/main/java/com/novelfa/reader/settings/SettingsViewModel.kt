@@ -150,8 +150,23 @@ class SettingsViewModel(
         val service = rankService()
         val legacyIndex = service.rankIndexFor(finished)
         val isEnglish = prefs.lang.first().startsWith("en")
+        // The "next" theme must be unlockable by the rank/XP gates:
+        // a secret-only theme (reif, xpTitle = requiredRank = 99)
+        // is not a next step, and indexing Titles/Ranks with its
+        // gates throws IndexOutOfBoundsException — Titles has 12
+        // entries, Ranks 7. That crash fired in RankSection's
+        // LaunchedEffect when settings was scrolled to the bottom
+        // (the section composes lazily), from the Ali port that
+        // added reif; before it every theme's gates were in range.
+        // The rendering lines below (Titles[nextTheme.xpTitle],
+        // Ranks[nextTheme.requiredRank]) are safe by construction
+        // once the candidates are filtered here.
         val nextLocked = CharacterThemes.All
-            .filter { !service.isUnlocked(it) }
+            .filter { theme ->
+                !service.isUnlocked(theme) &&
+                    theme.xpTitle < XpRank.Titles.size &&
+                    theme.requiredRank < RankService.Ranks.size
+            }
             .minByOrNull { XpRank.Titles[it.xpTitle].minXp }
         return XpProgressSummary(
             totalXp = level.xp,
