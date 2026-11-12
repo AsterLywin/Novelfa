@@ -7,7 +7,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -68,7 +72,31 @@ fun NavGraph(
             navController.navigate(Routes.openingRoute(uri))
         }
     }
-    NavHost(navController = navController, startDestination = startDestination) {
+    // Navigation transitions: explicit horizontal slides, mirrored
+    // for RTL. The navigation-compose defaults are a 700ms fade +
+    // scale crossfade — during it the outgoing and incoming screens
+    // blend at partial alpha, so two dense text screens (library
+    // and settings) render ON TOP of each other, text over text
+    // (caught on video 2026-11-12: ~0.5s of ghost content on
+    // library -> settings). A pure slide never blends alpha, so
+    // the incoming screen simply covers the outgoing.
+    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    NavHost(
+        navController = navController,
+        startDestination = startDestination,
+        enterTransition = {
+            slideInHorizontally(initialOffsetX = { if (isRtl) -it else it })
+        },
+        exitTransition = {
+            slideOutHorizontally(targetOffsetX = { if (isRtl) it else -it })
+        },
+        popEnterTransition = {
+            slideInHorizontally(initialOffsetX = { if (isRtl) it else -it })
+        },
+        popExitTransition = {
+            slideOutHorizontally(targetOffsetX = { if (isRtl) -it else it })
+        }
+    ) {
         composable(
             route = Routes.OPENING,
             arguments = listOf(navArgument("uri") { type = NavType.StringType }),

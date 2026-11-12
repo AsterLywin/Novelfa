@@ -237,6 +237,7 @@ fun LibraryScreen(
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val missingFileMsg = stringResource(R.string.book_file_missing)
+    val subaruGiftMsg = stringResource(R.string.subaru_gift_message)
     val addedFmt = stringResource(R.string.import_summary_added)
     val dupFmt = stringResource(R.string.import_summary_duplicates)
     val failedFmt = stringResource(R.string.import_summary_failed)
@@ -1120,7 +1121,17 @@ fun LibraryScreen(
             onSave = { name ->
                 scope.launch {
                     prefs.setProfileName(name)
+                    // First-run gift: the Subaru theme, applied the
+                    // moment the name is picked — only when no theme
+                    // is set yet, so an existing choice is never
+                    // overridden. (This dialog runs on first run
+                    // only; renames use the dialog below and never
+                    // gift.) The dialog closes before the snackbar
+                    // shows: showSnackbar suspends for its duration.
+                    val gifted = charThemeId.isBlank()
+                    if (gifted) prefs.setCharTheme("subaru")
                     welcomeOpen = false
+                    if (gifted) snackbar.showSnackbar(subaruGiftMsg)
                 }
             }
         )
