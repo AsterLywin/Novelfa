@@ -49,6 +49,43 @@ class CollectionManager(
         manualRegistry?.add(clean)
     }
 
+    companion object {
+        /**
+         * The 5 ready-made status collections (upstream
+         * CollectionRegistry.Presets, created once via
+         * EnsurePresets): (fa, en) data pairs, in the upstream
+         * order. The en "Reading" fills a gap upstream leaves
+         * untranslated (LocStrings has no «در حال خواندن» entry).
+         */
+        val STATUS_PRESETS = listOf(
+            "بعداً می‌خونم" to "Read later",
+            "در حال خواندن" to "Reading",
+            "نگه داشتم" to "On hold",
+            "رها کردم" to "Dropped",
+            "تمام شد" to "Finished"
+        )
+
+        /** All preset names in either language (a preset seeded in fa stays findable under en UI). */
+        val STATUS_PRESET_NAMES: Set<String> =
+            STATUS_PRESETS.flatMap { listOf(it.first, it.second) }.toSet()
+    }
+
+    /**
+     * Create the status presets that do not exist yet (upstream
+     * EnsurePresets): never throws, never re-creates a preset the
+     * user deleted — the caller sets the seeded flag after this
+     * returns, so a deleted preset stays deleted.
+     */
+    suspend fun ensureStatusPresets(names: List<String>) {
+        val existing = allCollectionNames()
+        for (name in names) {
+            val clean = name.trim()
+            if (clean.isEmpty()) continue
+            if (existing.any { it.equals(clean, ignoreCase = true) }) continue
+            runCatching { manualRegistry?.add(clean) }
+        }
+    }
+
     /** Rename a collection: updates every book carrying [old] (blank -> throw). */
     suspend fun renameCollection(old: String, new: String) {
         val clean = new.trim()

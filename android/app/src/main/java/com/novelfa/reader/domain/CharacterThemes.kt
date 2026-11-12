@@ -84,7 +84,8 @@ data class CharacterTheme(
 
 object CharacterThemes {
     // Order follows the XP titles: subaru (open from the start) to
-    // tsugi. requiredRank stays the OLD 0..6 finished-books rank and
+    // tsugi, plus the secret reif (rank 99, never unlocked by rank).
+    // requiredRank stays the OLD 0..6 finished-books rank and
     // xpTitle is the new title gate (0..11, see XpRank) — a theme unlocks
     // via EITHER gate, so no previously unlocked theme is lost.
     // Palette strings + fa texts copied VERBATIM from CharacterThemes.cs:129-170.
@@ -175,6 +176,21 @@ object CharacterThemes {
        ,
             emblemData = "F0 M12,68 L88,68 L88,84 L12,84 Z M18,72 L82,72 L82,80 L18,80 Z M20,48 L92,48 L92,64 L20,64 Z M26,52 L86,52 L86,60 L26,60 Z M8,28 L80,28 L80,44 L8,44 Z M14,32 L74,32 L74,40 L14,40 Z M50,10 L58,10 L58,24 L54,20 L50,24 Z",
             xpTitle = 10
+        ),
+        // Upstream b2d4a9f: «سوبارو · غرور» (secret, rank 99, embers).
+        // Palettes + fa texts copied verbatim from CharacterThemes.cs;
+        // en texts from LocStrings.cs. No xpTitle: the default
+        // (= requiredRank 99) keeps it secret-only, like Windows.
+        CharacterTheme(
+            "reif", "سوبارو · غرور",
+            "سرخِ آتش و دودِ سیاه؛ هر بار از نو، با چشم‌هایی که تسلیم نمی‌شن",
+            "Subaru · Pride",
+            "Red fire and black smoke; starting over every time, with eyes that never give in",
+            "embers", 99,
+            ThemePalette.parse("#0F0605 #170908 #200D0B #FFEDE6 #C4948A #34130F #4A1A12 #3A1A0C #3D1410 #1A0A08 #FF5A1F #E03A0C #FF9A5C #E8420F #FF6B2B #FFC247"),
+            ThemePalette.parse("#FFF4EE #FFFFFF #FFFFFF #2B0F0A #8A5A50 #FFE6DA #F5CDBE #FFE9D2 #FFE3D8 #FFD5C2 #C23A0A #9A2A06 #FF8A52 #D8410C #FF6B2B #E5A100")
+       ,
+            emblemData = "F1 M50,6 C58,24 76,34 76,56 C76,74 64,90 50,90 C36,90 24,74 24,56 C24,46 30,38 36,32 C36,42 40,48 46,50 C42,36 44,18 50,6 Z M50,48 C56,58 62,62 62,70 C62,78 56,84 50,84 C44,84 38,78 38,70 C38,62 46,58 50,48 Z"
         )
     )
 

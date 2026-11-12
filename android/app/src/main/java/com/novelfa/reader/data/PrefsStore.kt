@@ -56,6 +56,8 @@ class PrefsStore(private val context: Context) {
         // WPF parity: animated character-theme particle layer (default off,
         // like the desktop client's "0").
         val THEME_PARTICLES = booleanPreferencesKey("themeParticles")
+        // Status preset collections seeded once (upstream CollectionPresets flag).
+        val COLLECTION_PRESETS = booleanPreferencesKey("collectionPresets")
         val GUIDE_SHOWN = booleanPreferencesKey("guideShown")
         // Reading layout mode (replaces the old continuous toggle).
         val READING_MODE = stringPreferencesKey("readingMode")
@@ -194,6 +196,9 @@ class PrefsStore(private val context: Context) {
         context.dataStore.data.map { it[FINISHED_BOOKS_RESTORED] ?: 0 }
     /** Animated character-theme particles behind the library (default off). */
     val themeParticles: Flow<Boolean> = context.dataStore.data.map { it[THEME_PARTICLES] ?: false }
+    /** Status preset collections seeded once (upstream CollectionPresets flag). */
+    val collectionPresetsSeeded: Flow<Boolean> =
+        context.dataStore.data.map { it[COLLECTION_PRESETS] ?: false }
 
     /** First-run guide shown (set on Done/Skip; never for existing users). */
     val guideShown: Flow<Boolean> = context.dataStore.data.map { it[GUIDE_SHOWN] ?: false }
@@ -344,6 +349,10 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setThemeParticles(value: Boolean) {
         context.dataStore.edit { it[THEME_PARTICLES] = value }
+    }
+
+    suspend fun setCollectionPresetsSeeded() {
+        context.dataStore.edit { it[COLLECTION_PRESETS] = true }
     }
 
     suspend fun setGuideShown(value: Boolean) {

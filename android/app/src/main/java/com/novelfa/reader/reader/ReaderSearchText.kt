@@ -70,11 +70,83 @@ object ReaderSearchText {
 
     fun plainText(html: String): String = decodeEntities(stripTags(html))
 
-    /** Non-overlapping, case-insensitive occurrence count. */
+    /** One Persian/Arabic folding rule, shared with the JS search (SEARCH_JS rdrNormChar). */
+    private val normMap = mapOf(
+        'ي' to 'ی', 'ى' to 'ی', 'ے' to 'ی', 'ك' to 'ک',
+        'أ' to 'ا', 'إ' to 'ا', 'آ' to 'ا', 'ٱ' to 'ا',
+        'ؤ' to 'و', 'ة' to 'ه', 'ۀ' to 'ه', 'ہ' to 'ه', 'ھ' to 'ه'
+    )
+
+    /**
+     * Fold one char the way upstream ReaderFind.Norm does: "" means
+     * the char vanishes (diacritic, tatweel, half-space/ZWJ/ZWNJ,
+     * directional marks); digits fold to ASCII; Arabic letters
+     * fold to their Persian form; NBSP-class spaces become ' '.
+     */
+    fun normalizeChar(c: Char): String {
+        val code = c.code
+        if ((code in 0x064B..0x065F) || code == 0x0670 || code == 0x0640 ||
+            code == 0x200C || code == 0x200D || code == 0x00AD ||
+            code == 0x200E || code == 0x200F || code == 0x061C
+        ) return ""
+        if (code in 0x06F0..0x06F9) return ('0' + (code - 0x06F0)).toString()
+        if (code in 0x0660..0x0669) return ('0' + (code - 0x0660)).toString()
+        if (code == 0x00A0 || code == 0x2009 || code == 0x202F) return " "
+        normMap[c]?.let { return it.toString() }
+        return c.lowercase()
+    }
+
+    /** Normalized text plus a map from each normalized index back to its original index. */
+    data class NormalizedText(val text: String, val map: IntArray)
+
+    /**
+     * Normalize a string (upstream ReaderFind.Norm parity): fold
+     * every char with [normalizeChar], collapse whitespace runs
+     * to one space (mapped to the run's first char), trim the
+     * ends. The map lets a match found in the normalized text
+     * wrap the ORIGINAL text.
+     */
+    fun normalize(s: String): NormalizedText {
+        val t = StringBuilder(s.length)
+        val m = ArrayList<Int>(s.length)
+        var pendingSpace = -1
+        fun flushSpace() {
+            if (pendingSpace >= 0) {
+                t.append(' ')
+                m.add(pendingSpace)
+                pendingSpace = -1
+            }
+        }
+        for (i in s.indices) {
+            val folded = normalizeChar(s[i])
+            for (ch in folded) {
+                if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
+                    if (pendingSpace < 0) pendingSpace = i
+                } else {
+                    flushSpace()
+                    t.append(ch)
+                    m.add(i)
+                }
+            }
+        }
+        flushSpace()
+        if (t.isNotEmpty() && t[0] == ' ') {
+            t.deleteCharAt(0)
+            m.removeAt(0)
+        }
+        if (t.isNotEmpty() && t[t.length - 1] == ' ') {
+            t.deleteCharAt(t.length - 1)
+            m.removeAt(m.size - 1)
+        }
+        return NormalizedText(t.toString(), m.toIntArray())
+    }
+
+    /** Non-overlapping, Persian/Arabic-insensitive occurrence count. */
     fun countOccurrences(text: String, query: String): Int {
         if (query.isEmpty()) return 0
-        val hay = text.lowercase()
-        val needle = query.lowercase()
+        val needle = normalize(query).text
+        if (needle.isEmpty()) return 0
+        val hay = normalize(text).text
         var count = 0
         var at = 0
         while (true) {
@@ -85,22 +157,31 @@ object ReaderSearchText {
         }
     }
 
+    /** One whole-book search hit, in ORIGINAL text coordinates. */
+    data class Occurrence(val offset: Int, val length: Int)
+
     /**
-     * Non-overlapping, case-insensitive occurrence offsets in
-     * document order. [limit] stops early once that many offsets
-     * are found (whole-book search caps its result list, so it
-     * never needs the tail of a very common query).
+     * Non-overlapping occurrence offsets in document order, in
+     * ORIGINAL text coordinates ([Occurrence.length] is the span
+     * the match covers in the original text — it can differ from
+     * the query length when folding drops chars, e.g. a ZWNJ).
+     * [limit] stops early once that many hits are found
+     * (whole-book search caps its result list, so it never needs
+     * the tail of a very common query).
      */
-    fun findOccurrences(text: String, query: String, limit: Int = Int.MAX_VALUE): List<Int> {
+    fun findOccurrences(text: String, query: String, limit: Int = Int.MAX_VALUE): List<Occurrence> {
         if (query.isEmpty() || limit <= 0) return emptyList()
-        val hay = text.lowercase()
-        val needle = query.lowercase()
-        val out = mutableListOf<Int>()
+        val needle = normalize(query).text
+        if (needle.isEmpty()) return emptyList()
+        val nt = normalize(text)
+        val out = mutableListOf<Occurrence>()
         var at = 0
         while (out.size < limit) {
-            val found = hay.indexOf(needle, at)
+            val found = nt.text.indexOf(needle, at)
             if (found < 0) break
-            out += found
+            val start = nt.map[found]
+            val end = nt.map[found + needle.length - 1] + 1
+            out += Occurrence(start, end - start)
             at = found + needle.length
         }
         return out

@@ -114,6 +114,7 @@
     <string name="before_we_start_choose_a_name_for_yourself">Before we start, choose a name for yourself</string>
     <string name="app_name">Novelfa Reader</string>
     <string name="library_collections">Collections</string>
+    <string name="book_status">Book status</string>
     <string name="new_collection">New collection</string>
     <string name="new_collection_name">Collection name</string>
     <string name="collection_count">%1$d books</string>

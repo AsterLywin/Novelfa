@@ -52,6 +52,7 @@ import com.novelfa.reader.data.ImportException
 import com.novelfa.reader.data.SUPPORTED_BOOK_MIME_TYPES
 import com.novelfa.reader.domain.Book
 import com.novelfa.reader.settings.CollectionException
+import com.novelfa.reader.settings.CollectionManager
 import com.novelfa.reader.domain.isCompleted
 import com.novelfa.reader.domain.isInProgress
 import com.novelfa.reader.domain.progressPercent
@@ -346,49 +347,73 @@ fun CollectionsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            LazyColumn {
-                items(collections) { name ->
-                    val count = books.count { it.collectionName == name }
-                    Card(
-                        onClick = { selected = name },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(name, modifier = Modifier.weight(1f))
-                                // WPF CollectionRow.CountText parity: «N کتاب» / «خالی».
-                                Text(
-                                    if (count == 0) stringResource(R.string.collection_empty)
-                                    else countFmt.format(count)
+            // Upstream status tab parity: the 5 ready-made status
+            // collections group under a «وضعیت کتاب» header, in the
+            // upstream order; the user's own collections follow.
+            val statusCollections = collections
+                .filter { it in CollectionManager.STATUS_PRESET_NAMES }
+                .sortedBy { name ->
+                    CollectionManager.STATUS_PRESETS.indexOfFirst { it.first == name || it.second == name }
+                }
+            val otherCollections = collections.filter { it !in CollectionManager.STATUS_PRESET_NAMES }
+            @Composable
+            fun CollectionCard(name: String) {
+                val count = books.count { it.collectionName == name }
+                Card(
+                    onClick = { selected = name },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(name, modifier = Modifier.weight(1f))
+                            // WPF CollectionRow.CountText parity: «N کتاب» / «خالی».
+                            Text(
+                                if (count == 0) stringResource(R.string.collection_empty)
+                                else countFmt.format(count)
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = {
+                                importTarget = name
+                                importPicker.launch(
+                                    SUPPORTED_BOOK_MIME_TYPES
                                 )
+                            }) {
+                                Text(stringResource(R.string.add_book))
                             }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                TextButton(onClick = {
-                                    importTarget = name
-                                    importPicker.launch(
-                                        SUPPORTED_BOOK_MIME_TYPES
-                                    )
-                                }) {
-                                    Text(stringResource(R.string.add_book))
-                                }
-                                TextButton(onClick = { renameTarget = name }) {
-                                    Text(stringResource(R.string.rename))
-                                }
-                                TextButton(onClick = { deleteTarget = name }) {
-                                    Text(stringResource(R.string.delete))
-                                }
+                            TextButton(onClick = { renameTarget = name }) {
+                                Text(stringResource(R.string.rename))
+                            }
+                            TextButton(onClick = { deleteTarget = name }) {
+                                Text(stringResource(R.string.delete))
                             }
                         }
                     }
                 }
+            }
+            LazyColumn {
+                if (statusCollections.isNotEmpty()) {
+                    item {
+                        Text(
+                            stringResource(R.string.book_status),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    items(statusCollections) { name -> CollectionCard(name) }
+                }
+                items(otherCollections) { name -> CollectionCard(name) }
             }
         } else {
             val name = selected!!

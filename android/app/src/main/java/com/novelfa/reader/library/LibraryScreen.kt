@@ -182,11 +182,11 @@ fun LibraryScreen(
     }
     var sort by rememberSaveable { mutableStateOf(SortMode.DEFAULT) }
     // Secret theme codes (WPF TrackSecretKeys parity): typing BEAKO /
-    // EMT / TEA / TSUGI unlocks the hidden themes; the code letters are
+    // EMT / TEA / TSUGI / PEIDE unlocks the hidden themes; the code letters are
     // scrubbed from the search box like the desktop client does.
     var secretUnlocked by remember { mutableStateOf<CharacterTheme?>(null) }
     val secretCodes = remember {
-        listOf("BEAKO" to "beatrice", "EMT" to "emilia", "TEA" to "echidna", "TSUGI" to "tsugi")
+        listOf("BEAKO" to "beatrice", "EMT" to "emilia", "TEA" to "echidna", "TSUGI" to "tsugi", "PEIDE" to "reif")
     }
     val context = LocalContext.current
     // PrefsStore must be built on the application context: the DataStore
@@ -932,6 +932,8 @@ fun LibraryScreen(
                             selected = book.id in selection,
                             // Bite mark: completed books only, tsugi theme only.
                             showBite = charThemeId == "tsugi" && isCompleted(book),
+                            // Lava cracks: completed books only, reif theme only.
+                            showLava = charThemeId == "reif" && isCompleted(book),
                             showStitch = charThemeId == "tsugi",
                         )
                     }

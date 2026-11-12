@@ -577,12 +577,12 @@ fun ReaderScreen(
             val results = mutableListOf<SearchResult>()
             for (i in v.chapters.indices) {
                 val text = runCatching { v.plainText(i) }.getOrNull() ?: continue
-                val offsets = ReaderSearchText.findOccurrences(
+                val occurrences = ReaderSearchText.findOccurrences(
                     text, q, ReaderSearchText.MAX_SEARCH_RESULTS - results.size
                 )
-                for ((j, off) in offsets.withIndex()) {
-                    val (snippet, matchStart) = ReaderSearchText.snippetFor(text, off, q.length)
-                    results += SearchResult(i, j, snippet, matchStart, q.length)
+                for ((j, occ) in occurrences.withIndex()) {
+                    val (snippet, matchStart) = ReaderSearchText.snippetFor(text, occ.offset, occ.length)
+                    results += SearchResult(i, j, snippet, matchStart, occ.length)
                     if (results.size >= ReaderSearchText.MAX_SEARCH_RESULTS) break
                 }
                 if (results.size >= ReaderSearchText.MAX_SEARCH_RESULTS) break

@@ -12,10 +12,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.sin
@@ -39,7 +42,15 @@ fun ParticleLayer(
     light: Boolean = false
 ) {
     if (!enabled || type.isBlank()) return
-    val p = paramsFor(type)
+    // Upstream ThemeParticles.cs: the «سوبارو · غرور» (reif) theme burns
+    // hotter — more, bigger, faster embers with a glowing core, a
+    // flicker, and a heat glow along the bottom of the screen.
+    val inferno = theme?.id == "reif" && type == "embers"
+    val p = if (inferno) {
+        KindParams(22, 4f, 10f, 5f, 12f, 0.9f, true, 26f, false, null)
+    } else {
+        paramsFor(type)
+    }
     val pal = theme?.palette(light)
     // Windows: b1 = accent, b2 = aura2, b3 = light ? accent : text.
     val b1 = pal?.let { parseHex(it.accent, Color(0xFFA78BFA)) } ?: fallbackColors(type)[0]
@@ -53,7 +64,7 @@ fun ParticleLayer(
     val glyphs = remember(type) {
         p.glyph?.let { g -> GLYPH_DATA[g]?.let { parseEmblemPath(it) } }
     }
-    val seeds = remember(type) { List(p.count) { ParticleSeed(it, p) } }
+    val seeds = remember(type, inferno) { List(p.count) { ParticleSeed(it, p) } }
     var tick by remember { mutableLongStateOf(0L) }
     LaunchedEffect(type) {
         while (true) {
@@ -64,7 +75,27 @@ fun ParticleLayer(
     Canvas(modifier = modifier.fillMaxSize()) {
         val t = tick * 0.033f
         for (s in seeds) {
-            drawSeed(s, p, t, emblem, glyphs, b1, b2, b3, peak, type)
+            drawSeed(s, p, t, emblem, glyphs, b1, b2, b3, peak, type, inferno)
+        }
+        if (inferno) {
+            // Heat glow along the bottom (upstream AddInferno): a
+            // vertical gradient, transparent at the top, accent at
+            // 65%, aura2 at the bottom, pulsing 0.55 -> 1.0 over
+            // 3.2s up and 3.2s down (sine ease, auto-reverse).
+            val glowH = maxOf(120.dp.toPx(), size.height * 0.34f)
+            val k = if (light) 0.55f else 1.0f
+            val pulse = 0.775f + 0.225f * sin(2f * PI.toFloat() * t / 6.4f - PI.toFloat() / 2f)
+            drawRect(
+                brush = Brush.verticalGradient(
+                    0.0f to b1.copy(alpha = 0f),
+                    0.65f to b1.copy(alpha = (70f * k / 255f) * pulse),
+                    1.0f to b2.copy(alpha = (130f * k / 255f) * pulse),
+                    startY = size.height - glowH,
+                    endY = size.height
+                ),
+                topLeft = Offset(0f, size.height - glowH),
+                size = Size(size.width, glowH)
+            )
         }
     }
 }
@@ -131,6 +162,8 @@ private class ParticleSeed(index: Int, p: KindParams) {
     val spinDur = 7f + rnd.nextFloat() * 8f
     val flapDur = 0.28f + rnd.nextFloat() * 0.17f
     val twinkleDur = 1f + rnd.nextFloat() * 1.2f
+    /** Inferno ember flicker cycle, seconds (upstream Rand(0.35, 0.9)). */
+    val flickerDur = 0.35f + rnd.nextFloat() * 0.55f
     val colorIdx = index
 }
 
@@ -153,7 +186,8 @@ private fun DrawScope.drawSeed(
     b2: Color,
     b3: Color,
     peak: Float,
-    type: String
+    type: String,
+    inferno: Boolean = false
 ) {
     val w = size.width
     val h = size.height
@@ -214,8 +248,29 @@ private fun DrawScope.drawSeed(
         }
         else -> {
             // Embers: soft dot (no glyph).
-            drawCircle(c.copy(alpha = alpha * 0.25f), radius = s.size * 1.8f, center = Offset(x, y))
-            drawCircle(c, radius = s.size * 0.6f, center = Offset(x, y))
+            if (inferno) {
+                // Glowing ember (upstream EmberGlow): a radial
+                // gradient — hot core (#FFF1C2 every 5th, else
+                // aura2), accent middle, transparent edge — with
+                // a flicker scale 0.4 -> 1.25, auto-reverse.
+                val flick = 0.4f + 0.85f * (0.5f + 0.5f * sin(2f * PI.toFloat() * t / s.flickerDur + s.swayPhase))
+                val radius = s.size * 1.8f * flick
+                val core = if (s.colorIdx % 5 == 0) Color(0xFFFFF1C2) else b2
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        0.0f to core.copy(alpha = alpha),
+                        0.45f to b1.copy(alpha = alpha),
+                        1.0f to b1.copy(alpha = 0f),
+                        center = Offset(x, y),
+                        radius = radius
+                    ),
+                    radius = radius,
+                    center = Offset(x, y)
+                )
+            } else {
+                drawCircle(c.copy(alpha = alpha * 0.25f), radius = s.size * 1.8f, center = Offset(x, y))
+                drawCircle(c, radius = s.size * 0.6f, center = Offset(x, y))
+            }
         }
     }
 }

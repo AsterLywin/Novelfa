@@ -392,6 +392,42 @@ private fun BiteOverlay(modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * Lava cracks on a completed book's cover (upstream ThemeLavaVisibility
+ * parity): the burnt-away corner with a glowing ember edge. Only shown
+ * with the «سوبارو · غرور» (reif) theme.
+ */
+@Composable
+private fun LavaOverlay(modifier: Modifier = Modifier) {
+    // Windows fills the burnt corner with the window background (like
+    // the bite) and strokes its torn edge with the accent (the ember rim).
+    val bg = MaterialTheme.colorScheme.background
+    val accent = MaterialTheme.colorScheme.primary
+    Canvas(modifier = modifier) {
+        val w = size.width
+        // Windows 24x24 lava corner: a jagged burnt triangle.
+        val edge = listOf(
+            24f to 0f, 16f to 6f, 19f to 11f, 10f to 14f, 12f to 19f, 6f to 18f, 0f to 24f
+        )
+        val k = w / 24f
+        val fill = Path().apply {
+            moveTo(0f, 0f)
+            edge.forEach { (x, y) -> lineTo(x * k, y * k) }
+            close()
+        }
+        drawPath(fill, bg)
+        val rim = Path().apply {
+            edge.forEachIndexed { i, (x, y) ->
+                if (i == 0) moveTo(x * k, y * k) else lineTo(x * k, y * k)
+            }
+        }
+        drawPath(
+            rim, accent,
+            style = Stroke(width = 1.4f * k, join = StrokeJoin.Miter)
+        )
+    }
+}
+
 @Composable
 private fun ProfileHeader(
     name: String,
@@ -883,6 +919,9 @@ fun BookCard(
     // Upstream f352105: bite taken out of completed books' covers, visible
     // only with the «سوبارو · شکم‌پرستی» (tsugi) character theme.
     showBite: Boolean = false,
+    // Upstream b2d4a9f: lava cracks on completed books' covers, visible
+    // only with the «سوبارو · غرور» (reif) character theme.
+    showLava: Boolean = false,
     // Tsugi stitch strip under the cover (Windows grid-card parity).
     showStitch: Boolean = false
 ) {
@@ -929,6 +968,13 @@ fun BookCard(
                 )
                 if (showBite) {
                     BiteOverlay(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .size(64.dp)
+                    )
+                }
+                if (showLava) {
+                    LavaOverlay(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .size(64.dp)

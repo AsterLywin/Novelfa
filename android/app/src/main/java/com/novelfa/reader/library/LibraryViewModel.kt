@@ -5,6 +5,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
 import com.novelfa.reader.data.BookRepository
 import com.novelfa.reader.domain.Book
 import com.novelfa.reader.data.Importer
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Batch-import parallelism cap (step 4): 2 in flight. SAF copies
@@ -254,6 +256,21 @@ class LibraryViewModel(
             }
         }
     )
+
+    init {
+        // Upstream CollectionRegistry.EnsurePresets parity: the 5
+        // ready-made status collections are created once, in the
+        // current UI language; a preset the user deletes never
+        // comes back (the flag stays set).
+        viewModelScope.launch {
+            val p = prefs ?: return@launch
+            if (p.collectionPresetsSeeded.first()) return@launch
+            val english = p.lang.first().startsWith("en")
+            val names = CollectionManager.STATUS_PRESETS.map { if (english) it.second else it.first }
+            collections.ensureStatusPresets(names)
+            p.setCollectionPresetsSeeded()
+        }
+    }
 
     fun filtered(tab: Tab, query: String): Flow<List<Book>> =
         combine(repo.books(), fileNameTitle) { list, useFileName ->

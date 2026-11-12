@@ -2086,6 +2086,44 @@ object HtmlBuilder {
         while ((n = w.nextNode())) out.push(n);
         return out;
     }
+    // Persian/Arabic-insensitive matching (upstream ReaderFind parity):
+    // Arabic ي/ك fold to Persian ی/ک, diacritics/tatweel/half-space
+    // vanish, Persian + Arabic-Indic digits fold to ASCII, and
+    // whitespace runs collapse to one space. rdrNorm returns the
+    // normalized text plus a map from each normalized index back
+    // to its original index, so marks wrap the ORIGINAL text.
+    var RDR_NORM_MAP = {'ي':'ی','ى':'ی','ے':'ی','ك':'ک','أ':'ا','إ':'ا','آ':'ا','ٱ':'ا','ؤ':'و','ة':'ه','ۀ':'ه','ہ':'ه','ھ':'ه'};
+    function rdrNormChar(ch) {
+        var c = ch.charCodeAt(0);
+        if ((c >= 0x064B && c <= 0x065F) || c === 0x0670 || c === 0x0640 || c === 0x200C || c === 0x200D || c === 0x00AD || c === 0x200E || c === 0x200F || c === 0x061C) return '';
+        if (c >= 0x06F0 && c <= 0x06F9) return String.fromCharCode(c - 0x06F0 + 48);
+        if (c >= 0x0660 && c <= 0x0669) return String.fromCharCode(c - 0x0660 + 48);
+        if (c === 0x00A0 || c === 0x2009 || c === 0x202F) return ' ';
+        if (RDR_NORM_MAP[ch]) return RDR_NORM_MAP[ch];
+        return ch.toLowerCase();
+    }
+    function rdrNorm(s) {
+        var t = '', m = [], pendingSpace = -1;
+        function flushSpace() {
+            if (pendingSpace >= 0) { t += ' '; m.push(pendingSpace); pendingSpace = -1; }
+        }
+        for (var i = 0; i < s.length; i++) {
+            var c = rdrNormChar(s.charAt(i));
+            for (var z = 0; z < c.length; z++) {
+                var ch2 = c.charAt(z);
+                if (ch2 === ' ' || ch2 === '\t' || ch2 === '\n' || ch2 === '\r') {
+                    if (pendingSpace < 0) pendingSpace = i;
+                } else {
+                    flushSpace();
+                    t += ch2; m.push(i);
+                }
+            }
+        }
+        flushSpace();
+        if (t.charAt(0) === ' ') { t = t.slice(1); m = m.slice(1); }
+        if (t.length && t.charAt(t.length - 1) === ' ') { t = t.slice(0, -1); m = m.slice(0, -1); }
+        return { t: t, m: m };
+    }
     function clearMarks(cls, root) {
         var scope = root || document;
         var marks = scope.querySelectorAll('mark.' + cls);
@@ -2108,26 +2146,30 @@ object HtmlBuilder {
         window.__rdrFindChap = chap;
         window.__rdrFindCur = -1;
         if (!q) return 0;
-        var needle = q.toLowerCase();
+        var needle = rdrNorm(q).t;
+        if (!needle) return 0;
         var nodes = textNodes(searchRoot(chap));
         var count = 0;
         for (var ni = 0; ni < nodes.length; ni++) {
-            var node = nodes[ni], text = node.nodeValue, low = text.toLowerCase();
+            var node = nodes[ni], text = node.nodeValue, nt = rdrNorm(text);
             var hits = [], at = 0, k;
-            while ((k = low.indexOf(needle, at)) >= 0) { hits.push(k); at = k + needle.length; }
+            while ((k = nt.t.indexOf(needle, at)) >= 0) {
+                hits.push([nt.m[k], nt.m[k + needle.length - 1] + 1]);
+                at = k + needle.length;
+            }
             if (!hits.length) continue;
             var parent = node.parentNode;
             if (!parent) continue;
             var frag = document.createDocumentFragment(), last = 0;
             for (var h = 0; h < hits.length; h++) {
-                var s = hits[h];
+                var s = hits[h][0], e = hits[h][1];
                 if (s > last) frag.appendChild(document.createTextNode(text.slice(last, s)));
                 var mark = document.createElement('mark');
                 mark.className = 'rdr-find';
                 mark.setAttribute('data-find', String(count++));
-                mark.appendChild(document.createTextNode(text.slice(s, s + needle.length)));
+                mark.appendChild(document.createTextNode(text.slice(s, e)));
                 frag.appendChild(mark);
-                last = s + needle.length;
+                last = e;
             }
             if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
             parent.replaceChild(frag, node);

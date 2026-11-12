@@ -114,6 +114,7 @@
     <string name="before_we_start_choose_a_name_for_yourself">قبل از شروع، یه اسم برای خودت انتخاب کن</string>
     <string name="app_name">ناول‌فا ریدر</string>
     <string name="library_collections">مجموعه‌ها</string>
+    <string name="book_status">وضعیت کتاب</string>
     <string name="new_collection">مجموعه جدید</string>
     <string name="new_collection_name">اسم مجموعه</string>
     <string name="collection_count">%1$d کتاب</string>
