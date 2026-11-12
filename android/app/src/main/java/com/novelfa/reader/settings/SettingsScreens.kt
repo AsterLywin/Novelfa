@@ -932,7 +932,12 @@ private fun RankSection(viewModel: SettingsViewModel) {
                 XpRank.eternityMarkFor(level.eternityMarks + 1).displayName(isEnglishUi)
             }
             Text(
-                text = stringResource(R.string.xp_more_to, level.xpToNext, nextStepName),
+                text = stringResource(
+                    R.string.xp_more_to,
+                    level.xpIntoStep,
+                    level.xpStepTotal,
+                    nextStepName
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

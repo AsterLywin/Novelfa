@@ -309,7 +309,7 @@
     <string name="guide_backup_body">Back up and restore from Settings, and pick a character theme — animated particles only appear with themes.</string>
     <string name="xp_total_label">Total XP: %1$d</string>
     <string name="xp_title_of">Title %1$d of 12</string>
-    <string name="xp_more_to">%1$d more XP to “%2$s”</string>
+    <string name="xp_more_to">%1$d of %2$d XP to “%3$s”</string>
     <string name="xp_legacy_rank">Legacy rank (finished books): %1$s</string>
     <string name="xp_next_theme">Next theme: %1$s</string>
     <string name="ranks_title">Ranks</string>

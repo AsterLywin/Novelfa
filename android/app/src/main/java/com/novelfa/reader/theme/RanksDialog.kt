@@ -177,7 +177,12 @@ private fun RankTitleRow(title: XpTitle, level: XpLevel, isEnglishUi: Boolean) {
                         XpRank.eternityMarkFor(level.eternityMarks + 1).displayName(isEnglishUi)
                     }
                     Text(
-                        text = stringResource(R.string.xp_more_to, level.xpToNext, nextName),
+                        text = stringResource(
+                            R.string.xp_more_to,
+                            level.xpIntoStep,
+                            level.xpStepTotal,
+                            nextName
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -241,7 +246,8 @@ private fun RankMarkRow(mark: EternityMark, level: XpLevel, isEnglishUi: Boolean
                     Text(
                         text = stringResource(
                             R.string.xp_more_to,
-                            level.xpToNext,
+                            level.xpIntoStep,
+                            level.xpStepTotal,
                             mark.displayName(isEnglishUi)
                         ),
                         style = MaterialTheme.typography.bodySmall,

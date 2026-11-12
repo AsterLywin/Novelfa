@@ -54,7 +54,14 @@ data class XpLevel(
     /** XP still needed for the next title (or next mark past the cap). */
     val xpToNext: Int,
     /** 0.0..1.0 progress inside the current title (or towards the next mark). */
-    val progress: Double
+    val progress: Double,
+    /** XP already collected inside the current step: inside the title
+     * below the cap, or inside the current mark past the cap. Shown
+     * as "X of Y XP to …" so the total is never left unstated. */
+    val xpIntoStep: Int,
+    /** XP the current step needs in total: the span to the next title,
+     * or MARK_STEP_XP (10,000) per mark past the cap. */
+    val xpStepTotal: Int
 ) {
     val mark: EternityMark? get() = if (eternityMarks >= 1) {
         XpRank.eternityMarkFor(eternityMarks)
@@ -153,7 +160,9 @@ object XpRank {
                 stars = stars,
                 eternityMarks = 0,
                 xpToNext = nextMin - xp,
-                progress = fraction.coerceIn(0.0, 1.0)
+                progress = fraction.coerceIn(0.0, 1.0),
+                xpIntoStep = xp - title.minXp,
+                xpStepTotal = span
             )
         }
         val over = xp - CAP_XP
@@ -166,7 +175,9 @@ object XpRank {
             stars = 5,
             eternityMarks = marks,
             xpToNext = MARK_STEP_XP - intoMark,
-            progress = intoMark.toDouble() / MARK_STEP_XP.toDouble()
+            progress = intoMark.toDouble() / MARK_STEP_XP.toDouble(),
+            xpIntoStep = intoMark,
+            xpStepTotal = MARK_STEP_XP
         )
     }
 

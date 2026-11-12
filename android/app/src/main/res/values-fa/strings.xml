@@ -309,7 +309,7 @@
     <string name="guide_backup_body">از تنظیمات پشتیبان بگیر و برگردان، و یک تم شخصیت انتخاب کن؛ ذرات متحرک فقط با تم‌ها نمایش داده می‌شوند.</string>
     <string name="xp_total_label">مجموع XP: %1$d</string>
     <string name="xp_title_of">عنوان %1$d از ۱۲</string>
-    <string name="xp_more_to">%1$d XP دیگه تا «%2$s»</string>
+    <string name="xp_more_to">%1$d از %2$d XP تا «%3$s»</string>
     <string name="xp_legacy_rank">رتبه‌ی قدیمی (کتاب تمام‌شده): %1$s</string>
     <string name="xp_next_theme">تم بعدی: %1$s</string>
     <string name="ranks_title">رنک‌ها</string>
