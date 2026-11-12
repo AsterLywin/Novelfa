@@ -2211,6 +2211,7 @@ fun ReaderScreen(
         // Windows parity: character-theme particles on the reading page
         // (ThemeParticles.cs draws over the whole window including reader).
         val particlesOn by prefs.themeParticles.collectAsState(initial = false)
+        val particlesLowEnd by prefs.themeParticlesLowEnd.collectAsState(initial = false)
         val readerCharThemeId by prefs.charTheme.collectAsState(initial = "")
         val readerParticleType = remember(readerCharThemeId) {
             CharacterThemes.find(readerCharThemeId)?.particle.orEmpty()
@@ -2224,7 +2225,8 @@ fun ReaderScreen(
                 type = readerParticleType,
                 enabled = particlesOn,
                 theme = readerParticleTheme,
-                light = readerThemeKey == "light"
+                light = readerThemeKey == "light",
+                lowEnd = particlesLowEnd
             )
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },

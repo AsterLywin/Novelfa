@@ -31,6 +31,11 @@ import kotlin.random.Random
  * wing-flap for butterflies (drawn from the character emblem path),
  * twinkle for sparkles, colors from the character palette
  * (accent / aura2 / text-or-accent), peak dimmed in light mode.
+ * Shape-faithful to WPF: embers are flat solid dots (Ellipse
+ * Width = Height = size, no glow halo); the sway/flap/twinkle/
+ * flicker sines run at the WPF AutoReverse round-trip period
+ * (2x the animation duration). `lowEnd` halves the particle
+ * count (min 4), like WPF PerfHint.LowEnd.
  * ~30fps, hit-test invisible (pure Canvas draw).
  */
 @Composable
@@ -39,7 +44,8 @@ fun ParticleLayer(
     enabled: Boolean,
     modifier: Modifier = Modifier,
     theme: CharacterTheme? = null,
-    light: Boolean = false
+    light: Boolean = false,
+    lowEnd: Boolean = false
 ) {
     if (!enabled || type.isBlank()) return
     // Upstream ThemeParticles.cs: the «سوبارو · غرور» (reif) theme burns
@@ -64,7 +70,11 @@ fun ParticleLayer(
     val glyphs = remember(type) {
         p.glyph?.let { g -> GLYPH_DATA[g]?.let { parseEmblemPath(it) } }
     }
-    val seeds = remember(type, inferno) { List(p.count) { ParticleSeed(it, p) } }
+    val seeds = remember(type, inferno, lowEnd) {
+        // WPF PerfHint.LowEnd: half the particles, at least 4.
+        val count = if (lowEnd) maxOf(4, p.count / 2) else p.count
+        List(count) { ParticleSeed(it, p) }
+    }
     var tick by remember { mutableLongStateOf(0L) }
     LaunchedEffect(type) {
         while (true) {
@@ -197,8 +207,9 @@ private fun DrawScope.drawSeed(
     if (cyc < 0) cyc += 1f
     val span = h + 70f
     val y = if (p.rising) (h + 30f) - cyc * span else -40f + cyc * span
-    // Sway: sine ease auto-reverse equivalent.
-    val x = s.x0 * w + s.swayAmp * sin(2f * PI.toFloat() * (t + s.t0) / s.swayPeriod + s.swayPhase)
+    // Sway: WPF Anim(-amp, amp, D) with SineEase + AutoReverse — one
+    // round trip takes 2D, so the sine period is 2 * swayPeriod.
+    val x = s.x0 * w + s.swayAmp * sin(2f * PI.toFloat() * (t + s.t0) / (2f * s.swayPeriod) + s.swayPhase)
     // Fade envelope: 0 -> peak by 12%, hold to 88%, -> 0.
     val alpha = peak * when {
         cyc < 0.12f -> cyc / 0.12f
@@ -214,7 +225,9 @@ private fun DrawScope.drawSeed(
             val bounds = emblem.getBounds()
             val bw = bounds.width.takeIf { it > 0f } ?: 100f
             val k = s.size / bw
-            val flap = 1f - 0.7f * (0.5f + 0.5f * sin(2f * PI.toFloat() * t / s.flapDur + s.swayPhase))
+            // Wing flap: WPF Anim(1, 0.3, flapDur) AutoReverse — one
+            // round trip takes 2 * flapDur.
+            val flap = 1f - 0.7f * (0.5f + 0.5f * sin(2f * PI.toFloat() * t / (2f * s.flapDur) + s.swayPhase))
             withTransform({
                 translate(x, y)
                 scale(scaleX = k * flap, scaleY = k, pivot = Offset.Zero)
@@ -236,8 +249,10 @@ private fun DrawScope.drawSeed(
                 translate(-10f, -10f)
             }) {
                 if (type == "sparkles") {
-                    // Twinkle: scale pulsation 0.45 -> 1.1.
-                    val tw = 0.45f + 0.65f * (0.5f + 0.5f * sin(2f * PI.toFloat() * t / s.twinkleDur + s.swayPhase))
+                    // Twinkle: scale pulsation 0.45 -> 1.1, WPF
+                    // Anim(0.45, 1.1, twinkleDur) AutoReverse —
+                    // one round trip takes 2 * twinkleDur.
+                    val tw = 0.45f + 0.65f * (0.5f + 0.5f * sin(2f * PI.toFloat() * t / (2f * s.twinkleDur) + s.swayPhase))
                     withTransform({ scale(tw, tw, Offset(10f, 10f)) }) {
                         drawPath(glyph, c)
                     }
@@ -247,14 +262,17 @@ private fun DrawScope.drawSeed(
             }
         }
         else -> {
-            // Embers: soft dot (no glyph).
+            // Embers: a flat solid dot — exactly the WPF Ellipse
+            // (Width = Height = size, solid fill, no glow halo).
             if (inferno) {
                 // Glowing ember (upstream EmberGlow): a radial
                 // gradient — hot core (#FFF1C2 every 5th, else
-                // aura2), accent middle, transparent edge — with
-                // a flicker scale 0.4 -> 1.25, auto-reverse.
-                val flick = 0.4f + 0.85f * (0.5f + 0.5f * sin(2f * PI.toFloat() * t / s.flickerDur + s.swayPhase))
-                val radius = s.size * 1.8f * flick
+                // aura2), accent middle, transparent edge — on the
+                // same size-diameter dot, with a flicker scale
+                // 0.4 -> 1.25 (WPF AutoReverse, round trip
+                // 2 * flickerDur).
+                val flick = 0.4f + 0.85f * (0.5f + 0.5f * sin(2f * PI.toFloat() * t / (2f * s.flickerDur) + s.swayPhase))
+                val radius = s.size * 0.5f * flick
                 val core = if (s.colorIdx % 5 == 0) Color(0xFFFFF1C2) else b2
                 drawCircle(
                     brush = Brush.radialGradient(
@@ -268,8 +286,7 @@ private fun DrawScope.drawSeed(
                     center = Offset(x, y)
                 )
             } else {
-                drawCircle(c.copy(alpha = alpha * 0.25f), radius = s.size * 1.8f, center = Offset(x, y))
-                drawCircle(c, radius = s.size * 0.6f, center = Offset(x, y))
+                drawCircle(c, radius = s.size / 2f, center = Offset(x, y))
             }
         }
     }

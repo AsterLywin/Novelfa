@@ -288,6 +288,7 @@
     <string name="chapter_fallback">بخش %1$d</string>
     <string name="no_character_theme_tagline">برگشت به رنگ ساده‌ی برنامه</string>
     <string name="animated_particles">ذرات متحرک</string>
+    <string name="fewer_particles">ذره‌های کمتر (گوشی ضعیف)</string>
     <string name="particles_no_theme_title">بدون تم، ذرات دیده نمی‌شوند</string>
     <string name="particles_no_theme_message">ذرات متحرک فقط برای تم‌های شخصیت طراحی شده‌اند. انتخابت ذخیره شد و به‌محض انتخاب یک تم شخصیت، ذرات نمایش داده می‌شوند.</string>
     <string name="view_guide">مشاهده‌ی راهنما</string>

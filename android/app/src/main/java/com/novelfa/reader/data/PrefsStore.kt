@@ -56,6 +56,7 @@ class PrefsStore(private val context: Context) {
         // WPF parity: animated character-theme particle layer (default off,
         // like the desktop client's "0").
         val THEME_PARTICLES = booleanPreferencesKey("themeParticles")
+        val THEME_PARTICLES_LOW_END = booleanPreferencesKey("themeParticlesLowEnd")
         // Status preset collections seeded once (upstream CollectionPresets flag).
         val COLLECTION_PRESETS = booleanPreferencesKey("collectionPresets")
         val GUIDE_SHOWN = booleanPreferencesKey("guideShown")
@@ -196,6 +197,9 @@ class PrefsStore(private val context: Context) {
         context.dataStore.data.map { it[FINISHED_BOOKS_RESTORED] ?: 0 }
     /** Animated character-theme particles behind the library (default off). */
     val themeParticles: Flow<Boolean> = context.dataStore.data.map { it[THEME_PARTICLES] ?: false }
+    /** Weak-phone mode: halve the particle count, like WPF PerfHint.LowEnd (default off). */
+    val themeParticlesLowEnd: Flow<Boolean> =
+        context.dataStore.data.map { it[THEME_PARTICLES_LOW_END] ?: false }
     /** Status preset collections seeded once (upstream CollectionPresets flag). */
     val collectionPresetsSeeded: Flow<Boolean> =
         context.dataStore.data.map { it[COLLECTION_PRESETS] ?: false }
@@ -349,6 +353,10 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setThemeParticles(value: Boolean) {
         context.dataStore.edit { it[THEME_PARTICLES] = value }
+    }
+
+    suspend fun setThemeParticlesLowEnd(value: Boolean) {
+        context.dataStore.edit { it[THEME_PARTICLES_LOW_END] = value }
     }
 
     suspend fun setCollectionPresetsSeeded() {

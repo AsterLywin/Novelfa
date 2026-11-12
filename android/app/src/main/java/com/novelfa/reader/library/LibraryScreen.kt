@@ -663,6 +663,7 @@ fun LibraryScreen(
     // enabled them in the theme picker.
     val charThemeId by prefs.charTheme.collectAsState(initial = "")
     val particlesOn by prefs.themeParticles.collectAsState(initial = false)
+    val particlesLowEnd by prefs.themeParticlesLowEnd.collectAsState(initial = false)
     val particleType = remember(charThemeId) {
         CharacterThemes.find(charThemeId)?.particle.orEmpty()
     }
@@ -674,7 +675,8 @@ fun LibraryScreen(
             type = particleType,
             enabled = particlesOn,
             theme = particleTheme,
-            light = appThemeKey == "light"
+            light = appThemeKey == "light",
+            lowEnd = particlesLowEnd
         )
 
         // Emblem watermarks behind the content (Windows ThemeArt parity:

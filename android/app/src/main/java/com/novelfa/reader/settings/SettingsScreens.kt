@@ -484,6 +484,7 @@ private fun AccentSection(viewModel: SettingsViewModel) {
 private fun CharacterSection(viewModel: SettingsViewModel) {
     val charTheme by viewModel.charTheme.collectAsState(initial = "")
     val particles by viewModel.themeParticles.collectAsState(initial = false)
+    val lowEndParticles by viewModel.themeParticlesLowEnd.collectAsState(initial = false)
     val scope = rememberCoroutineScope()
     var open by remember { mutableStateOf(false) }
     val rank = remember { viewModel.rankService() }
@@ -518,6 +519,10 @@ private fun CharacterSection(viewModel: SettingsViewModel) {
             particlesEnabled = particles,
             onToggleParticles = { enabled ->
                 scope.launch { viewModel.setThemeParticles(enabled) }
+            },
+            lowEndParticles = lowEndParticles,
+            onToggleLowEndParticles = { enabled ->
+                scope.launch { viewModel.setThemeParticlesLowEnd(enabled) }
             },
             unlockInfoLoader = { theme -> viewModel.themeUnlockInfo(theme, isEnglishUi) },
             // Windows parity («باز شد · با یک راز ✦»): the line shows

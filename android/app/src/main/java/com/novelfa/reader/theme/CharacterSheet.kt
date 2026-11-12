@@ -77,6 +77,9 @@ fun CharacterSheet(
     onDismiss: () -> Unit,
     particlesEnabled: Boolean = false,
     onToggleParticles: (Boolean) -> Unit = {},
+    /** Weak-phone mode: halve the particle count (WPF PerfHint.LowEnd). */
+    lowEndParticles: Boolean = false,
+    onToggleLowEndParticles: (Boolean) -> Unit = {},
     /**
      * Loads unlock conditions for a theme on demand. When provided,
      * tapping a locked row loads its conditions and opens the
@@ -155,7 +158,8 @@ fun CharacterSheet(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                // WPF parity: particle layer toggle in the picker footer.
+                // WPF parity: particle layer toggle in the picker footer,
+                // plus the weak-phone mode (half the particles) below it.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -178,6 +182,21 @@ fun CharacterSheet(
                             if (checked && activeId == null) showParticlesNotice = true
                             onToggleParticles(checked)
                         }
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.fewer_particles),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = lowEndParticles,
+                        enabled = particlesEnabled,
+                        onCheckedChange = { checked -> onToggleLowEndParticles(checked) }
                     )
                 }
             }
