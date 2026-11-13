@@ -1,5 +1,6 @@
 package com.novelfa.reader.parser
 
+import android.util.Log
 import com.novelfa.reader.model.ParsedBook
 import java.io.File
 import kotlinx.coroutines.currentCoroutineContext
@@ -125,6 +126,7 @@ object BookConverter {
                     // the whole text parse instead of stopping.
                     throw e
                 } catch (e: Exception) {
+                    Log.w("NovelfaBookConverter", "mixed PDF+text build failed, rebuilding text book only", e)
                     // A failed mixed build must not lose the text book
                     // that already parsed: rebuild it cleanly and
                     // return that instead of failing the whole import.

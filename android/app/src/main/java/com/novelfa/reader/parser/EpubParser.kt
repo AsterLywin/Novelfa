@@ -30,7 +30,8 @@ object EpubParser {
         val dbf = secureDocumentBuilderFactory()
         val opfFile = findOpfFile(dbf, extractDir)
             ?: throw IllegalArgumentException("No OPF package document found in EPUB")
-        val opfFolder = opfFile.parentFile!!
+        val opfFolder = opfFile.parentFile
+            ?: throw IllegalArgumentException("EPUB package document has no parent folder")
         val odoc = try {
             parseXml(dbf, opfFile)
         } catch (e: Throwable) {

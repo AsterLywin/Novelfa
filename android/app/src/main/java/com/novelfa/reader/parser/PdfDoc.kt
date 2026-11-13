@@ -1,5 +1,6 @@
 package com.novelfa.reader.parser
 
+import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
@@ -957,6 +958,7 @@ internal class PdfDoc(private val bytes: ByteArray, private val password: String
                 inflater.end()
                 if (out.size() > 0) return out.toByteArray()
             } catch (e: Exception) {
+                Log.w("NovelfaPdfDoc", "inflate failed, trying other wrapping", e)
                 // Try the other wrapping.
             }
         }
@@ -1460,28 +1462,38 @@ internal class PdfDoc(private val bytes: ByteArray, private val password: String
                         }
                         "Td", "TD" -> {
                             if (numCount >= 2) {
-                                val tx = prevNum!!
-                                val ty = lastNum!!
-                                if (ty != 0.0) {
-                                    flush(kotlin.math.abs(ty))
-                                    lastY = null
-                                    lastX = null
-                                } else if (tx != 0.0) {
-                                    needSpace = true
+                                val tx = prevNum
+                                val ty = lastNum
+                                // A malformed stream can carry the
+                                // operator without usable operands:
+                                // skip it instead of crashing the
+                                // viewer. (The operands still clear
+                                // below, exactly as on the happy path.)
+                                if (tx != null && ty != null) {
+                                    if (ty != 0.0) {
+                                        flush(kotlin.math.abs(ty))
+                                        lastY = null
+                                        lastX = null
+                                    } else if (tx != 0.0) {
+                                        needSpace = true
+                                    }
                                 }
                             }
                         }
                         "Tm" -> {
                             if (numCount >= 6) {
-                                val e = prevNum!!
-                                val f = lastNum!!
-                                if (lastY != null && f != lastY) {
-                                    flush(kotlin.math.abs(f - lastY!!))
-                                } else if (lastX != null && e != lastX) {
-                                    needSpace = true
+                                val e = prevNum
+                                val f = lastNum
+                                if (e != null && f != null) {
+                                    val ly = lastY
+                                    if (ly != null && f != ly) {
+                                        flush(kotlin.math.abs(f - ly))
+                                    } else if (lastX != null && e != lastX) {
+                                        needSpace = true
+                                    }
+                                    lastY = f
+                                    lastX = e
                                 }
-                                lastY = f
-                                lastX = e
                             }
                         }
                         "T*" -> flush(fontSize)

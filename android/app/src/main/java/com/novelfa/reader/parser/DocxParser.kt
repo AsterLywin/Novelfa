@@ -108,8 +108,9 @@ object DocxParser {
         var currentBody = StringBuilder()
         var pendingList: MutableList<ListItem>? = null
         fun flushList() {
-            if (pendingList != null) {
-                currentBody.append(renderList(pendingList!!))
+            val list = pendingList
+            if (list != null) {
+                currentBody.append(renderList(list))
                 pendingList = null
             }
         }
