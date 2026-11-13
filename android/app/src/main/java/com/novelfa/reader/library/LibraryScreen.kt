@@ -2,7 +2,7 @@ package com.novelfa.reader.library
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.util.Log
+import com.novelfa.reader.data.DiagLog
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -494,7 +494,7 @@ fun LibraryScreen(
             // Was runCatching{} with no onFailure: a failing refresh silently
             // skipped the celebration with nothing in logcat. Log it so a
             // missing celebration is diagnosable instead of invisible.
-            Log.w("NovelfaXp", "XP celebration refresh failed", e)
+            DiagLog.w("NovelfaXp", "XP celebration refresh failed", e)
         }
     }
     // One-time XP ledger rekeying (UUID -> content key): runs in the
@@ -504,7 +504,7 @@ fun LibraryScreen(
         runCatching {
             RankHook.rekeyXpLedgerIfNeeded(viewModel.repo, rankPrefs)
         }.onFailure { e ->
-            Log.w("NovelfaXp", "XP ledger rekeying failed", e)
+            DiagLog.w("NovelfaXp", "XP ledger rekeying failed", e)
         }
     }
     // Re-check XP on resume (gateTick): returning from the reader does not
@@ -519,7 +519,7 @@ fun LibraryScreen(
         } catch (e: Exception) {
             // See the LaunchedEffect(tab) block above: never swallow this
             // silently, or a missing celebration leaves no trace.
-            Log.w("NovelfaXp", "XP celebration refresh failed", e)
+            DiagLog.w("NovelfaXp", "XP celebration refresh failed", e)
         }
     }
     // Also re-check on resume: the PIN can be set/removed in Settings, and
