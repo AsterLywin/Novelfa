@@ -134,7 +134,12 @@ fun CharacterSheet(
                 LazyColumn(
                     modifier = Modifier.weight(1f, fill = false)
                 ) {
-                    items(CharacterThemes.All) { theme ->
+                    // Windows parity (CharacterThemeWindow.RebuildCards):
+                    // a secret-only theme that is not unlocked is skipped
+                    // entirely — it is not shown as a locked row. Before
+                    // this, reif sat in the list locked, while Windows
+                    // hides it until the PEIDE code opens it.
+                    items(CharacterThemes.All.filter { !it.secretOnly || isUnlocked(it) }) { theme ->
                         val locked = !isUnlocked(theme)
                         CharacterRow(
                             letter = theme.displayName(isEnglishUi).firstOrNull()?.toString() ?: "?",
