@@ -232,6 +232,8 @@
     <string name="link_boost">Boost</string>
 
     <string name="backup_section_title">Backup &amp; Restore</string>
+    <string name="diag_log_title">Diagnostics</string>
+    <string name="diag_log_share">Share</string>
     <string name="backup_create">Create Backup</string>
     <string name="backup_restore">Restore from Backup</string>
     <string name="backup_working">Working…</string>
