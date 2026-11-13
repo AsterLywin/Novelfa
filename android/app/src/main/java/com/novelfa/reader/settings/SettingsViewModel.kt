@@ -142,7 +142,7 @@ class SettingsViewModel(
      */
     suspend fun xpProgress(): XpProgressSummary {
         val floor = prefs.getFinishedBooksRestored()
-        val level = RankHook.xpLevelNow(repo, rankPrefs, floor)
+        val level = RankHook.xpLevelNow(repo, rankPrefs, floor, prefs)
         val finished = maxOf(
             repo.finishedCount(),
             floor

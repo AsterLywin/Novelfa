@@ -487,9 +487,9 @@ fun LibraryScreen(
     LaunchedEffect(tab) {
         gateTick++
         try {
-            RankHook.refreshXpRank(viewModel.repo, rankPrefs, prefs.getFinishedBooksRestored())
+            RankHook.refreshXpRank(viewModel.repo, rankPrefs, prefs.getFinishedBooksRestored(), prefs)
                 ?.let { xpRankUp = it }
-            xpLevel = RankHook.xpLevelNow(viewModel.repo, rankPrefs, prefs.getFinishedBooksRestored())
+            xpLevel = RankHook.xpLevelNow(viewModel.repo, rankPrefs, prefs.getFinishedBooksRestored(), prefs)
         } catch (e: Exception) {
             // Was runCatching{} with no onFailure: a failing refresh silently
             // skipped the celebration with nothing in logcat. Log it so a
@@ -513,9 +513,9 @@ fun LibraryScreen(
     // effect must NOT increment gateTick itself (that would loop).
     LaunchedEffect(gateTick) {
         try {
-            RankHook.refreshXpRank(viewModel.repo, rankPrefs, prefs.getFinishedBooksRestored())
+            RankHook.refreshXpRank(viewModel.repo, rankPrefs, prefs.getFinishedBooksRestored(), prefs)
                 ?.let { xpRankUp = it }
-            xpLevel = RankHook.xpLevelNow(viewModel.repo, rankPrefs, prefs.getFinishedBooksRestored())
+            xpLevel = RankHook.xpLevelNow(viewModel.repo, rankPrefs, prefs.getFinishedBooksRestored(), prefs)
         } catch (e: Exception) {
             // See the LaunchedEffect(tab) block above: never swallow this
             // silently, or a missing celebration leaves no trace.

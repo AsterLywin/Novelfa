@@ -283,6 +283,25 @@ class XpLedger {
 
     fun bookXp(bookId: String): Int = books[bookId]?.bookXp ?: 0
 
+    /**
+     * Total XP derivable from this ledger alone (anti-cheat): the sum of
+     * every book's credited XP plus the finish bonus of every book that
+     * earned one. The bonus is recomputed from the book's CURRENT bookXp
+     * (the ledger stores the flag, not the amount): if units were credited
+     * after the bonus was awarded, the recomputed bonus is slightly larger
+     * than the awarded one — bounded (~10% of that book's XP), rare, and
+     * only ever upward for a legitimate reader. See
+     * backup-anti-cheat-design.md.
+     */
+    fun derivedTotal(): Int {
+        var total = 0
+        for ((id, b) in books) {
+            total += b.bookXp
+            if (id in bonusAwarded) total += XpRank.bookBonus(b.bookXp)
+        }
+        return total
+    }
+
     /** Credited units that count toward the bonus 90% (small ones out). */
     fun creditedQualifyingCount(bookId: String): Int {
         val b = books[bookId] ?: return 0
@@ -366,20 +385,34 @@ class XpLedger {
      * [excludedContentHashes] are skipped entirely, including
      * their bonus flag — a restored backup must never resurrect
      * a private book's ledger, not even through the apply path.
+     *
+     * Anti-cheat anchor: when [allowedContentHashes] is supplied, only
+     * entries whose content hash is in it are merged — a backup's
+     * ledger entry for a book that is not on this device is refused
+     * instead of merged. Returns how many entries the anchor refused.
      */
     fun mergeContentFrom(
         other: XpLedger,
-        excludedContentHashes: Set<String> = emptySet()
-    ) {
+        excludedContentHashes: Set<String> = emptySet(),
+        allowedContentHashes: Set<String>? = null
+    ): Int {
+        var dropped = 0
         for ((key, entry) in other.books) {
             if (!isContentKey(key)) continue
             if (excludedContentHashes.isNotEmpty() &&
                 key.drop(1) in excludedContentHashes
             ) continue
+            if (allowedContentHashes != null &&
+                key.drop(1) !in allowedContentHashes
+            ) {
+                dropped++
+                continue
+            }
             val target = books.getOrPut(key) { BookLedger() }
             mergeEntryInto(target, entry)
             if (key in other.bonusAwarded) bonusAwarded += key
         }
+        return dropped
     }
 
     /**
@@ -538,6 +571,7 @@ class XpStore(private val prefs: RankPrefs) {
         const val MIGRATED_KEY = "XpMigrated"
         const val CELEBRATED_XP_KEY = "XpCelebratedXp"
         const val REKEYED_KEY = "XpRekeyed"
+        const val RECOMPUTED_KEY = "XpRecomputedV1"
 
         /**
          * One lock for every ledger read-modify-write in the process
@@ -575,6 +609,13 @@ class XpStore(private val prefs: RankPrefs) {
             prefs.setString(REKEYED_KEY, if (value) "1" else "0")
         }
 
+    /** One-time anti-cheat recompute (see RankHook) has run. */
+    var recomputed: Boolean
+        get() = prefs.getString(RECOMPUTED_KEY, "0") == "1"
+        set(value) {
+            prefs.setString(RECOMPUTED_KEY, if (value) "1" else "0")
+        }
+
     /**
      * Re-key one book's ledger entry (UUID -> content key). Total XP
      * is untouched: only the per-unit record moves, so a book can
@@ -597,6 +638,51 @@ class XpStore(private val prefs: RankPrefs) {
             ledger = led
         }
     }
+
+    /**
+     * Merge a backup's content-keyed ledger, anchored to the library's
+     * content hashes (anti-cheat): entries for books that are not on
+     * this device are refused. Returns how many entries were refused.
+     */
+    fun mergeContentLedgerAnchored(
+        serialized: String,
+        allowedContentHashes: Set<String>,
+        excludedContentHashes: Set<String> = emptySet()
+    ): Int {
+        if (serialized.isBlank()) return 0
+        synchronized(ledgerLock) {
+            val led = ledger
+            val dropped = led.mergeContentFrom(
+                XpLedger.parse(serialized), excludedContentHashes, allowedContentHashes
+            )
+            ledger = led
+            return dropped
+        }
+    }
+
+    /**
+     * Anti-cheat recompute (see backup-anti-cheat-design.md): total XP is
+     * derived from the ledger instead of trusting a stored number. When
+     * this device went through the XP migration, the old-rank floor
+     * (name-for-name, from the DERIVED rank only) is kept so a legitimate
+     * migrated reader is never demoted; it can never preserve a forgery,
+     * because the rank it derives from comes from real finished books.
+     * celebratedXp is clamped so a lowered total never shows a phantom
+     * celebration. Runs under the ledger lock so a concurrent credit
+     * cannot land between the read and the write. Returns the new total.
+     */
+    fun recomputeTotalFromLedger(migrated: Boolean, rankForFloor: Int): Int =
+        synchronized(ledgerLock) {
+            val derived = ledger.derivedTotal()
+            val total = if (migrated) {
+                maxOf(derived, XpRank.oldRankToMinXp(rankForFloor))
+            } else {
+                derived
+            }
+            totalXp = total
+            if (celebratedXp > total) celebratedXp = total
+            total
+        }
 
     /** Portable (content-keyed) ledger only, for backup export. */
     fun contentLedgerSerialized(excludedContentHashes: Set<String> = emptySet()): String =

@@ -35,6 +35,7 @@ class PrefsStore(private val context: Context) {
         val XP_MIGRATED = stringPreferencesKey("XpMigrated")
         val XP_CELEBRATED = stringPreferencesKey("XpCelebratedXp")
         val XP_REKEYED = stringPreferencesKey("XpRekeyed")
+        val XP_RECOMPUTED = stringPreferencesKey("XpRecomputedV1")
 
         // Task 8 additive keys (PIN hash, support counter, locale, reader defaults).
         val PIN_HASH = stringPreferencesKey("pinHash")
@@ -349,6 +350,15 @@ class PrefsStore(private val context: Context) {
             val cur = it[FINISHED_BOOKS_RESTORED] ?: 0
             if (value > cur) it[FINISHED_BOOKS_RESTORED] = value
         }
+    }
+
+    /**
+     * Exact set (anti-cheat recompute only): the floor is re-derived from
+     * real finished books, so a stale floor from a forged restore must be
+     * allowed to move DOWN to the true count. Nobody else sets it.
+     */
+    suspend fun setFinishedBooksRestored(value: Int) {
+        context.dataStore.edit { it[FINISHED_BOOKS_RESTORED] = maxOf(0, value) }
     }
 
     suspend fun setThemeParticles(value: Boolean) {

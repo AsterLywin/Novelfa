@@ -1,6 +1,8 @@
 package com.novelfa.reader.settings
 
 import com.novelfa.reader.data.BookRepository
+import com.novelfa.reader.data.DiagLog
+import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.domain.isCompleted
 import com.novelfa.reader.data.sha256OfFile
 import com.novelfa.reader.domain.CelebrationTier
@@ -163,10 +165,53 @@ object RankHook {
         store.rekeyed = true
     }
 
+    /**
+     * One-time anti-cheat recompute (see backup-anti-cheat-design.md).
+     * Runs once, on first launch after the update, in the same home-screen
+     * flow as the migration (after migrateXpIfNeeded, before the UI reads
+     * the level): rank and XP are re-derived from real books and the ledger
+     * instead of trusting stored numbers. The flag is set LAST, so a failure
+     * (or a kill mid-run) retries on the next launch instead of leaving a
+     * half-recomputed state behind. Legitimate readers never lose anything:
+     * the ledger still holds every credit they earned, and the migration
+     * floor (from the derived rank) keeps migrated readers from demoting.
+     * A forged total (e.g. a hand-made max-rank backup) drops to the true
+     * value here.
+     */
+    suspend fun recomputeXpIfNeeded(
+        repo: BookRepository,
+        rankPrefs: RankPrefs,
+        prefs: PrefsStore
+    ) {
+        rankPrefs.awaitLoaded()
+        val store = XpStore(rankPrefs)
+        if (store.recomputed) return
+        val service = RankService(rankPrefs)
+        val oldRank = service.maxRank
+        val oldTotal = store.totalXp
+        val finished = repo.books().first().count { !it.isPrivate && isCompleted(it) }
+        val rank = RankService.rankIndexForStatic(finished)
+        service.maxRank = rank
+        prefs.setFinishedBooksRestored(finished)
+        val total = store.recomputeTotalFromLedger(store.migrated, rank)
+        store.recomputed = true
+        DiagLog.w(
+            "NovelfaXp",
+            "one-time anti-cheat recompute: rank $oldRank -> $rank, " +
+                "totalXp $oldTotal -> $total (finished=$finished)"
+        )
+    }
+
     /** Current XP level (migrates first; idempotent after the first run). */
-    suspend fun xpLevelNow(repo: BookRepository, rankPrefs: RankPrefs, floor: Int = 0): XpLevel {
-        val total = migrateXpIfNeeded(repo, rankPrefs, floor)
-        return XpRank.levelFor(total)
+    suspend fun xpLevelNow(
+        repo: BookRepository,
+        rankPrefs: RankPrefs,
+        floor: Int = 0,
+        prefs: PrefsStore
+    ): XpLevel {
+        migrateXpIfNeeded(repo, rankPrefs, floor)
+        recomputeXpIfNeeded(repo, rankPrefs, prefs)
+        return XpRank.levelFor(XpStore(rankPrefs).totalXp)
     }
 
     /**
@@ -181,12 +226,14 @@ object RankHook {
     suspend fun refreshXpRank(
         repo: BookRepository,
         rankPrefs: RankPrefs,
-        floor: Int = 0
+        floor: Int = 0,
+        prefs: PrefsStore
     ): XpRankUp? {
         rankPrefs.awaitLoaded()
-        val total = migrateXpIfNeeded(repo, rankPrefs, floor)
+        migrateXpIfNeeded(repo, rankPrefs, floor)
+        recomputeXpIfNeeded(repo, rankPrefs, prefs)
         val store = XpStore(rankPrefs)
-        val toLevel = XpRank.levelFor(total)
+        val toLevel = XpRank.levelFor(store.totalXp)
         val fromLevel = XpRank.levelFor(store.celebratedXp)
         if (toLevel.celebrationKey() == fromLevel.celebrationKey()) return null
         val fresh = CharacterThemes.All.filter {
@@ -198,7 +245,7 @@ object RankHook {
             toLevel = toLevel,
             tier = XpRank.celebrationTier(fromLevel, toLevel),
             newThemes = fresh,
-            toXp = total
+            toXp = store.totalXp
         )
     }
 

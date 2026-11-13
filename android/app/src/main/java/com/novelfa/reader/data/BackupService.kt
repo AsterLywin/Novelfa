@@ -261,6 +261,40 @@ class BackupService(
         return PrivateContentKeys(hashes, epubIds)
     }
 
+    /**
+     * Content hashes of the non-private books actually on this device
+     * (anti-cheat anchor for the restored ledger): the stored
+     * contentHash when present, else the SHA-256 of the resolved file
+     * (same resolve as the records merge: direct file, else the
+     * in-place source). A book whose file cannot be resolved contributes
+     * nothing — its ledger entries are refused until the book is
+     * re-imported and the backup is restored again.
+     */
+    private suspend fun libraryContentHashes(): Set<String> {
+        val hashes = mutableSetOf<String>()
+        val books = try {
+            dao.allBooks().first()
+        } catch (e: Exception) {
+            emptyList()
+        }
+        for (book in books) {
+            if (book.isPrivate) continue
+            val stored = book.contentHash?.takeIf { it.isNotBlank() }
+            if (stored != null) {
+                hashes += stored
+                continue
+            }
+            val direct = File(book.filePath)
+            val f = if (direct.isFile) direct
+                else if (book.isInPlace()) runCatching {
+                    InPlaceSource.resolve(context, book)
+                }.getOrNull()?.takeIf { it.isFile }
+                else null
+            if (f != null) runCatching { sha256Of(f) }.getOrNull()?.let { hashes += it }
+        }
+        return hashes
+    }
+
     /** Private-content keys for backup filtering (see [privateContentKeys]). */
     private data class PrivateContentKeys(
         val hashes: Set<String>,
@@ -841,60 +875,31 @@ class BackupService(
                 }.getOrDefault(false)
             }
 
-            // --- profile + rank merge ---
-            // Finished books are SUMMED (Aster's spec): the backup's count is
-            // added on top of the current effective count (library-derived or
-            // the restored floor, whichever is higher) and the sum becomes
-            // the new persisted floor. Rank is unified across both sides —
-            // the max of the current rank, the backup's stored rank and the
-            // rank implied by the summed count — and never goes down.
-            // Secret themes union (in RankService via secretUnlock).
-            val libraryFinished = dao.allBooks().first()
-                .count { !it.isPrivate && isCompleted(it) }
-            val finishedBefore = maxOf(
-                libraryFinished,
-                prefs.getFinishedBooksRestored()
-            )
-            val finishedTotal = (finishedBefore + preview.finishedBooks)
-                .coerceAtMost(MAX_FINISHED_BOOKS)
+            // --- profile + rank/XP recompute (anti-cheat) ---
+            // The manifest's numbers are NEVER trusted: maxRank,
+            // finishedBooks and totalXp in the backup are ignored (a
+            // hand-made backup with maxRank 6 and 37000 XP restored
+            // cleanly before this change). Rank comes from finished
+            // books actually on this device — counted AFTER the records
+            // merge below, so a restored finished record counts — and
+            // total XP is re-derived from the merged ledger (see the
+            // recompute block after the records merge). Secret themes
+            // union (in RankService via secretUnlock).
+            // See backup-anti-cheat-design.md.
             if (preview.profileName.isNotBlank()) {
                 prefs.setProfileName(preview.profileName)
             }
             rankPrefs.awaitLoaded()
             val service = RankService(rankPrefs)
-            val rankBefore = maxOf(
-                service.maxRank,
-                RankService.rankIndexForStatic(finishedBefore)
-            )
-            val targetRank = maxOf(
-                rankBefore,
-                preview.maxRank,
-                RankService.rankIndexForStatic(finishedTotal)
-            )
-            if (targetRank > service.maxRank) {
-                service.maxRank = targetRank
-            }
+            val rankBefore = service.maxRank
+            val finishedBefore = dao.allBooks().first()
+                .count { !it.isPrivate && isCompleted(it) }
             preview.secretThemes.forEach { service.secretUnlock(it) }
-            // XP: max-merge only (see export). Celebrated XP is left alone
-            // so a restored gain celebrates on the next home visit.
-            // The portable ledger merges alongside the total: units
-            // already credited on another device stay credited here,
-            // so restoring a backup can never re-earn them. Total XP
-            // itself is never summed from the ledger — it stays the
-            // max of the two totals, as before.
             // Phase 2 (ADR-4 / DB-01): the private-content keys are
             // computed once here and reused by the records merge
             // below, so both the ledger and the records of a
             // private book are refused on the same restore.
             val privateKeys = privateContentKeys()
-            if (preview.totalXp >= 0) {
-                val xpStore = XpStore(rankPrefs)
-                if (preview.totalXp > xpStore.totalXp) xpStore.totalXp = preview.totalXp
-                if (preview.xpLedger.isNotBlank()) {
-                    xpStore.mergeContentLedger(preview.xpLedger, privateKeys.hashes)
-                }
-            }
-            prefs.raiseFinishedBooksRestored(finishedTotal)
 
             // --- reading records (format v2) ---
             // Merge into the on-device store first (orphans included),
@@ -951,13 +956,50 @@ class BackupService(
                     (rec.epubId.isBlank() || rec.epubId !in matchedKeys)
             }
 
+            // --- rank + XP recompute (anti-cheat) ---
+            // The ledger merges ANCHORED to the books actually on this
+            // device: entries for books that are not here are refused
+            // (a hand-made ledger for a book the user never had cannot
+            // mint XP). Refused entries are logged, not fatal:
+            // re-restoring after importing the books applies them.
+            val xpStore = XpStore(rankPrefs)
+            val droppedLedger = if (preview.xpLedger.isNotBlank()) {
+                xpStore.mergeContentLedgerAnchored(
+                    preview.xpLedger, libraryContentHashes(), privateKeys.hashes
+                )
+            } else 0
+            if (droppedLedger > 0) {
+                DiagLog.w(
+                    "NovelfaBackup",
+                    "restore refused $droppedLedger ledger entries " +
+                        "for books not on this device"
+                )
+            }
+            val finishedTotal = dao.allBooks().first()
+                .count { !it.isPrivate && isCompleted(it) }
+            val targetRank = RankService.rankIndexForStatic(finishedTotal)
+            service.maxRank = targetRank
+            prefs.setFinishedBooksRestored(finishedTotal)
+            val totalBefore = xpStore.totalXp
+            val totalAfter = xpStore.recomputeTotalFromLedger(
+                xpStore.migrated, targetRank
+            )
+            if (totalAfter != totalBefore || targetRank != rankBefore) {
+                DiagLog.w(
+                    "NovelfaBackup",
+                    "restore recompute: rank $rankBefore -> $targetRank, " +
+                        "totalXp $totalBefore -> $totalAfter " +
+                        "(finished=$finishedTotal)"
+                )
+            }
+
             discard(preview)
             BackupApplyResult(
                 added, skipped, failed, avatarApplied,
                 rankBefore = rankBefore,
                 rankAfter = targetRank,
                 finishedBefore = finishedBefore,
-                finishedAdded = preview.finishedBooks,
+                finishedAdded = maxOf(0, finishedTotal - finishedBefore),
                 finishedTotal = finishedTotal,
                 recordsApplied = recordsApplied,
                 recordsKept = recordsKept
