@@ -97,6 +97,19 @@
                 <data android:mimeType="application/vnd.rar" />
                 <data android:mimeType="application/x-7z-compressed" />
             </intent-filter>
-        </activity>    </application>
+        </activity>
+        <!-- Diagnostic log sharing (stability item 1): exposes only
+             filesDir/diagnostics (the DiagLog file) to the share
+             target the user picks (e.g. Telegram to the developer). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.novelfa.reader.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
 
 </manifest>
