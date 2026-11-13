@@ -51,7 +51,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
@@ -884,7 +886,18 @@ private fun RankSection(viewModel: SettingsViewModel) {
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = level.title.displayName(isEnglishUi),
-                    style = MaterialTheme.typography.titleLarge,
+                    // Trim the font's built-in padding/leading so the
+                    // rank icon centers on the visible glyphs: Vazirmatn
+                    // carries very tall ascent metrics, which left the
+                    // icon sitting below the title name (same fix as the
+                    // theme picker's lock badge in CharacterSheet).
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        platformStyle = PlatformTextStyle(includeFontPadding = false),
+                        lineHeightStyle = LineHeightStyle(
+                            alignment = LineHeightStyle.Alignment.Center,
+                            trim = LineHeightStyle.Trim.Both
+                        )
+                    ),
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -914,7 +927,15 @@ private fun RankSection(viewModel: SettingsViewModel) {
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = level.mark!!.displayName(isEnglishUi),
-                        style = MaterialTheme.typography.bodySmall,
+                        // Same trim as the title above: without it the
+                        // mark icon sat below the mark name.
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            platformStyle = PlatformTextStyle(includeFontPadding = false),
+                            lineHeightStyle = LineHeightStyle(
+                                alignment = LineHeightStyle.Alignment.Center,
+                                trim = LineHeightStyle.Trim.Both
+                            )
+                        ),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }

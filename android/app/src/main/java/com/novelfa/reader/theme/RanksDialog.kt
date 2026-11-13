@@ -27,7 +27,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import com.novelfa.reader.R
 
@@ -130,7 +132,17 @@ private fun RankTitleRow(title: XpTitle, level: XpLevel, isEnglishUi: Boolean) {
             Spacer(modifier = Modifier.width(12.dp))
             Text(
                 text = title.displayName(isEnglishUi),
-                style = MaterialTheme.typography.bodyLarge,
+                // Trim the font's built-in padding/leading so the
+                // rank icon centers on the visible glyphs (same fix
+                // as the Settings progress card: Vazirmatn's tall
+                // ascent metrics left the icon below the name).
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    lineHeightStyle = LineHeightStyle(
+                        alignment = LineHeightStyle.Alignment.Center,
+                        trim = LineHeightStyle.Trim.Both
+                    )
+                ),
                 color = if (locked) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
@@ -215,7 +227,15 @@ private fun RankMarkRow(mark: EternityMark, level: XpLevel, isEnglishUi: Boolean
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = mark.displayName(isEnglishUi),
-                style = MaterialTheme.typography.bodyLarge,
+                // Same trim as the title row above: without it the
+                // mark icon sat below the mark name.
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    lineHeightStyle = LineHeightStyle(
+                        alignment = LineHeightStyle.Alignment.Center,
+                        trim = LineHeightStyle.Trim.Both
+                    )
+                ),
                 color = if (locked) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
