@@ -6,6 +6,7 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import com.novelfa.reader.data.CoverStore
+import com.novelfa.reader.data.DiagLog
 import com.novelfa.reader.data.GeneratedCover
 import com.novelfa.reader.data.MIGRATION_1_2
 import com.novelfa.reader.data.MIGRATION_2_3
@@ -43,6 +44,12 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        // Local diagnostic log (stability item 1): the app is offline
+        // with no channel home, so this file is the only way to debug a
+        // user's report. Init first, so a crash anywhere after this
+        // point lands in the file.
+        DiagLog.init(this)
+        DiagLog.installUncaughtHandler()
         pruneOrphanedEpubCache()
         // Bundled recommended fonts (B Koodak, Vazirmatn — WPF parity).
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
