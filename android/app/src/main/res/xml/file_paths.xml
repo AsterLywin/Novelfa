@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Diagnostic log sharing only: the DiagLog file lives in
+     filesDir/diagnostics. Nothing else is exposed. -->
+<paths>
+    <files-path name="diagnostics" path="diagnostics/" />
+</paths>
