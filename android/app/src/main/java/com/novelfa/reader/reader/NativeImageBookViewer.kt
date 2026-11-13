@@ -1514,6 +1514,15 @@ internal fun NativeImageBookViewer(
     val cropPadH by prefs.comicCropPadH.collectAsState(initial = 0)
     val cropPadV by prefs.comicCropPadV.collectAsState(initial = 0)
     val paddingEnabled by prefs.comicPaddingEnabled.collectAsState(initial = false)
+    // Cut margin and page padding are opposites (see
+    // PrefsStore.setComicCutMargin): if an older build left both
+    // on, the crop wins once and padding is switched off, so the
+    // two toggles can never show on together.
+    LaunchedEffect(cutMargin, paddingEnabled) {
+        if (cutMargin && paddingEnabled) {
+            prefs.setComicPaddingEnabled(false)
+        }
+    }
     // Percent 0..40 (ComicScreen's SeekBar max 400 -> ratio
     // 0..0.4); the effective ratio is 0 when the switch is off.
     val pageMarginPct by prefs.comicPageMargin.collectAsState(initial = 0)
@@ -3159,10 +3168,17 @@ internal fun NativeImageBookViewer(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = stringResource(R.string.comic_filter_gray),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.comic_filter_gray),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = stringResource(R.string.comic_filter_gray_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Switch(
                         checked = filterGray,
                         onCheckedChange = { checked ->
@@ -3175,10 +3191,17 @@ internal fun NativeImageBookViewer(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = stringResource(R.string.comic_filter_contrast),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.comic_filter_contrast),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = stringResource(R.string.comic_filter_contrast_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Switch(
                         checked = filterContrast,
                         onCheckedChange = { checked ->
@@ -3191,10 +3214,17 @@ internal fun NativeImageBookViewer(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = stringResource(R.string.comic_filter_invert),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.comic_filter_invert),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = stringResource(R.string.comic_filter_invert_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Switch(
                         checked = filterInvert,
                         onCheckedChange = { checked ->
@@ -3215,6 +3245,7 @@ internal fun NativeImageBookViewer(
                     )
                     SheetChoiceRow(
                         label = stringResource(R.string.comic_upscale_linear),
+                        description = stringResource(R.string.comic_upscale_linear_desc),
                         selected = upscaleMode == "linear",
                         onClick = {
                             scope.launch { prefs.setComicUpscaleMode("linear") }
@@ -3222,6 +3253,7 @@ internal fun NativeImageBookViewer(
                     )
                     SheetChoiceRow(
                         label = stringResource(R.string.comic_upscale_cubic),
+                        description = stringResource(R.string.comic_upscale_cubic_desc),
                         selected = upscaleMode == "cubic",
                         onClick = {
                             scope.launch { prefs.setComicUpscaleMode("cubic") }
@@ -3229,6 +3261,7 @@ internal fun NativeImageBookViewer(
                     )
                     SheetChoiceRow(
                         label = stringResource(R.string.comic_upscale_lanczos),
+                        description = stringResource(R.string.comic_upscale_lanczos_desc),
                         selected = upscaleMode == "lanczos",
                         onClick = {
                             scope.launch { prefs.setComicUpscaleMode("lanczos") }

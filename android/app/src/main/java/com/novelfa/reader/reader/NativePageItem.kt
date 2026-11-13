@@ -451,7 +451,10 @@ internal fun PageThumbnail(
  * active one highlighted and ticked, cannot squeeze. A
  * disabled row keeps its tick if it is the current value,
  * dimmed like its label, so "current but not changeable
- * in this mode" still reads.
+ * in this mode" still reads. [description] is an optional
+ * one-line effect note under the label (the upscale rows
+ * use it: users cannot tell Linear/Cubic/Lanczos apart
+ * from the bare names).
  */
 @Composable
 internal fun SheetChoiceRow(
@@ -459,7 +462,8 @@ internal fun SheetChoiceRow(
     selected: Boolean,
     onClick: () -> Unit,
     icon: AppIconKind? = null,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    description: String? = null
 ) {
     val contentColor = if (enabled) {
         LocalContentColor.current
@@ -488,12 +492,24 @@ internal fun SheetChoiceRow(
                 size = 18.dp
             )
         }
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = contentColor,
-            modifier = Modifier.weight(1f)
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = contentColor
+            )
+            if (description != null) {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (enabled) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        LocalContentColor.current.copy(alpha = 0.38f)
+                    }
+                )
+            }
+        }
         if (selected) {
             AppIcon(
                 AppIconKind.Check,

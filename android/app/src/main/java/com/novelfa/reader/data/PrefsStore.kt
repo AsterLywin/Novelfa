@@ -404,8 +404,17 @@ class PrefsStore(private val context: Context) {
         context.dataStore.edit { it[COMIC_BACKGROUND] = value }
     }
 
+    // Cut margin and page padding are opposites — the first crops
+    // the page to its content box, the second shrinks the page to
+    // leave a blank margin around it — so turning one on turns the
+    // other off. Enforced here (one atomic edit), not in the two
+    // UIs that toggle them (top bar + settings sheet), so no
+    // caller can leave both on.
     suspend fun setComicCutMargin(value: Boolean) {
-        context.dataStore.edit { it[COMIC_CUT_MARGIN] = value }
+        context.dataStore.edit {
+            it[COMIC_CUT_MARGIN] = value
+            if (value) it[COMIC_PADDING_ENABLED] = false
+        }
     }
 
     suspend fun setComicCropPadH(value: Int) {
@@ -417,7 +426,10 @@ class PrefsStore(private val context: Context) {
     }
 
     suspend fun setComicPaddingEnabled(value: Boolean) {
-        context.dataStore.edit { it[COMIC_PADDING_ENABLED] = value }
+        context.dataStore.edit {
+            it[COMIC_PADDING_ENABLED] = value
+            if (value) it[COMIC_CUT_MARGIN] = false
+        }
     }
 
     suspend fun setComicPageMargin(value: Int) {
