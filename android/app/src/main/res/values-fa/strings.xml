@@ -379,6 +379,7 @@
     <string name="comic_direction_rtl">راست به چپ</string>
     <string name="comic_direction_ltr">چپ به راست</string>
     <string name="comic_sharpen">تیز کردن تصویر</string>
+    <string name="comic_sharpen_desc">خط‌ها و جزئیات تصویر تیزتر و واضح‌تر می‌شوند.</string>
     <string name="comic_zoom">بزرگ‌نمایی</string>
     <string name="comic_dual_page">دو صفحه‌ای</string>
     <string name="comic_filter_gray">خاکستری</string>

@@ -3123,10 +3123,17 @@ internal fun NativeImageBookViewer(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = stringResource(R.string.comic_sharpen),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.comic_sharpen),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = stringResource(R.string.comic_sharpen_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Switch(
                         checked = sharpen,
                         onCheckedChange = { checked ->
@@ -3151,7 +3158,6 @@ internal fun NativeImageBookViewer(
                             scope.launch { prefs.setComicSharpenLevel(v.toInt()) }
                         },
                         valueRange = 0f..10f,
-                        steps = 9,
                         enabled = sharpen,
                         modifier = Modifier.weight(1f)
                     )

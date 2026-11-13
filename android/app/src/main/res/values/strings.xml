@@ -379,6 +379,7 @@
     <string name="comic_direction_rtl">Right to left</string>
     <string name="comic_direction_ltr">Left to right</string>
     <string name="comic_sharpen">Sharpen image</string>
+    <string name="comic_sharpen_desc">Lines and details look sharper and clearer.</string>
     <string name="comic_zoom">Zoom</string>
     <string name="comic_dual_page">Dual page</string>
     <string name="comic_filter_gray">Grayscale</string>
