@@ -232,6 +232,8 @@
     <string name="link_boost">بوست</string>
 
     <string name="backup_section_title">پشتیبان‌گیری و بازیابی</string>
+    <string name="diag_log_title">گزارش عیب‌یابی</string>
+    <string name="diag_log_share">اشتراک‌گذاری</string>
     <string name="backup_create">ایجاد بکاپ</string>
     <string name="backup_restore">بازیابی از بکاپ</string>
     <string name="backup_working">در حال انجام…</string>
