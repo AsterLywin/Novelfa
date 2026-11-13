@@ -62,6 +62,7 @@ import com.novelfa.reader.data.BackupApplyResult
 import com.novelfa.reader.data.BackupError
 import com.novelfa.reader.data.BackupPreview
 import com.novelfa.reader.data.BackupService
+import com.novelfa.reader.data.DiagLog
 import com.novelfa.reader.data.FontStore
 import com.novelfa.reader.data.InspectResult
 import com.novelfa.reader.theme.AccentSheet
@@ -141,6 +142,7 @@ fun SettingsRoute(
                     notify = { msg -> scope.launch { snackbar.showSnackbar(msg) } }
                 )
             }
+            item { DiagLogSection() }
             item {
                 TextButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.close))
@@ -1225,6 +1227,41 @@ private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit
             confirmButton = {
                 TextButton(onClick = { result = null }) {
                     Text(stringResource(R.string.close))
+                }
+            }
+        )
+    }
+}
+
+/**
+ * Diagnostic log (stability item 1): deliberately quiet — a plain
+ * row at the bottom of Settings with a share button and nothing else.
+ * It is a debugging tool for the developer, not a user feature: no
+ * prompt, no description, no banner. The button is disabled while
+ * the log is empty (fresh install, no error recorded yet), so there
+ * is never an empty file to send.
+ */
+@Composable
+private fun DiagLogSection() {
+    val context = LocalContext.current
+    val logFile = DiagLog.logFile()
+    val hasLog = logFile?.isFile == true && logFile.length() > 0
+    SectionCard(title = stringResource(R.string.diag_log_title), icon = AppIconKind.File) {
+        ActionButton(
+            label = stringResource(R.string.diag_log_share),
+            icon = null,
+            primary = false,
+            enabled = hasLog,
+            onClick = {
+                DiagLog.shareIntent(context)?.let { intent ->
+                    runCatching {
+                        context.startActivity(
+                            Intent.createChooser(
+                                intent,
+                                context.getString(R.string.diag_log_title)
+                            )
+                        )
+                    }
                 }
             }
         )
