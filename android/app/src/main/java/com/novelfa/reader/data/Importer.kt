@@ -348,13 +348,13 @@ class Importer(
      */
     suspend fun clearBookExtras(bookId: String) = withContext(Dispatchers.IO) {
         runCatching { ReaderExtrasStore(context).clearBook(bookId) }
-            .onFailure { Log.w("NovelfaImporter", "clearBookExtras failed for $bookId", it) }
+            .onFailure { DiagLog.w("NovelfaImporter", "clearBookExtras failed for $bookId", it) }
     }
 
     /** Progress reset only: clears the vertical in-section position, nothing else. */
     suspend fun clearSectionPosition(bookId: String) = withContext(Dispatchers.IO) {
         runCatching { ReaderExtrasStore(context).clearSectionPosition(bookId) }
-            .onFailure { Log.w("NovelfaImporter", "clearSectionPosition failed for $bookId", it) }
+            .onFailure { DiagLog.w("NovelfaImporter", "clearSectionPosition failed for $bookId", it) }
     }
 
     /**
@@ -1053,14 +1053,14 @@ class Importer(
             throw e
         } catch (e: ImportException) {
             timer.finish()
-            Log.e("NovelfaImporter", "import failed: ${e.message}", e)
+            DiagLog.e("NovelfaImporter", "import failed: ${e.message}", e)
             openCacheDir.deleteRecursively()
             if (inPlaceFile == null) dest?.delete()
             tmpDest.delete()
             throw e
         } catch (e: Exception) {
             timer.finish()
-            Log.e("NovelfaImporter", "import failed: ${e.message}", e)
+            DiagLog.e("NovelfaImporter", "import failed: ${e.message}", e)
             openCacheDir.deleteRecursively()
             if (inPlaceFile == null) dest?.delete()
             tmpDest.delete()

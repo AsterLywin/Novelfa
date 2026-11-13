@@ -406,7 +406,7 @@ class ReadingRecordStore(context: Context) {
                     false
                 }
                 if (!validJson && bytes.isNotEmpty()) {
-                    android.util.Log.w(
+                    DiagLog.w(
                         TAG,
                         "reading_records.json is not valid JSON; " +
                             "quarantining to ${corruptFile.name} and starting empty"
@@ -420,7 +420,7 @@ class ReadingRecordStore(context: Context) {
                     ReadingRecord.listFromJson(bytes).toMutableList()
                 }
             } catch (e: Exception) {
-                android.util.Log.w(TAG, "Failed to read reading_records.json", e)
+                DiagLog.w(TAG, "Failed to read reading_records.json", e)
                 mutableListOf()
             }
         } else {
@@ -444,7 +444,7 @@ class ReadingRecordStore(context: Context) {
             }
         } catch (e: Exception) {
             // A failed store write only loses orphan records — never fatal.
-            android.util.Log.w(TAG, "Failed to persist reading records", e)
+            DiagLog.w(TAG, "Failed to persist reading records", e)
         }
     }
 
