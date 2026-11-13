@@ -29,6 +29,15 @@ import java.util.Locale
  * failure must never become a second crash. Before [init] (unit tests,
  * or a crash before Application.onCreate) the file half is silently
  * skipped and only logcat is written.
+ *
+ * Opt-in (Settings > Diagnostics, default OFF): [fileEnabled] gates
+ * the file half — while it is off, [w]/[e] still go to logcat (normal
+ * Android logging) but nothing is written to the file, so the app
+ * collects no diagnostics until the user turns it on. Turning it off
+ * deletes the log file, so the state is exactly a fresh install (no
+ * file, no entries); turning it back on re-creates the file with its
+ * header. The saved choice lives in PrefsStore; Application applies
+ * it once at startup and Settings applies it on every toggle.
  */
 object DiagLog {
     /** Hard cap for the log file; the trim target is below this. */
@@ -40,10 +49,19 @@ object DiagLog {
     @Volatile
     private var logFile: File? = null
 
+    /** File logging gate: false until the user opts in (default OFF). */
+    @Volatile
+    private var fileEnabled = false
+
+    /** Application context (from [init]), kept to re-create the file
+     * with its header when the user re-enables logging. */
+    private var appContext: Context? = null
+
     /** App-side entry point: call once from Application.onCreate. */
     fun init(context: Context) {
         val file = File(File(context.filesDir, "diagnostics"), "novelfa-diag.log")
         synchronized(lock) {
+            appContext = context.applicationContext
             val fresh = !file.isFile
             logFile = file
             runCatching {
@@ -55,6 +73,31 @@ object DiagLog {
             }
         }
     }
+
+    /**
+     * Turns file logging on or off. Disabling deletes the log file
+     * (fresh-install state); enabling re-creates it with its header
+     * when it is missing. Never throws.
+     */
+    fun setEnabled(enabled: Boolean) {
+        synchronized(lock) {
+            fileEnabled = enabled
+            val f = logFile ?: return
+            runCatching {
+                if (!enabled) {
+                    f.delete()
+                } else if (!f.isFile) {
+                    f.parentFile?.mkdirs()
+                    f.createNewFile()
+                    val ctx = appContext
+                    if (ctx != null) appendLocked(headerLine(ctx))
+                }
+            }
+        }
+    }
+
+    /** Whether file logging is currently enabled. */
+    fun isEnabled(): Boolean = fileEnabled
 
     /** Test seam: the app passes the real file; tests pass a temp file. */
     fun init(file: File) {
@@ -130,7 +173,9 @@ object DiagLog {
     }
 
     private fun append(level: String, tag: String, msg: String, e: Throwable?) {
-        val file = logFile ?: return
+        // Opt-in gate, re-checked under the lock so a write racing the
+        // disable moment cannot resurrect the deleted file.
+        if (logFile == null) return
         val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
         val entry = StringBuilder()
             .append(time).append(' ').append(level).append('/').append(tag)
@@ -140,6 +185,7 @@ object DiagLog {
             if (!entry.endsWith("\n")) entry.append('\n')
         }
         synchronized(lock) {
+            if (!fileEnabled) return
             runCatching {
                 val f = logFile ?: return
                 trimIfNeededLocked(f, entry.length)

@@ -162,6 +162,12 @@ class PrefsStore(private val context: Context) {
         // after it changes; books already in the library keep
         // their mode forever.
         val IN_PLACE_IMPORT = booleanPreferencesKey("inPlaceImport")
+        // Diagnostic log (Settings > Diagnostics): ON = errors and
+        // warnings are written to the capped log file the user can
+        // share; OFF = nothing is written and the file is deleted.
+        // Default OFF: diagnostics are opt-in, and a fresh install
+        // collects nothing.
+        val DIAG_LOG_ENABLED = booleanPreferencesKey("diagLogEnabled")
         // Backup/restore: lifetime finished-books floor restored from a
         // backup (see BackupService). Effective finished count is
         // max(libraryFinished, floor) so a restored record survives an
@@ -259,6 +265,9 @@ class PrefsStore(private val context: Context) {
         context.dataStore.data.map { it[COMIC_READING_MODE] }
     /** Safe import toggle (default ON; see FAST_IMPORT). */
     val fastImport: Flow<Boolean> = context.dataStore.data.map { it[FAST_IMPORT] ?: true }
+
+    val diagLogEnabled: Flow<Boolean> =
+        context.dataStore.data.map { it[DIAG_LOG_ENABLED] ?: false }
     /** Library file-name titles (default ON; see LIBRARY_FILE_NAME_TITLE). */
     val fileNameTitle: Flow<Boolean> =
         context.dataStore.data.map { it[LIBRARY_FILE_NAME_TITLE] ?: true }
@@ -463,6 +472,10 @@ class PrefsStore(private val context: Context) {
         context.dataStore.edit { it[FAST_IMPORT] = value }
     }
 
+    suspend fun setDiagLogEnabled(value: Boolean) {
+        context.dataStore.edit { it[DIAG_LOG_ENABLED] = value }
+    }
+
     suspend fun setFileNameTitle(value: Boolean) {
         context.dataStore.edit { it[LIBRARY_FILE_NAME_TITLE] = value }
     }
@@ -478,6 +491,10 @@ class PrefsStore(private val context: Context) {
     /** Sync read of the fast-import toggle (suspend: never blocks the main thread). */
     suspend fun fastImportNow(): Boolean =
         context.dataStore.data.map { it[FAST_IMPORT] ?: true }.first()
+
+    /** Sync read of the diagnostics toggle (suspend: never blocks the main thread). */
+    suspend fun diagLogEnabledNow(): Boolean =
+        context.dataStore.data.map { it[DIAG_LOG_ENABLED] ?: false }.first()
 
     /** Manually-created collection names (survive even when empty). */
     val manualCollections: Flow<Set<String>> =

@@ -234,6 +234,11 @@
     <string name="backup_section_title">پشتیبان‌گیری و بازیابی</string>
     <string name="diag_log_title">گزارش عیب‌یابی</string>
     <string name="diag_log_share">اشتراک‌گذاری</string>
+    <string name="diag_log_enable">ثبت گزارش عیب‌یابی</string>
+    <string name="diag_log_desc">خطاها و هشدارهای برنامه را در یک فایل روی گوشی ثبت می‌کند تا در صورت بروز مشکل، آن را برای توسعه‌دهنده بفرستید.</string>
+    <string name="diag_log_consent">با روشن‌کردن این گزینه، خطاها و هشدارهای برنامه در یک فایل روی گوشی شما ثبت می‌شوند. اگر در حین روشن‌بودن این گزینه به مشکلی برخوردید و این فایل را برای توسعه‌دهنده بفرستید، کمک بزرگی به پیدا کردن و رفع مشکل می‌کنید. این فایل فقط زمانی به دست توسعه‌دهنده می‌رسد که خودتان آن را بفرستید.</string>
+    <string name="diag_log_ready">گزارش آماده‌ی اشتراک‌گذاری است.</string>
+    <string name="diag_log_empty">هنوز خطایی ثبت نشده است.</string>
     <string name="backup_create">ایجاد بکاپ</string>
     <string name="backup_restore">بازیابی از بکاپ</string>
     <string name="backup_working">در حال انجام…</string>

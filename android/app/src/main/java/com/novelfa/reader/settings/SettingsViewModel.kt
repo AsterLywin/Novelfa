@@ -57,6 +57,7 @@ class SettingsViewModel(
     val themeParticles: Flow<Boolean> = prefs.themeParticles
     val themeParticlesLowEnd: Flow<Boolean> = prefs.themeParticlesLowEnd
     val fastImport: Flow<Boolean> = prefs.fastImport
+    val diagLogEnabled: Flow<Boolean> = prefs.diagLogEnabled
     val inPlaceImport: Flow<Boolean> = prefs.inPlaceImport
     val fileNameTitle: Flow<Boolean> = prefs.fileNameTitle
 
@@ -115,6 +116,8 @@ class SettingsViewModel(
     suspend fun setThemeParticlesLowEnd(value: Boolean) = prefs.setThemeParticlesLowEnd(value)
 
     suspend fun setFastImport(value: Boolean) = prefs.setFastImport(value)
+
+    suspend fun setDiagLogEnabled(value: Boolean) = prefs.setDiagLogEnabled(value)
 
     suspend fun setFileNameTitle(value: Boolean) = prefs.setFileNameTitle(value)
 

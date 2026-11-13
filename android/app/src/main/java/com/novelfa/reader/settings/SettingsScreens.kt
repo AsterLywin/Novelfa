@@ -144,7 +144,7 @@ fun SettingsRoute(
                     notify = { msg -> scope.launch { snackbar.showSnackbar(msg) } }
                 )
             }
-            item { DiagLogSection() }
+            item { DiagLogSection(viewModel) }
             item {
                 TextButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.close))
@@ -1255,34 +1255,102 @@ private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit
 }
 
 /**
- * Diagnostic log (stability item 1): deliberately quiet — a plain
- * row at the bottom of Settings with a share button and nothing else.
- * It is a debugging tool for the developer, not a user feature: no
- * prompt, no description, no banner. The button is disabled while
- * the log is empty (fresh install, no error recorded yet), so there
- * is never an empty file to send.
+ * Diagnostic log (stability item 1), opt-in: a toggle row like the
+ * other Settings switches, default OFF, with a short description.
+ * Turning it ON first shows a consent dialog (what is recorded, why
+ * sending it helps, and that it only reaches the developer when the
+ * user shares it); only بله enables it, and only then do the status
+ * line and the share button appear. Turning it OFF hides the status
+ * and the button again and deletes the log file, so the section looks
+ * exactly like a fresh install. The share button stays disabled while
+ * the log is empty, so there is never an empty file to send.
  */
 @Composable
-private fun DiagLogSection() {
+private fun DiagLogSection(viewModel: SettingsViewModel) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val enabled by viewModel.diagLogEnabled.collectAsState(initial = false)
+    var showConsent by remember { mutableStateOf(false) }
+    // Re-read after enabling: setEnabled(true) creates the file, and
+    // the tick forces a fresh hasLog check once it exists.
+    var logTick by remember { mutableStateOf(0) }
     val logFile = DiagLog.logFile()
+    @Suppress("UNUSED_VARIABLE")
+    val tick = logTick
     val hasLog = logFile?.isFile == true && logFile.length() > 0
     SectionCard(title = stringResource(R.string.diag_log_title), icon = AppIconKind.File) {
-        ActionButton(
-            label = stringResource(R.string.diag_log_share),
-            icon = null,
-            primary = false,
-            enabled = hasLog,
-            onClick = {
-                DiagLog.shareIntent(context)?.let { intent ->
-                    runCatching {
-                        context.startActivity(
-                            Intent.createChooser(
-                                intent,
-                                context.getString(R.string.diag_log_title)
-                            )
-                        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.diag_log_enable),
+                modifier = Modifier.weight(1f)
+            )
+            Switch(
+                checked = enabled,
+                onCheckedChange = { wantOn ->
+                    if (wantOn) {
+                        showConsent = true
+                    } else {
+                        scope.launch {
+                            viewModel.setDiagLogEnabled(false)
+                            DiagLog.setEnabled(false)
+                        }
                     }
+                }
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.diag_log_desc),
+            style = MaterialTheme.typography.bodyMedium
+        )
+        if (enabled) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = stringResource(
+                    if (hasLog) R.string.diag_log_ready else R.string.diag_log_empty
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            ActionButton(
+                label = stringResource(R.string.diag_log_share),
+                icon = null,
+                primary = false,
+                enabled = hasLog,
+                onClick = {
+                    DiagLog.shareIntent(context)?.let { intent ->
+                        runCatching {
+                            context.startActivity(
+                                Intent.createChooser(
+                                    intent,
+                                    context.getString(R.string.diag_log_title)
+                                )
+                            )
+                        }
+                    }
+                }
+            )
+        }
+    }
+    if (showConsent) {
+        AlertDialog(
+            onDismissRequest = { showConsent = false },
+            title = { Text(stringResource(R.string.diag_log_title)) },
+            text = { Text(stringResource(R.string.diag_log_consent)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showConsent = false
+                    scope.launch {
+                        viewModel.setDiagLogEnabled(true)
+                        DiagLog.setEnabled(true)
+                        logTick++
+                    }
+                }) { Text(stringResource(R.string.yes)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConsent = false }) {
+                    Text(stringResource(R.string.no))
                 }
             }
         )

@@ -234,6 +234,11 @@
     <string name="backup_section_title">Backup &amp; Restore</string>
     <string name="diag_log_title">Diagnostics</string>
     <string name="diag_log_share">Share</string>
+    <string name="diag_log_enable">Record diagnostics</string>
+    <string name="diag_log_desc">Records the app’s errors and warnings in a file on your phone, so you can send it to the developer if something goes wrong.</string>
+    <string name="diag_log_consent">Turning this on records the app’s errors and warnings in a file on your phone. If you run into a problem while it is on and send this file to the developer, it will be a big help in finding and fixing the issue. The file only reaches the developer when you choose to send it.</string>
+    <string name="diag_log_ready">The report is ready to share.</string>
+    <string name="diag_log_empty">No errors recorded yet.</string>
     <string name="backup_create">Create Backup</string>
     <string name="backup_restore">Restore from Backup</string>
     <string name="backup_working">Working…</string>
