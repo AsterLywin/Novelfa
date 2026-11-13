@@ -1,6 +1,6 @@
 package com.novelfa.reader.parser
 
-import android.util.Log
+import com.novelfa.reader.data.DiagLog
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
@@ -958,7 +958,7 @@ internal class PdfDoc(private val bytes: ByteArray, private val password: String
                 inflater.end()
                 if (out.size() > 0) return out.toByteArray()
             } catch (e: Exception) {
-                Log.w("NovelfaPdfDoc", "inflate failed, trying other wrapping", e)
+                DiagLog.w("NovelfaPdfDoc", "inflate failed, trying other wrapping", e)
                 // Try the other wrapping.
             }
         }

@@ -1,6 +1,6 @@
 package com.novelfa.reader.parser
 
-import android.util.Log
+import com.novelfa.reader.data.DiagLog
 import com.novelfa.reader.parser.engine.ZipExtract
 import java.io.File
 import java.io.InputStream
@@ -222,7 +222,7 @@ object NestedArchive {
             }
             if (total <= 0) -1 else 0
         } catch (e: Exception) {
-            Log.w("NovelfaNestedArchive", "streamCopyCapped failed", e)
+            DiagLog.w("NovelfaNestedArchive", "streamCopyCapped failed", e)
             -1
         }
     }
@@ -283,7 +283,7 @@ object NestedArchive {
             }
             return dest
         } catch (e: Exception) {
-            Log.w("NovelfaNestedArchive", "materializeFile failed", e)
+            DiagLog.w("NovelfaNestedArchive", "materializeFile failed", e)
             runCatching { tmp.delete() }
             return null
         }
@@ -500,7 +500,7 @@ object NestedArchive {
                 }
             }
         } catch (e: Exception) {
-            Log.w("NovelfaNestedArchive", "hasUnservableImagesDirect failed", e)
+            DiagLog.w("NovelfaNestedArchive", "hasUnservableImagesDirect failed", e)
             false
         }
     }

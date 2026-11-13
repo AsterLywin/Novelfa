@@ -1,6 +1,6 @@
 package com.novelfa.reader.parser
 
-import android.util.Log
+import com.novelfa.reader.data.DiagLog
 import com.novelfa.reader.model.ParsedBook
 import java.io.File
 
@@ -103,7 +103,7 @@ object PdfParser {
         val raf = try {
             java.io.RandomAccessFile(file, "r")
         } catch (e: Exception) {
-            Log.w("NovelfaPdfParser", "maybeEncryptedFile: cannot open file, assuming encrypted", e)
+            DiagLog.w("NovelfaPdfParser", "maybeEncryptedFile: cannot open file, assuming encrypted", e)
             return true
         }
         try {
@@ -143,7 +143,7 @@ object PdfParser {
             }
             return true
         } catch (e: Exception) {
-            Log.w("NovelfaPdfParser", "maybeEncryptedFile: trailer walk failed, assuming encrypted", e)
+            DiagLog.w("NovelfaPdfParser", "maybeEncryptedFile: trailer walk failed, assuming encrypted", e)
             return true
         } finally {
             runCatching { raf.close() }

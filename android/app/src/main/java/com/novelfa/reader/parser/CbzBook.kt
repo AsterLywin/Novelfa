@@ -1,6 +1,6 @@
 package com.novelfa.reader.parser
 
-import android.util.Log
+import com.novelfa.reader.data.DiagLog
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -115,7 +115,7 @@ object CbzBook {
                 }
             }
         } catch (e: Exception) {
-            Log.w("NovelfaCbzBook", "archiveKind probe failed, reporting UNKNOWN", e)
+            DiagLog.w("NovelfaCbzBook", "archiveKind probe failed, reporting UNKNOWN", e)
             "UNKNOWN"
         }
     }
@@ -206,7 +206,7 @@ object CbzBook {
                 out.toByteArray()
             }
         } catch (e: Exception) {
-            Log.w("NovelfaCbzBook", "readEntryBytes failed", e)
+            DiagLog.w("NovelfaCbzBook", "readEntryBytes failed", e)
             null
         }
     }
@@ -241,7 +241,7 @@ object CbzBook {
         val fis = try {
             FileInputStream(zipFile)
         } catch (e: Exception) {
-            Log.w("NovelfaCbzBook", "openEntryStream: cannot open zip file", e)
+            DiagLog.w("NovelfaCbzBook", "openEntryStream: cannot open zip file", e)
             return null
         }
         try {
@@ -266,7 +266,7 @@ object CbzBook {
                 else -> InflaterInputStream(slice, Inflater(true))
             }
         } catch (e: Exception) {
-            Log.w("NovelfaCbzBook", "openEntryStream: entry read failed", e)
+            DiagLog.w("NovelfaCbzBook", "openEntryStream: entry read failed", e)
             runCatching { fis.close() }
             return null
         }
@@ -367,7 +367,7 @@ object CbzBook {
                 list
             }
         } catch (e: Exception) {
-            Log.w("NovelfaCbzBook", "tolerantEntries failed", e)
+            DiagLog.w("NovelfaCbzBook", "tolerantEntries failed", e)
             null
         }
     }
@@ -442,7 +442,7 @@ object CbzBook {
                 out.ifEmpty { null }
             }
         } catch (e: Exception) {
-            Log.w("NovelfaCbzBook", "localHeaderEntries failed", e)
+            DiagLog.w("NovelfaCbzBook", "localHeaderEntries failed", e)
             null
         }
     }
@@ -623,7 +623,7 @@ object CbzBook {
                 else -> false
             }
         } catch (e: Exception) {
-            Log.w("NovelfaCbzBook", "validateUnsignedDescriptor failed", e)
+            DiagLog.w("NovelfaCbzBook", "validateUnsignedDescriptor failed", e)
             false
         }
     }

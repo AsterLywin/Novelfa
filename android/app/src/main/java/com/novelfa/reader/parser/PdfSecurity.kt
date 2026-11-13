@@ -1,6 +1,6 @@
 package com.novelfa.reader.parser
 
-import android.util.Log
+import com.novelfa.reader.data.DiagLog
 import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
@@ -87,7 +87,7 @@ internal object PdfCrypto {
         c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"))
         c.doFinal(data)
     } catch (e: Exception) {
-        Log.w("NovelfaPdfSecurity", "aesEcbDecrypt failed", e)
+        DiagLog.w("NovelfaPdfSecurity", "aesEcbDecrypt failed", e)
         null
     }
 
@@ -96,7 +96,7 @@ internal object PdfCrypto {
         c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"))
         c.doFinal(data)
     } catch (e: Exception) {
-        Log.w("NovelfaPdfSecurity", "aesEcbEncrypt failed", e)
+        DiagLog.w("NovelfaPdfSecurity", "aesEcbEncrypt failed", e)
         null
     }
 
@@ -106,7 +106,7 @@ internal object PdfCrypto {
         c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
         c.doFinal(data)
     } catch (e: Exception) {
-        Log.w("NovelfaPdfSecurity", "aesCbcDecrypt failed", e)
+        DiagLog.w("NovelfaPdfSecurity", "aesCbcDecrypt failed", e)
         null
     }
 
@@ -115,7 +115,7 @@ internal object PdfCrypto {
         c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
         c.doFinal(data)
     } catch (e: Exception) {
-        Log.w("NovelfaPdfSecurity", "aesCbcEncrypt failed", e)
+        DiagLog.w("NovelfaPdfSecurity", "aesCbcEncrypt failed", e)
         null
     }
 
