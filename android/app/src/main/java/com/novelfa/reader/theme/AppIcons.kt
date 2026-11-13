@@ -75,11 +75,17 @@ enum class AppIconKind(val data: String, val duo: Boolean = false) {
     // native viewer does not have yet (page bookmarks, page
     // capture, rotation lock, pinch-zoom toggle) and are
     // intentionally unwired until those features exist.
-    // Classic crop frame: two large opposite corners whose
-    // arms reach toward the centre. The old two short
-    // 4-unit corners read as stray brackets at small sizes;
-    // 6-unit arms make the crop frame unmistakable.
-    Crop("M8,2 H2 V8 M8,14 H14 V8"),
+    // Crop frame, ComicScreen's ic_crop geometry redrawn as strokes
+    // (comicscreen/apktool_out/res/drawable/ic_crop.xml, 960-unit
+    // filled crop icon): the two brackets join into one zigzag — a
+    // long vertical bar with a left stub, turning into a long
+    // horizontal bar with a down stub — so the corners overlap in
+    // the middle like a real crop frame. The old two separate
+    // 6-unit corners read as stray brackets (fullscreen) at small
+    // sizes. The filled 960 path is NOT pasted here: this set is
+    // stroke-only (16-unit box, 1.6 stroke), so the shape is
+    // re-drawn from its geometry, not copied.
+    Crop("M4,1 V12 H15 M1,4 H4 M12,13 V15"),
     // Kept margin after auto-crop (the two crop-pad sliders):
     // the page frame with the kept bands marked — side bands
     // for the horizontal pad, top/bottom bands for the
