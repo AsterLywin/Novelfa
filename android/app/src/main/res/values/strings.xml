@@ -123,6 +123,7 @@
     <string name="collection_stats">%1$d vols · %2$d chapters · %3$d finished</string>
     <string name="about_title">About Novelfa</string>
     <string name="about_body">Persian reader, fully offline with zero permissions. No data is collected or sent.</string>
+    <string name="about_built_by">Built by Aster</string>
     <string name="app_version">Version %1$s</string>
     <string name="empty_library">No books here yet</string>
     <string name="empty_library_hint">Tap + to add a book</string>
@@ -230,6 +231,7 @@
     <string name="link_channel">Channel</string>
     <string name="link_donate">Donate</string>
     <string name="link_boost">Boost</string>
+    <string name="link_developer">Developer</string>
 
     <string name="backup_section_title">Backup &amp; Restore</string>
     <string name="diag_log_title">Diagnostics</string>

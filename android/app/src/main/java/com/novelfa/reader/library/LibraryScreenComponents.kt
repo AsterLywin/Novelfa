@@ -1305,11 +1305,13 @@ internal fun AboutDialog(onDismiss: () -> Unit, onShowGuide: () -> Unit) {
     val chLabel = stringResource(R.string.link_channel)
     val doLabel = stringResource(R.string.link_donate)
     val boLabel = stringResource(R.string.link_boost)
-    val links = remember(chLabel, doLabel, boLabel) {
+    val devLabel = stringResource(R.string.link_developer)
+    val links = remember(chLabel, doLabel, boLabel, devLabel) {
         listOf(
             Triple(chLabel, "t.me/NoveIFa", "https://t.me/NoveIFa"),
             Triple(doLabel, "Daramet.com/NovelFa", "http://Daramet.com/NovelFa"),
-            Triple(boLabel, "t.me/NoveIFa?boost", "https://t.me/NoveIFa?boost")
+            Triple(boLabel, "t.me/NoveIFa?boost", "https://t.me/NoveIFa?boost"),
+            Triple(devLabel, "@Aster_Leywin", "https://t.me/Aster_Leywin")
         )
     }
     val copiedMsg = stringResource(R.string.copied)
@@ -1319,6 +1321,10 @@ internal fun AboutDialog(onDismiss: () -> Unit, onShowGuide: () -> Unit) {
         text = {
             Column {
                 Text(stringResource(R.string.about_body))
+                Text(
+                    stringResource(R.string.about_built_by),
+                    modifier = Modifier.padding(top = 8.dp)
+                )
                 if (version.isNotBlank()) {
                     Text(
                         stringResource(R.string.app_version, version),
