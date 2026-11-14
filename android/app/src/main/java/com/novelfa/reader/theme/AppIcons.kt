@@ -77,15 +77,18 @@ enum class AppIconKind(val data: String, val duo: Boolean = false) {
     // intentionally unwired until those features exist.
     // Crop frame, ComicScreen's ic_crop geometry redrawn as strokes
     // (comicscreen/apktool_out/res/drawable/ic_crop.xml, 960-unit
-    // filled crop icon): the two brackets join into one zigzag — a
-    // long vertical bar with a left stub, turning into a long
-    // horizontal bar with a down stub — so the corners overlap in
-    // the middle like a real crop frame. The old two separate
-    // 6-unit corners read as stray brackets (fullscreen) at small
-    // sizes. The filled 960 path is NOT pasted here: this set is
+    // filled crop icon, two subpaths): the first subpath is ONE
+    // continuous zigzag — top arm (y 240) + vertical bar (x 240)
+    // + bottom arm (y 720) + down stub (x 720); the second is the
+    // separate top-right corner bracket (x 720, y 240-600 + y 240,
+    // x 400-720). The two leave the same gaps as the original
+    // (top side x 240-400, right side y 600-720). The previous
+    // version stretched both bars full-span and dropped the
+    // top-right bracket entirely, so it read as one giant corner.
+    // The filled 960 path is NOT pasted here: this set is
     // stroke-only (16-unit box, 1.6 stroke), so the shape is
-    // re-drawn from its geometry, not copied.
-    Crop("M4,1 V12 H15 M1,4 H4 M12,13 V15"),
+    // re-drawn from its geometry (÷60), not copied.
+    Crop("M12,15.3 V12 H4 V4 H1.3 M12,10 V4 H6.7"),
     // Kept margin after auto-crop (the two crop-pad sliders):
     // the page frame with the kept bands marked — side bands
     // for the horizontal pad, top/bottom bands for the
