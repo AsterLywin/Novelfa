@@ -1942,8 +1942,15 @@ object HtmlBuilder {
 //                       carrying data-novelfa-footnote goes to
 //                       Android.onFootnoteLink instead of navigating:
 //                       the app shows the note in a popup on this page.
-//   - "#frag"        -> paged: rdrGoToAnchor jumps to the target's page;
-//                       vertical: native fragment scroll (left untouched).
+//   - "#frag"        -> preventDefault ALWAYS, then paged:
+//                       rdrGoToAnchor jumps to the target's page;
+//                       vertical: Android.onLink hands it to the app,
+//                       which scrolls the target into view
+//                       (scrollToAnchor) in the same chapter, or
+//                       opens the target chapter first. Without the
+//                       preventDefault a vertical-mode tap navigates
+//                       the WebView itself to the chapter-folder URL
+//                       and out of the reader shell.
 //   - "file.xhtml#f" -> Android.onLink(rawHref); the app resolves it
 //                       against the current chapter folder, opens that
 //                       chapter, then lands on the fragment.
@@ -1995,12 +2002,27 @@ object HtmlBuilder {
             try { if (window.Android && Android.onFootnoteLink) Android.onFootnoteLink(h, fci, label, ftx, fty); } catch (err) { }
             return;
         }
+        // The href is relative to the chapter CONTAINING the link —
+        // in continuous mode several chapters share one document, so
+        // tell the app exactly which chapter this link lives in.
+        var ci = -1;
+        var cd = a.closest ? a.closest('.rdr-chap') : null;
+        if (cd) {
+            var dv = parseInt(cd.getAttribute('data-idx'), 10);
+            if (!isNaN(dv)) ci = dv;
+        }
         if (h.charAt(0) === '#') {
+            // Always preventDefault: in vertical mode there is no
+            // rdrGoToAnchor, and an un-prevented tap navigates the
+            // WebView itself out of the reader (see the header).
+            e.preventDefault();
+            var id = h.substring(1);
+            try { id = decodeURIComponent(id); } catch (err) { }
+            if (!id) return;
             if (window.rdrGoToAnchor) {
-                e.preventDefault();
-                var id = h.substring(1);
-                try { id = decodeURIComponent(id); } catch (err) { }
-                if (id) window.rdrGoToAnchor(id);
+                window.rdrGoToAnchor(id);
+            } else {
+                try { if (window.Android && Android.onLink) Android.onLink(h, ci); } catch (err) { }
             }
             return;
         }
@@ -2012,15 +2034,6 @@ object HtmlBuilder {
             return;
         }
         e.preventDefault();
-        // The href is relative to the chapter CONTAINING the link —
-        // in continuous mode several chapters share one document, so
-        // tell the app exactly which chapter this link lives in.
-        var ci = -1;
-        var cd = a.closest ? a.closest('.rdr-chap') : null;
-        if (cd) {
-            var dv = parseInt(cd.getAttribute('data-idx'), 10);
-            if (!isNaN(dv)) ci = dv;
-        }
         try { if (window.Android && Android.onLink) Android.onLink(h, ci); } catch (err) { }
     }, true);
 })();"""

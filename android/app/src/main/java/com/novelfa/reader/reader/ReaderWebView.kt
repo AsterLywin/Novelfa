@@ -620,6 +620,31 @@ fun ReaderWebView(
                         onPageFinished()
                     }
 
+                    /**
+                     * Backstop: the reader never navigates. LINK_JS
+                     * intercepts every link tap and routes it through
+                     * the bridge, and chapters load via
+                     * loadDataWithBaseURL (which never consults this
+                     * method), so anything reaching here is a link
+                     * LINK_JS missed or a scripted navigation. Block
+                     * it: without this, a plain `#frag` tap in
+                     * vertical mode navigated the WebView itself to
+                     * the chapter-folder URL and out of the reader
+                     * shell. Returning true also covers fragment-only
+                     * navigations, which would otherwise scroll
+                     * natively past the app's anchor handling.
+                     */
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        request: WebResourceRequest?
+                    ): Boolean {
+                        android.util.Log.w(
+                            "ReaderWebView",
+                            "blocked navigation to: " + request?.url
+                        )
+                        return true
+                    }
+
                     override fun onReceivedError(
                         view: WebView,
                         request: WebResourceRequest,

@@ -247,4 +247,29 @@ class HtmlBuilderTest {
         val f = File(tmp.newFolder(), "F.ttf").apply { writeBytes(byteArrayOf(1)) }
         assertTrue(HtmlBuilder.fontFaceCss("F", listOf(f)).contains("font-display:swap"))
     }
+
+    /**
+     * Vertical-mode `#frag` regression (2026-11-16): the LINK_JS
+     * `#frag` branch used to preventDefault only when the paged
+     * pager hook existed, so a vertical-mode tap on a footnote or
+     * cross-reference navigated the WebView itself to the
+     * chapter-folder URL and out of the reader. The branch must
+     * always preventDefault, and route a non-paged tap to the app
+     * (Android.onLink) so it scrolls the target into view.
+     */
+    @Test
+    fun build_fragLinks_alwaysPreventDefaultAndRouteToApp() {
+        val html = build()
+        val frag = html.indexOf("if (h.charAt(0) === '#')")
+        assertTrue("LINK_JS has no #frag branch", frag >= 0)
+        val branch = html.substring(frag, minOf(html.length, frag + 900))
+        val prevent = branch.indexOf("e.preventDefault();")
+        assertTrue("frag branch never preventDefaults", prevent >= 0)
+        val pager = branch.indexOf("if (window.rdrGoToAnchor)")
+        assertTrue("frag branch lost the paged jump", pager > prevent)
+        assertTrue(
+            "vertical frag taps must reach Android.onLink",
+            branch.contains("Android.onLink(h, ci)")
+        )
+    }
 }
