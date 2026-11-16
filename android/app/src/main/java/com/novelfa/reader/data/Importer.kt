@@ -78,12 +78,30 @@ val SUPPORTED_BOOK_MIME_TYPES = arrayOf(
     "application/x-rar-compressed",
     "application/vnd.rar",
     "application/vnd.comicbook-rar",
+    "application/x-cbr",
     // FictionBook and RTF: the common MIME types file managers
     // and providers report for .fb2/.fbz/.rtf picks.
     "application/x-fictionbook+xml",
     "application/x-fictionbook",
     "application/rtf",
-    "text/rtf"
+    "text/rtf",
+    // Generic binary: this is the entry that actually makes CBZ
+    // (and CBR, FB2, FBZ) selectable in the in-app picker. Android's
+    // MimeTypeMap — the table the system file picker uses to report
+    // a file's type — has NO entry for cbz, cbr, fb2 or fbz
+    // (verified against AOSP libcore MimeUtils: no "cbz"/"cbr"
+    // anywhere in the table), so a .cbz on device storage is
+    // reported as application/octet-stream and the picker greys it
+    // out unless that type is in the filter. The application/x-cbz
+    // and vnd.comicbook+zip entries above cannot fix that on their
+    // own: no provider reports them for a plain file on disk.
+    // The importer still validates content and rejects anything
+    // that is not a real book, so picking a random binary only
+    // yields a clean "unsupported format" error. This entry belongs
+    // ONLY here (the in-app picker): it must never be added to the
+    // manifest ACTION_VIEW filter, or Android would offer Novelfa
+    // for every unknown binary from file managers.
+    "application/octet-stream"
 )
 
 class ImportException(
