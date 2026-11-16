@@ -61,6 +61,29 @@ class HtmlBuilderTest {
     }
 
     @Test
+    fun build_wideViewport_capsTextColumn() {
+        // Windows parity (BuildSpacingCss, MaximizedTextWidth=1000):
+        // on a wide viewport the text column is limited and centered
+        // so lines don't stretch across the whole screen. The rule
+        // must be scoped to vertical mode — in paged mode the
+        // JS-packed .rdr-page boxes own the geometry.
+        val html = build()
+        assertTrue(html.contains("max-width:min(1000px,85%)"))
+        assertTrue(html.contains("html:not(.rdr-paged) body"))
+    }
+
+    @Test
+    fun build_wideViewport_capExcludesPagedMode() {
+        // The :not(.rdr-paged) scope above only works if paged pages
+        // actually carry the class on <html>.
+        val paged = HtmlBuilder.build(
+            "file:///tmp/", "<p>سلام</p>", Themes.DARK, "Vazirmatn",
+            18, 1.8, 24, 0.0, false, "", 1, paged = true
+        )
+        assertTrue(paged.contains("class=\"rdr-paged\""))
+    }
+
+    @Test
     fun build_noChromeWebview() {
         assertFalse(build().contains("chrome.webview"))
     }

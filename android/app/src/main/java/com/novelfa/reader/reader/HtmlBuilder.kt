@@ -89,6 +89,17 @@ object HtmlBuilder {
             .append(theme.bg).append(";color:").append(theme.text)
             .append(";animation:rdrFade .3s ease-out;}")
         sb.append("@keyframes rdrFade{from{opacity:.3;}to{opacity:1;}}")
+        // Windows parity (MainWindow BuildSpacingCss, MaximizedTextWidth=1000):
+        // on a wide window the text column is limited and centered so the
+        // lines don't stretch too far. The Android port skipped this branch
+        // ("mobile"), but a phone in landscape / a tablet IS a wide window —
+        // without it the text spans the whole width. Vertical mode only: in
+        // paged mode the JS-packed .rdr-page boxes own the geometry. The
+        // min() keeps the 1000px cap on very wide screens while still
+        // leaving margins on a landscape phone. Shared by every converted
+        // format (TXT, Markdown, EPUB, DOCX, ...), so this also covers
+        // Markdown, not just TXT.
+        sb.append("@media (min-width:700px){html:not(.rdr-paged) body{max-width:min(1000px,85%) !important;margin-left:auto !important;margin-right:auto !important;}}")
         sb.append("body{-webkit-text-size-adjust:100%;overflow-wrap:break-word;word-wrap:break-word;}")
         sb.append("h1,h2,h3,h4,h5,h6{line-height:1.4;margin-top:1.1em;margin-bottom:0.5em;}")
         sb.append("a,a:link,a:visited{color:").append(theme.link)

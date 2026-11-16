@@ -281,6 +281,13 @@ fun ReaderScreen(
         }
     }
     var loadError by remember { mutableStateOf(false) }
+    // The technical cause of a failed open (exception message):
+    // the error screen used to show only the bare "خطا در باز
+    // کردن کتاب:" prefix, so a book that failed to open could
+    // never say WHY on the phone — and the user cannot send
+    // logcat, so the reason alone is not enough (same pattern
+    // as OpenExternalResult.Failed's detail).
+    var loadErrorDetail by remember { mutableStateOf<String?>(null) }
     // Multi-book ZIP archives: the candidates the archive engine
     // found, and the one the user picked. Null candidates = not a
     // multi-book archive (or not checked yet); a null pick with
@@ -1119,7 +1126,12 @@ fun ReaderScreen(
             // the spot.
             preparingFile = false
             loadError = true
-            snackbar.showSnackbar(openErr)
+            // Keep the cause: the snackbar and the error screen
+            // below used to show only the bare prefix, so a
+            // failed open never said why on the phone.
+            loadErrorDetail = e.message ?: e.javaClass.simpleName
+            Log.e("NovelfaReader", "failed to open book $bookId", e)
+            snackbar.showSnackbar(openErr + (loadErrorDetail ?: ""))
         }
     }
 
@@ -2448,6 +2460,10 @@ fun ReaderScreen(
                     loadError && vm == null -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(openErr)
+                            loadErrorDetail?.let { detail ->
+                                Spacer(Modifier.height(8.dp))
+                                Text(detail, style = MaterialTheme.typography.bodySmall)
+                            }
                             TextButton(onClick = { closeReader() }) { Text(stringResource(R.string.close)) }
                         }
                     }
