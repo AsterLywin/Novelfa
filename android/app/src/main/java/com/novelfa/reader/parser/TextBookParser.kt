@@ -1,6 +1,17 @@
 package com.novelfa.reader.parser
 
 import com.novelfa.reader.model.ParsedBook
+import com.vladsch.flexmark.ext.autolink.AutolinkExtension
+import com.vladsch.flexmark.ext.definition.DefinitionExtension
+import com.vladsch.flexmark.ext.footnotes.FootnoteExtension
+import com.vladsch.flexmark.ext.gfm.strikethrough.StrikethroughSubscriptExtension
+import com.vladsch.flexmark.ext.gfm.tasklist.TaskListExtension
+import com.vladsch.flexmark.ext.superscript.SuperscriptExtension
+import com.vladsch.flexmark.ext.tables.TablesExtension
+import com.vladsch.flexmark.html.HtmlRenderer
+import com.vladsch.flexmark.parser.Parser
+import com.vladsch.flexmark.util.data.MutableDataSet
+import com.vladsch.flexmark.util.misc.Extension
 import java.io.File
 
 /**
@@ -98,15 +109,17 @@ object TextBookParser {
     ): ParsedBook {
         val raw = decodeText(bytes).replace("\r\n", "\n").replace('\r', '\n')
             .trim('\uFEFF', '\n')
-        val md = MarkdownParser(raw)
-        val title = md.title ?: File(fileName).nameWithoutExtension
-        val sections = md.sections.mapIndexed { i, s ->
-            ConvertedBook.Section(s.title ?: chapterFallback(i + 1), s.bodyHtml)
-        }
+        val (title, sections) = renderMarkdown(raw)
         return ConvertedBook.write(
-            outDir, title,
+            outDir, title ?: File(fileName).nameWithoutExtension,
             if (sections.isEmpty()) emptyList()
-            else ConvertedBook.chunkSections(sections)
+            else ConvertedBook.chunkSections(
+                sections.mapIndexed { i, (sectionTitle, bodyHtml) ->
+                    ConvertedBook.Section(
+                        sectionTitle ?: chapterFallback(i + 1), bodyHtml
+                    )
+                }
+            )
         )
     }
 
@@ -181,268 +194,158 @@ object TextBookParser {
     }
 }
 
+
 /**
- * Small CommonMark-subset renderer: headings, fenced code, lists
- * (nested by indent), blockquotes, tables, rules, and inline code /
- * bold / italic / strike / links. Images have no resolvable file next
- * to a picked document, so only their alt text survives (as emphasis) —
- * a broken-image icon would be worse than no image.
+ * Markdown rendering via flexmark-java (CommonMark + GFM): headings,
+ * fenced code, lists (nested, loose, task lists), blockquotes
+ * (nested), tables with alignment, rules, footnotes, reference
+ * links, autolinks, definition lists, sub/superscript, inline code /
+ * bold / italic / strike / links, and raw HTML passthrough.
+ *
+ * Sectioning keeps the old hand-written parser's contract: the first
+ * `# ` heading — and only when it is the very first content — is the
+ * book title; every `# ` / `## ` heading after that starts a new
+ * section whose title is the heading text and whose body starts with
+ * the heading itself; deeper headings stay inline.
+ *
+ * Images: a remote (`http(s):`, `data:`, `file:`) `src` renders as an
+ * `<img>` — the WebView can load it. A relative `src` has no file to
+ * resolve to (a picked document carries no directory), so it keeps
+ * the old behaviour: only the alt text survives, as emphasis, instead
+ * of a broken-image icon. Resolving sibling images needs the source
+ * directory plumbed through the importer; that is a separate change.
+ *
+ * Footnote links (`#fn-…`) are plain in-page anchors: they work in
+ * paged mode, where the reader's anchor JS intercepts `#frag`, and
+ * hit the known vertical-mode `#frag` navigation bug otherwise.
  */
-private class MarkdownParser(private val raw: String) {
+private val markdownOptions: MutableDataSet = MutableDataSet().set(
+    Parser.EXTENSIONS,
+    listOf<Extension>(
+        TablesExtension.create(),
+        FootnoteExtension.create(),
+        StrikethroughSubscriptExtension.create(),
+        TaskListExtension.create(),
+        AutolinkExtension.create(),
+        DefinitionExtension.create(),
+        SuperscriptExtension.create()
+    )
+)
+private val markdownParser: Parser = Parser.builder(markdownOptions).build()
+private val markdownRenderer: HtmlRenderer =
+    HtmlRenderer.builder(markdownOptions).build()
 
-    data class Section(val title: String?, val bodyHtml: String)
-
+/** Book title (null when none) plus (section title?, body HTML) pairs. */
+/**
+ * Renders the whole document in one pass, then splits the resulting
+ * HTML into sections on top-level `<h1>`/`<h2>` tags.
+ *
+ * The one-pass render matters: rendering flexmark nodes one by one
+ * silently drops document-scoped output — link references and
+ * autolinks come out as plain text, images as empty paragraphs, and
+ * the footnote list is never emitted (proven with a probe against
+ * the real 0.64.8 jars). Sectioning therefore works on the finished
+ * HTML, tracking tag depth so a heading inside a blockquote or list
+ * never starts a section.
+ *
+ * Sectioning contract: the first H1 is the book title only when it
+ * is the very first content; H1/H2 otherwise start new sections
+ * (title = heading text, body starts with the heading HTML); deeper
+ * headings stay inline; content before the first heading gets a
+ * fallback title from the caller.
+ */
+private fun renderMarkdown(raw: String): Pair<String?, List<Pair<String?, String>>> {
+    val html = markdownRenderer.render(markdownParser.parse(raw))
+    val sections = mutableListOf<Pair<String?, String>>()
     var title: String? = null
-        private set
-    val sections = mutableListOf<Section>()
-
-    init {
-        parse()
+    var sectionTitle: String? = null
+    val out = StringBuilder()
+    fun flushSection() {
+        // Whitespace-only gaps between blocks (newlines flexmark leaves
+        // between them) must not become phantom chapters.
+        if (out.toString().isNotBlank() || sectionTitle != null) {
+            sections += sectionTitle to finishMarkdownHtml(out.toString())
+            out.clear()
+            sectionTitle = null
+        }
     }
-
-    private fun parse() {
-        val lines = raw.lines()
-        val out = StringBuilder()
-        var sectionTitle: String? = null
-        var i = 0
-        fun flushSection() {
-            if (out.isNotEmpty() || sectionTitle != null) {
-                sections += Section(sectionTitle, out.toString())
-                out.clear()
-                sectionTitle = null
-            }
+    val voidTags = setOf(
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr"
+    )
+    val tagPattern = Regex("<(/?)([A-Za-z][A-Za-z0-9]*)[^>]*>")
+    var depth = 0
+    var cursor = 0
+    var searchFrom = 0
+    while (true) {
+        // Skip HTML comments: a "<h1>" inside one must not split.
+        if (html.startsWith("<!--", searchFrom)) {
+            val end = html.indexOf("-->", searchFrom + 4)
+            searchFrom = if (end < 0) html.length else end + 3
+            continue
         }
-        while (i < lines.size) {
-            val line = lines[i]
-            if (line.isBlank()) {
-                i++
-                continue
-            }
-            // A stray === underline (left behind when a multi-line
-            // paragraph's setext break fired): it is markup, not text.
-            if (line.trim().isNotEmpty() && line.trim().all { it == '=' }) {
-                i++
-                continue
-            }
-            // Fenced code block.
-            if (line.trimStart().startsWith("```")) {
-                val buf = StringBuilder()
-                i++
-                while (i < lines.size && !lines[i].trimStart().startsWith("```")) {
-                    buf.append(lines[i]).append('\n')
-                    i++
-                }
-                i++ // closing fence
-                out.append("<pre><code>")
-                    .append(ConvertedBook.escape(buf.toString().trimEnd('\n')))
-                    .append("</code></pre>")
-                continue
-            }
-            // ATX heading.
-            val atx = Regex("^(#{1,6})\\s+(.*)$").matchEntire(line.trim())
-            if (atx != null) {
-                val level = atx.groupValues[1].length
-                val text = atx.groupValues[2].trim().trimEnd('#').trim()
-                if (level == 1 && title == null && sections.isEmpty() && out.isEmpty()) {
-                    title = stripInline(text)
-                    i++
-                    continue
-                }
-                if (level <= 2) {
-                    flushSection()
-                    sectionTitle = stripInline(text)
-                    out.append("<h$level>").append(inline(text)).append("</h$level>")
-                } else {
-                    out.append("<h$level>").append(inline(text)).append("</h$level>")
-                }
-                i++
-                continue
-            }
-            // Setext heading (text line followed by === or ---).
-            if (i + 1 < lines.size) {
-                val under = lines[i + 1].trim()
-                if (under.isNotEmpty() && under.all { it == '=' }) {
-                    if (title == null && sections.isEmpty() && out.isEmpty()) {
-                        title = stripInline(line.trim())
-                    } else {
-                        flushSection()
-                        sectionTitle = stripInline(line.trim())
-                        out.append("<h1>").append(inline(line.trim())).append("</h1>")
-                    }
-                    i += 2
-                    continue
-                }
-                if (under.isNotEmpty() && under.all { it == '-' } && line.isNotBlank()) {
-                    flushSection()
-                    sectionTitle = stripInline(line.trim())
-                    out.append("<h2>").append(inline(line.trim())).append("</h2>")
-                    i += 2
-                    continue
-                }
-            }
-            // Horizontal rule.
-            if (Regex("^\\s*([-*_])(\\s*\\1){2,}\\s*$").matches(line)) {
-                out.append("<hr/>")
-                i++
-                continue
-            }
-            // Table (header + delimiter row).
-            if (line.contains('|') && i + 1 < lines.size &&
-                Regex("^\\s*\\|?[\\s:|-]+\\|\\s*$").matches(lines[i + 1]) &&
-                lines[i + 1].contains('-')
-            ) {
-                val headerCells = splitRow(line)
-                out.append("<table><thead><tr>")
-                for (c in headerCells) out.append("<th>").append(inline(c)).append("</th>")
-                out.append("</tr></thead><tbody>")
-                i += 2
-                while (i < lines.size && lines[i].contains('|') && lines[i].isNotBlank()) {
-                    out.append("<tr>")
-                    for (c in splitRow(lines[i])) {
-                        out.append("<td>").append(inline(c)).append("</td>")
-                    }
-                    out.append("</tr>")
-                    i++
-                }
-                out.append("</tbody></table>")
-                continue
-            }
-            // Blockquote run.
-            if (line.trimStart().startsWith(">")) {
-                val buf = StringBuilder()
-                while (i < lines.size && lines[i].trimStart().startsWith(">")) {
-                    buf.append(lines[i].trimStart().removePrefix(">").trimStart())
-                        .append(' ')
-                    i++
-                }
-                out.append("<blockquote><p>").append(inline(buf.toString().trim()))
-                    .append("</p></blockquote>")
-                continue
-            }
-            // List run (ordered or unordered, nested by indent).
-            val listMatch = Regex("^(\\s*)([-*+]|\\d+[.)])\\s+(.*)$").matchEntire(line)
-            if (listMatch != null) {
-                val items = mutableListOf<Triple<Int, Boolean, String>>()
-                while (i < lines.size) {
-                    val m = Regex("^(\\s*)([-*+]|\\d+[.)])\\s+(.*)$")
-                        .matchEntire(lines[i]) ?: break
-                    val indent = m.groupValues[1].length
-                    val ordered = m.groupValues[2].first().isDigit()
-                    items += Triple(indent, ordered, m.groupValues[3])
-                    i++
-                }
-                out.append(renderList(items, 0, items.firstOrNull()?.first ?: 0))
-                continue
-            }
-            // Plain paragraph: consecutive lines joined with a space
-            // (Markdown soft wrap); a trailing double space is a <br/>.
-            val para = StringBuilder()
-            while (i < lines.size && lines[i].isNotBlank() &&
-                !lines[i].trimStart().startsWith("#") &&
-                !lines[i].trimStart().startsWith("```") &&
-                !lines[i].trimStart().startsWith(">") &&
-                Regex("^(\\s*)([-*+]|\\d+[.)])\\s+").matchEntire(lines[i]) == null &&
-                !(lines[i].contains('|') && i + 1 < lines.size &&
-                    lines[i + 1].contains('-') &&
-                    Regex("^\\s*\\|?[\\s:|-]+\\|\\s*$").matches(lines[i + 1]))
-            ) {
-                val l = lines[i]
-                if (para.isNotEmpty()) {
-                    para.append(if (para.endsWith("  ")) "<br/>" else " ")
-                }
-                para.append(l.trim())
-                i++
-                // Setext underline ends this paragraph (handled next loop).
-                if (i < lines.size && lines[i].trim().all { it == '=' || it == '-' } &&
-                    lines[i].trim().isNotEmpty()
-                ) break
-            }
-            out.append("<p>").append(inline(para.toString())).append("</p>")
+        val match = tagPattern.find(html, searchFrom) ?: break
+        val (slash, name) = match.groupValues[1] to match.groupValues[2]
+        val lower = name.lowercase()
+        val selfClosing = match.value.endsWith("/>")
+        searchFrom = match.range.last + 1
+        if (slash.isNotEmpty()) {
+            depth = maxOf(0, depth - 1)
+            continue
         }
-        flushSection()
+        if (selfClosing || lower in voidTags) continue
+        if (depth == 0 && (lower == "h1" || lower == "h2")) {
+            val close = html.indexOf("</$lower>", match.range.last + 1, ignoreCase = true)
+            if (close < 0) continue
+            val headingEnd = close + lower.length + 3
+            val headingHtml = html.substring(match.range.first, headingEnd)
+            if (lower == "h1" && title == null && sections.isEmpty() && out.isEmpty()) {
+                title = stripMarkdownHtml(headingHtml)
+            } else {
+                out.append(html, cursor, match.range.first)
+                flushSection()
+                sectionTitle = stripMarkdownHtml(headingHtml)
+                out.append(headingHtml)
+            }
+            cursor = headingEnd
+            searchFrom = headingEnd
+            continue
+        }
+        depth++
     }
-
-    private fun splitRow(line: String): List<String> {
-        var t = line.trim()
-        if (t.startsWith("|")) t = t.drop(1)
-        if (t.endsWith("|")) t = t.dropLast(1)
-        return t.split("|").map { it.trim() }
-    }
-
-    /** Renders a flat item list into nested <ul>/<ol> by indent level. */
-    private fun renderList(
-        items: List<Triple<Int, Boolean, String>>,
-        from: Int,
-        baseIndent: Int
-    ): String {
-        val sb = StringBuilder()
-        var idx = from
-        var openTag: String? = null
-        fun close() {
-            if (openTag != null) {
-                sb.append("</").append(openTag).append(">")
-                openTag = null
-            }
-        }
-        while (idx < items.size) {
-            val (indent, ordered, text) = items[idx]
-            if (indent < baseIndent) break
-            if (indent > baseIndent) {
-                // Nested run belongs inside the previous <li>: reopen it.
-                val nested = renderList(items, idx, indent)
-                // Strip the closing </li> we just wrote, append nested, re-close.
-                val tail = "</li>"
-                if (sb.endsWith(tail)) sb.setLength(sb.length - tail.length)
-                sb.append(nested).append(tail)
-                // Advance idx past the nested run.
-                var j = idx
-                while (j < items.size && items[j].first >= indent) j++
-                idx = j
-                continue
-            }
-            val tag = if (ordered) "ol" else "ul"
-            if (openTag != tag) {
-                close()
-                sb.append("<").append(tag).append(">")
-                openTag = tag
-            }
-            sb.append("<li>").append(inline(text)).append("</li>")
-            idx++
-        }
-        close()
-        return sb.toString()
-    }
-
-    /** Inline formatting with code spans protected from later passes. */
-    private fun inline(text: String): String {
-        val codes = mutableListOf<String>()
-        var t = ConvertedBook.escape(text)
-        t = Regex("`([^`]+)`").replace(t) { m ->
-            codes += m.groupValues[1]
-            "\u0000${codes.size - 1}\u0000"
-        }
-        // Images: keep only the alt text (no resolvable file beside the pick).
-        t = Regex("!\\[([^\\]]*)\\]\\([^\\)]*\\)").replace(t) { m ->
-            val alt = m.groupValues[1]
-            if (alt.isBlank()) "" else "<em>$alt</em>"
-        }
-        t = Regex("\\[([^\\]]+)\\]\\(([^\\)\\s]+)(?:\\s+\"[^\"]*\")?\\)")
-            .replace(t) { m ->
-                "<a href=\"" + m.groupValues[2] + "\">" + m.groupValues[1] + "</a>"
-            }
-        t = Regex("\\*\\*([^*]+)\\*\\*").replace(t, "<strong>$1</strong>")
-        t = Regex("__([^_]+)__").replace(t, "<strong>$1</strong>")
-        t = Regex("~~([^~]+)~~").replace(t, "<del>$1</del>")
-        t = Regex("\\*([^*]+)\\*").replace(t, "<em>$1</em>")
-        t = Regex("(?<!\\w)_([^_]+)_(?!\\w)").replace(t, "<em>$1</em>")
-        t = Regex("\u0000(\\d+)\u0000").replace(t) { m ->
-            "<code>" + codes[m.groupValues[1].toInt()] + "</code>"
-        }
-        return t
-    }
-
-    private fun stripInline(text: String): String =
-        inline(text).replace(Regex("<[^>]+>"), "")
-            .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
-            .replace("&#39;", "'").replace("&amp;", "&")
+    out.append(html, cursor, html.length)
+    flushSection()
+    return title to sections
 }
+
+/**
+ * Post-processing of one section's rendered HTML: relative `<img>`
+ * tags become their alt text (see above), and the trailing newline
+ * flexmark leaves inside fenced code blocks is dropped so a code
+ * block does not end on a blank line.
+ */
+private fun finishMarkdownHtml(html: String): String {
+    var out = html.replace("\n</code>", "</code>")
+    out = Regex("<img\\s[^>]*>").replace(out) { m ->
+        val tag = m.value
+        val src = Regex("src=\"([^\"]*)\"").find(tag)?.groupValues?.get(1) ?: ""
+        val alt = Regex("alt=\"([^\"]*)\"").find(tag)?.groupValues?.get(1) ?: ""
+        if (src.startsWith("http://") || src.startsWith("https://") ||
+            src.startsWith("data:") || src.startsWith("file:")
+        ) {
+            tag
+        } else if (alt.isBlank()) {
+            ""
+        } else {
+            "<em>$alt</em>"
+        }
+    }
+    return out
+}
+
+/** Rendered HTML back to plain text (heading titles): strip tags, unescape entities. */
+private fun stripMarkdownHtml(html: String): String =
+    html.replace(Regex("<[^>]+>"), "")
+        .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
+        .replace("&#39;", "'").replace("&amp;", "&")
+        .trim()

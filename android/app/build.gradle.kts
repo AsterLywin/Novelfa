@@ -71,6 +71,22 @@ dependencies {
     // PDF engine replacing the hand-written text extractor. Maven
     // Central, so it resolves through the VM mirror too.
     implementation("com.github.mhiew:pdfium-android:1.9.2")
+    // Markdown (flexmark-java 0.64.8): full CommonMark + GFM
+    // rendering replaces the hand-written subset parser that used to
+    // live in TextBookParser (no task lists, footnotes, reference
+    // links, autolinks, definition lists or sub/superscript).
+    // Maven Central, so it resolves through the VM mirror too.
+    // Subscript lives in the gfm-strikethrough artifact
+    // (StrikethroughSubscriptExtension covers ~~strike~~ and ~sub~);
+    // there is no flexmark-ext-subscript artifact.
+    implementation("com.vladsch.flexmark:flexmark:0.64.8")
+    implementation("com.vladsch.flexmark:flexmark-ext-tables:0.64.8")
+    implementation("com.vladsch.flexmark:flexmark-ext-footnotes:0.64.8")
+    implementation("com.vladsch.flexmark:flexmark-ext-gfm-strikethrough:0.64.8")
+    implementation("com.vladsch.flexmark:flexmark-ext-gfm-tasklist:0.64.8")
+    implementation("com.vladsch.flexmark:flexmark-ext-autolink:0.64.8")
+    implementation("com.vladsch.flexmark:flexmark-ext-definition:0.64.8")
+    implementation("com.vladsch.flexmark:flexmark-ext-superscript:0.64.8")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")

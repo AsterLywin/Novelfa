@@ -129,6 +129,173 @@ class TextBookParserTest {
         assertTrue(body.contains("<pre><code>val x = 1 &lt; 2</code></pre>"))
     }
 
+    private fun renderMd(md: String, name: String = "t.md"): String {
+        val out = tempFolder.newFolder("out-" + name.hashCode().toString().replace("-", "n"))
+        val book = TextBookParser.parseMarkdown(
+            md.toByteArray(Charsets.UTF_8), name, out, ::fallback
+        )
+        return book.chapters.joinToString("") { it.file.readText() }
+    }
+
+    @Test
+    fun markdown_taskList_rendersCheckboxes() {
+        val body = renderMd(
+            """
+            # T
+
+            - [x] کار انجام‌شده
+            - [ ] کار انجام‌نشده
+            """.trimIndent()
+        )
+        assertTrue("body was:\n$body", body.contains("task-list-item"))
+        assertTrue("body was:\n$body", body.contains("type=\"checkbox\""))
+        assertTrue("body was:\n$body", body.contains("checked"))
+        assertTrue(body.contains("کار انجام‌شده"))
+        assertTrue(body.contains("کار انجام‌نشده"))
+    }
+
+    @Test
+    fun markdown_footnotes_renderWithBackrefs() {
+        val body = renderMd(
+            """
+            # T
+
+            این جمله یک پانویس دارد.[^1]
+
+            [^1]: متن پانویس اول است.
+            """.trimIndent()
+        )
+        assertTrue("body was:\n$body", body.contains("class=\"footnotes\""))
+        assertTrue("body was:\n$body", body.contains("fn-1"))
+        assertTrue("body was:\n$body", body.contains("fnref-1"))
+        assertTrue(body.contains("متن پانویس اول است."))
+    }
+
+    @Test
+    fun markdown_referenceLinksAndAutolinks() {
+        val body = renderMd(
+            """
+            # T
+
+            لینک مرجع: [گیت‌هاب][gh]
+
+            لینک خودکار: <https://example.com>
+
+            [gh]: https://github.com
+            """.trimIndent()
+        )
+        assertTrue("body was:\n$body", body.contains("<a href=\"https://github.com\">گیت‌هاب</a>"))
+        assertTrue("body was:\n$body", body.contains("<a href=\"https://example.com\">https://example.com</a>"))
+        assertTrue("body was:\n$body", !body.contains("[gh]:"))
+    }
+
+    @Test
+    fun markdown_images_remoteKept_relativeAltOnly() {
+        val body = renderMd(
+            """
+            # T
+
+            ![دوردست](https://example.com/pic.png)
+
+            ![لوگو](images/logo.png)
+            """.trimIndent()
+        )
+        assertTrue("body was:\n$body", body.contains("<img src=\"https://example.com/pic.png\""))
+        assertTrue("body was:\n$body", body.contains("<em>لوگو</em>"))
+        assertTrue("body was:\n$body", !body.contains("images/logo.png"))
+    }
+
+    @Test
+    fun markdown_tableAlignment() {
+        val body = renderMd(
+            """
+            # T
+
+            | راست | وسط | چپ |
+            |---:|:---:|---|
+            | 1 | 2 | 3 |
+            """.trimIndent()
+        )
+        assertTrue("body was:\n$body", body.contains("<table>"))
+        assertTrue(
+            "body was:\n$body",
+            body.contains("align=\"center\"") || body.contains("text-align: center")
+        )
+        assertTrue(
+            "body was:\n$body",
+            body.contains("align=\"right\"") || body.contains("text-align: right")
+        )
+    }
+
+    @Test
+    fun markdown_subSuperscriptAndDefinitionList() {
+        val body = renderMd(
+            """
+            # T
+
+            آب H~2~O است و توان X^2^ است.
+
+            اصطلاح اول
+            : تعریف اصطلاح اول
+            """.trimIndent()
+        )
+        assertTrue("body was:\n$body", body.contains("H<sub>2</sub>O"))
+        assertTrue("body was:\n$body", body.contains("X<sup>2</sup>"))
+        assertTrue("body was:\n$body", body.contains("<dl>"))
+        assertTrue("body was:\n$body", body.contains("<dt>اصطلاح اول</dt>"))
+        assertTrue("body was:\n$body", body.contains("<dd>تعریف اصطلاح اول</dd>"))
+    }
+
+    @Test
+    fun markdown_nestedBlockquoteAndBoldWithItalic() {
+        val body = renderMd(
+            """
+            # T
+
+            > بیرونی
+            >
+            > > درونی
+
+            این **متن *کج* وسط** است.
+            """.trimIndent()
+        )
+        assertTrue(
+            "body was:\n$body",
+            body.split("<blockquote>").size - 1 >= 2
+        )
+        assertTrue(body.contains("درونی"))
+        assertTrue("body was:\n$body", body.contains("<strong>متن <em>کج</em> وسط</strong>"))
+    }
+
+    @Test
+    fun markdown_rawHtml_passthrough() {
+        val body = renderMd(
+            """
+            # T
+
+            متن با <b>پررنگ اچ‌تی‌ام‌ال</b> و خط جدید<br>بعدش.
+            """.trimIndent()
+        )
+        assertTrue("body was:\n$body", body.contains("<b>پررنگ اچ‌تی‌ام‌ال</b>"))
+        assertTrue("body was:\n$body", body.contains("<br"))
+    }
+
+    @Test
+    fun markdown_setextH1_isTitle() {
+        val md = """
+            رمان من
+            ========
+
+            متن داستان.
+        """.trimIndent()
+        val out = tempFolder.newFolder("out-setext")
+        val book = TextBookParser.parseMarkdown(
+            md.toByteArray(Charsets.UTF_8), "novel.md", out, ::fallback
+        )
+        assertEquals("رمان من", book.title)
+        assertTrue(book.chapters.joinToString("") { it.file.readText() }.contains("متن داستان."))
+    }
+
     @Test
     fun convertedBook_writeRead_roundTripsTitles() {
         val out = tempFolder.newFolder("out")

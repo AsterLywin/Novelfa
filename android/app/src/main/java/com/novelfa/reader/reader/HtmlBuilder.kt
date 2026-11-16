@@ -103,6 +103,17 @@ object HtmlBuilder {
         sb.append("pre{max-width:100% !important;white-space:pre-wrap !important;")
         sb.append("word-break:break-word !important;overflow-x:auto !important;}")
         sb.append("code{word-break:break-word;}")
+        // Markdown / EPUB code and quotes: without these, a fenced code
+        // block and a blockquote look exactly like plain paragraphs.
+        // rgba greys work in both light and dark themes; the
+        // start-side border follows the paragraph direction (RTL/LTR).
+        sb.append("blockquote{margin:1em 0;padding:0.2em 1em;border-inline-start:3px solid rgba(128,128,128,0.5);background:rgba(128,128,128,0.08);}")
+        sb.append("pre{font-family:monospace;background:rgba(128,128,128,0.12);padding:12px;border-radius:8px;}")
+        sb.append("code{font-family:monospace;background:rgba(128,128,128,0.12);padding:0 4px;border-radius:4px;}")
+        sb.append("pre code{background:transparent;padding:0;border-radius:0;}")
+        sb.append("th{background:rgba(128,128,128,0.12);}")
+        sb.append("hr{border:none;border-top:1px solid rgba(128,128,128,0.35);margin:1.5em 0;}")
+        sb.append(".footnotes{font-size:0.9em;}")
         sb.append("[data-theme=\"dark\"] [style*=\"background:#fff\" i],")
         sb.append("[data-theme=\"dark\"] [style*=\"background:white\" i]{background-color:transparent !important;}")
         // Search + highlight marks. The highlight background comes
