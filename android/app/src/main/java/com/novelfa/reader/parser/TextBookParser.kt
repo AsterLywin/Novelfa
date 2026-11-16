@@ -53,18 +53,23 @@ object TextBookParser {
         // Book title: a short first line with no sentence punctuation,
         // followed by a blank line, in a document that has more to say.
         // Anything else keeps the file name (the EPUB parser's fallback).
-        // The title is only claimed when the NEXT block is a heading
-        // (the title-page shape: "My Book" then "فصل ۱"): without that
-        // guard, a book whose first line is simply short — a
-        // dedication, an author line, a one-line opening — had that
-        // line silently deleted from the text. With the guard, such a
-        // line stays in the body and the filename is the title.
+        // Windows parity: the Windows reader claims such a line as the
+        // title unconditionally. Android additionally needs evidence it
+        // IS a title page — either the next block is a heading (the
+        // title-page shape: "My Book" then "فصل ۱") or the line repeats
+        // the file's own name — so a short opening line that is neither
+        // (a dedication, "به نام خدا", a one-line opening) is never
+        // silently deleted from the text: it stays in the body and the
+        // filename is the title.
         var title = File(fileName).nameWithoutExtension
         var bodyBlocks = blocks
         val first = blocks.first()
+        val titleEvidence = blocks.getOrNull(1)?.let { isHeading(it) } == true ||
+            normalizeTitle(first).equals(
+                normalizeTitle(File(fileName).nameWithoutExtension), ignoreCase = true
+            )
         if (blocks.size >= 3 && first.lines().size == 1 && first.length <= 60 &&
-            first.last() !in ".!؟?،؛:" && !isHeading(first) &&
-            blocks.getOrNull(1)?.let { isHeading(it) } == true
+            first.last() !in ".!؟?،؛:" && !isHeading(first) && titleEvidence
         ) {
             title = first.trim()
             bodyBlocks = blocks.drop(1)
@@ -168,6 +173,10 @@ object TextBookParser {
             String(bytes, java.nio.charset.Charset.forName("windows-1252"))
         }.getOrDefault(String(bytes, Charsets.UTF_8))
     }
+
+    /** Persian/Arabic letter variants, so a file named with ي/ك still matches its title line. */
+    private fun normalizeTitle(s: String) =
+        s.trim().replace('ي', 'ی').replace('ك', 'ک')
 
     /** Blank-line paragraphs; with no blank lines, every line is one. */
     private fun splitParagraphs(text: String): List<String> {

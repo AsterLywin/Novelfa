@@ -1029,7 +1029,14 @@ fun ReaderScreen(
             // right-to-left. Per-paragraph direction inside the page is
             // stamped separately by prepareChapterBody either way.
             v.isEnglish = detectBookIsLtr(parsed.chapters)
-            v.readingMode = ReadingMode.fromKey(savedMode)
+            // Windows parity for TXT (see defaultModeFor): continuous by
+            // default. The stored global mode is untouched, so other books
+            // open the way the user left them, and the mode popup still
+            // switches a TXT book to paged for the session.
+            v.readingMode = ReaderViewModel.defaultModeFor(
+                ReadingMode.fromKey(savedMode),
+                BookFormat.detect(resolvedFile) == BookFormat.TXT
+            )
             v.footnotePopup = savedFootnotePopup
             // Seed the text-point anchor BEFORE loadChapter: its
             // forced saveProgress must preserve the saved anchor for

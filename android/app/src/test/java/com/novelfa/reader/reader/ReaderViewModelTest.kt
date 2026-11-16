@@ -117,6 +117,28 @@ class ReaderViewModelTest {
         ReaderViewModel(repo, id, repo.let { runBlocking { it.book(id) } } ?: book(id), chapters)
 
     @Test
+    fun defaultModeFor_txtIsContinuousOthersKeepSaved() {
+        // Windows parity: TXT opens continuous-vertical (the Windows
+        // reader has no paged mode); anything else keeps the stored mode.
+        assertEquals(
+            ReadingMode.CONTINUOUS_VERTICAL,
+            ReaderViewModel.defaultModeFor(ReadingMode.PAGED_HORIZONTAL, true)
+        )
+        assertEquals(
+            ReadingMode.CONTINUOUS_VERTICAL,
+            ReaderViewModel.defaultModeFor(ReadingMode.CONTINUOUS_VERTICAL, true)
+        )
+        assertEquals(
+            ReadingMode.PAGED_HORIZONTAL,
+            ReaderViewModel.defaultModeFor(ReadingMode.PAGED_HORIZONTAL, false)
+        )
+        assertEquals(
+            ReadingMode.CONTINUOUS_VERTICAL,
+            ReaderViewModel.defaultModeFor(ReadingMode.CONTINUOUS_VERTICAL, false)
+        )
+    }
+
+    @Test
     fun loadChapter_setsHtmlAndSavesProgress() = runBlocking {
         val repo = FakeReaderRepo(listOf(book()))
         val v = vm(repo, twoChapters())

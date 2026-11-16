@@ -322,6 +322,15 @@ class ReaderViewModel(
         }
 
         /**
+         * Windows parity: TXT books open in continuous-vertical mode — the
+         * Windows reader has no paged mode, so TXT there reads as one
+         * continuous flow with the titled divider at every section.
+         * Everything else keeps the stored global mode.
+         */
+        fun defaultModeFor(savedMode: ReadingMode, isTxt: Boolean): ReadingMode =
+            if (isTxt) ReadingMode.CONTINUOUS_VERTICAL else savedMode
+
+        /**
          * Display name for a reader theme in the UI language: static themes
          * use Themes.NAMES_FA / NAMES_EN; character pages get "شبِ X" /
          * "روزِ X" (fa) or "X Night" / "X Day" (en).

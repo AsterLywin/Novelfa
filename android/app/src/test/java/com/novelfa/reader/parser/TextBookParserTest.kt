@@ -41,6 +41,38 @@ class TextBookParserTest {
     }
 
     @Test
+    fun txt_firstLineMatchingFileName_isTitle() {
+        // Windows parity: the first line repeats the file's own name,
+        // so it IS the title page even with no heading after it — the
+        // line becomes the title and leaves the body.
+        val text = "نام رمان\n\nمتن شروع کتاب که پاراگراف اول است.\n\nادامه‌ی داستان.\n"
+        val out = tempFolder.newFolder("out-title")
+        val book = TextBookParser.parseText(
+            text.toByteArray(Charsets.UTF_8), "نام رمان.txt", out, ::fallback
+        )
+        assertEquals("نام رمان", book.title)
+        val body = book.chapters.joinToString("") { it.file.readText() }
+        assertTrue(!body.contains("نام رمان"))
+        assertTrue(body.contains("متن شروع کتاب"))
+    }
+
+    @Test
+    fun txt_firstLineMatchingFileName_arabicLetters_isTitle() {
+        // File named with Arabic ك still matches a Persian title line.
+        // (The title must not start with فصل/بخش/قسمت/کتاب: that word
+        // makes isHeading claim it as a section heading instead.)
+        val text = "رمان کوهستان\n\nمتن شروع کتاب.\n\nادامه.\n"
+        val out = tempFolder.newFolder("out-title-ar")
+        val fileName = "رمان کوهستان.txt".replace('ک', 'ك')
+        val book = TextBookParser.parseText(
+            text.toByteArray(Charsets.UTF_8), fileName, out, ::fallback
+        )
+        assertEquals("رمان کوهستان", book.title)
+        val body = book.chapters.joinToString("") { it.file.readText() }
+        assertTrue(!body.contains("رمان کوهستان"))
+    }
+
+    @Test
     fun txt_noHeadings_chunksBySizeWithFallbackTitles() {
         val para = "این یک پاراگراف طولانی است. ".repeat(200)
         val text = (para + "\n\n").repeat(10)
