@@ -106,10 +106,22 @@ enum class BookFormat(val extension: String) {
                         val names = zip.entries().toList().map { it.name }
                         return@runCatching when {
                             names.any { it == "word/document.xml" } -> DOCX
+                            // EPUB needs a real content document, not
+                            // just the marker: a comic archive re-zipped
+                            // from an EPUB's extracted folder carries
+                            // container.xml + an .opf but only images,
+                            // and claiming it as EPUB stores it as
+                            // .epub, which the reader then fails to
+                            // open as a book. A real EPUB always has
+                            // at least one XHTML/SVG spine document
+                            // (spine items must be content documents,
+                            // never bare images), so requiring one
+                            // rejects stray markers without ever
+                            // rejecting a real EPUB.
                             names.any {
                                 it == "META-INF/container.xml" ||
                                     it.lowercase().endsWith(".opf")
-                            } -> EPUB
+                            } && names.any { isEpubContentDocument(it) } -> EPUB
                             names.any { it.lowercase().endsWith(".fb2") } -> FBZ
                             else -> null
                         }
@@ -132,6 +144,19 @@ enum class BookFormat(val extension: String) {
                 }
                 null
             }.getOrNull()
+        }
+
+        /**
+         * True when [name] is an EPUB content document — an XHTML or
+         * SVG file, the only kinds a spine may reference. Used by
+         * the EPUB branch of [detectStrongContent] so a stray OPF
+         * inside an image archive never claims the archive as EPUB.
+         */
+        private fun isEpubContentDocument(name: String): Boolean {
+            val lower = name.lowercase()
+            return lower.endsWith(".xhtml") || lower.endsWith(".xhtm") ||
+                lower.endsWith(".html") || lower.endsWith(".htm") ||
+                lower.endsWith(".svg")
         }
 
         /**

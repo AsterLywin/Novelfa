@@ -136,6 +136,52 @@ class BookFormatTest {
     }
 
     @Test
+    fun strongContent_comicArchiveWithStrayOpf_isNotEpub() {
+        // A CBZ that carries a stray EPUB marker (e.g. re-zipped from
+        // an EPUB's extracted folder: container.xml + .opf + images,
+        // no XHTML content) is a comic, not an EPUB. The strong
+        // sniff must not claim it, or the import stores it as .epub
+        // and the reader fails to open it as a book.
+        val f = tempFolder.newFile("comic.cbz")
+        java.util.zip.ZipOutputStream(f.outputStream()).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("META-INF/container.xml"))
+            zos.write("<container><rootfiles><rootfile full-path=\"content.opf\"/></rootfiles></container>".toByteArray())
+            zos.closeEntry()
+            zos.putNextEntry(java.util.zip.ZipEntry("content.opf"))
+            zos.write("<package><metadata><dc:title>Stray</dc:title></metadata><manifest><item id=\"p1\" href=\"001.jpg\" media-type=\"image/jpeg\"/></manifest><spine><itemref idref=\"p1\"/></spine></package>".toByteArray())
+            zos.closeEntry()
+            zos.putNextEntry(java.util.zip.ZipEntry("001.jpg"))
+            zos.write(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()))
+            zos.closeEntry()
+            zos.putNextEntry(java.util.zip.ZipEntry("002.jpg"))
+            zos.write(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()))
+            zos.closeEntry()
+        }
+        assertNull(BookFormat.detectStrongContent(f))
+        assertEquals(BookFormat.CBZ, BookFormat.detect(f))
+    }
+
+    @Test
+    fun strongContent_realEpubWithXhtml_isEpub() {
+        // A real EPUB (container + OPF + an XHTML content document)
+        // must still sniff as EPUB: the XHTML requirement only
+        // rejects stray markers, never a real book.
+        val f = tempFolder.newFile("book.cbz")
+        java.util.zip.ZipOutputStream(f.outputStream()).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("META-INF/container.xml"))
+            zos.write("<container><rootfiles><rootfile full-path=\"content.opf\"/></rootfiles></container>".toByteArray())
+            zos.closeEntry()
+            zos.putNextEntry(java.util.zip.ZipEntry("content.opf"))
+            zos.write("<package><metadata><dc:title>Real</dc:title></metadata><manifest><item id=\"c1\" href=\"chap1.xhtml\" media-type=\"application/xhtml+xml\"/></manifest><spine><itemref idref=\"c1\"/></spine></package>".toByteArray())
+            zos.closeEntry()
+            zos.putNextEntry(java.util.zip.ZipEntry("chap1.xhtml"))
+            zos.write("<html><body><p>hello</p></body></html>".toByteArray())
+            zos.closeEntry()
+        }
+        assertEquals(BookFormat.EPUB, BookFormat.detectStrongContent(f))
+    }
+
+    @Test
     fun sniff_extensionlessWindows1256Persian() {
         val f = tempFolder.newFile("mystery")
         f.writeBytes("سلام دنیا".toByteArray(java.nio.charset.Charset.forName("windows-1256")))
