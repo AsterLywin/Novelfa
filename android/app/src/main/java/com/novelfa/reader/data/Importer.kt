@@ -568,6 +568,27 @@ class Importer(
                                 }
                             }
                         } ?: throw IOException("Cannot open input stream: $sourceUri")
+                        // Short-copy guard: a provider stream can
+                        // end early (a pipe that drops, a file
+                        // still downloading) and the loop above
+                        // stops cleanly at EOF with no error — the
+                        // import would then register a truncated
+                        // archive whose pages fail at first open.
+                        // The provider's declared size is the
+                        // check: when it is known, fewer copied
+                        // bytes means an incomplete copy. This
+                        // throws IOException so the retry above
+                        // re-copies once, then the import fails
+                        // loudly instead of registering a broken
+                        // book. (Only the short direction is
+                        // checked — a provider that under-reports
+                        // its size must not fail a complete copy.)
+                        if (pickedSize != null && tmpDest.length() < pickedSize) {
+                            throw IOException(
+                                "incomplete copy: expected $pickedSize bytes, " +
+                                    "got ${tmpDest.length()}"
+                            )
+                        }
                         copyHash = copyDigest?.digest()?.joinToString("") { "%02x".format(it) }
                         if (copyHash != null) importHashes[id] = copyHash
                         break

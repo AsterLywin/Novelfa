@@ -272,6 +272,19 @@ object CbzBook {
         }
     }
 
+    /**
+     * One entry's compression method from the central directory
+     * (or the local-header walk when the tail is gone), or null
+     * when the entry is not listed at all. Lets callers tell an
+     * unsupported method (bzip2/LZMA/zstd/AES — a deliberate
+     * per-page failure, the book still imports) apart from a
+     * supported method that cannot be read (cut or corrupt data
+     * — the import must fail loudly instead of registering a
+     * broken book).
+     */
+    fun entryMethod(zipFile: File, entryName: String): Int? =
+        recoveredEntries(zipFile)?.firstOrNull { it.name == entryName }?.method
+
     /** One central-directory row: enough to locate and open the entry. */
     private data class CentralEntry(
         val name: String,

@@ -43,6 +43,35 @@ object CbzEngine : BookEngine {
         if (entries.isEmpty()) throw IllegalArgumentException(
             "Comic archive has no readable images: $displayName"
         )
+        // Page validation: the listing above only proves the
+        // central directory parses — an entry whose data is cut
+        // or corrupt still lists fine, and the viewer then fails
+        // on it per page ("Cannot open comic image: <name>")
+        // while the same file opened in place renders. So every
+        // listed image with a SUPPORTED method (STORED/DEFLATED)
+        // is opened fully here (the same tolerant backend the
+        // viewer falls back to); the first unreadable one fails
+        // the import loudly with the incomplete-archive message
+        // instead of registering a broken book. An unsupported
+        // method (bzip2/LZMA/zstd/AES) is a deliberate per-page
+        // failure and the book still imports, and an entry whose
+        // method cannot be determined is left to the viewer's
+        // per-page failure rather than failing the whole import.
+        // One full read pass over the archive — the copy already
+        // paid one, and a broken book costs the user far more
+        // than the extra seconds. (A single page over the 64MB
+        // read cap counts as unreadable here, as it does for
+        // the cover extraction.)
+        for (name in entries) {
+            cancelCheck?.invoke()
+            val method = CbzBook.entryMethod(source, name)
+            if (method != 0 && method != 8) continue
+            if (CbzBook.readEntryBytes(source, name) == null) {
+                throw IllegalArgumentException(
+                    "Comic archive has an unreadable page: $name ($displayName)"
+                )
+            }
+        }
         val coverFile = extractFirstImage(source, entries, scratchDir)
         return EngineMetadata(
             title = File(displayName).nameWithoutExtension
