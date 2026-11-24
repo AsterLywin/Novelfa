@@ -348,7 +348,7 @@ object HtmlText {
                     ).find(tag)?.let {
                         val cls = it.groupValues[1].ifEmpty { it.groupValues[2] }
                         Regex(
-                            "\\b(footnote|noteref|fn)\\b",
+                            "\\b(footnote|noteref|fn|note)\\b",
                             RegexOption.IGNORE_CASE
                         ).containsMatchIn(cls)
                     } == true

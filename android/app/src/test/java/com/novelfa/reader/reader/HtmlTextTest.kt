@@ -173,6 +173,15 @@ class HtmlTextTest {
     }
 
     @Test
+    fun markFootnoteLinks_classNote_marks() {
+        // Windows ReaderFootnote.isNote also treats a bare class="note"
+        // as a footnote reference (Ali 2026-11-23); the fragment here
+        // (#r5) does not look like a footnote id on its own.
+        val got = HtmlText.markFootnoteLinks("<p><a class=\"note\" href=\"#r5\">5</a></p>")
+        assertTrue(got.contains("data-novelfa-footnote"))
+    }
+
+    @Test
     fun markFootnoteLinks_plainAnchor_notMarked() {
         val got = HtmlText.markFootnoteLinks("<p><a href=\"#section-2\">بخش ۲</a></p>")
         assertFalse(got.contains("data-novelfa-footnote"))
