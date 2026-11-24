@@ -16,6 +16,11 @@ class ImportFileFormatTest {
         assertEquals(ImportFileFormat.WORD, importFormatOfFileName("doc.docx"))
         assertEquals(ImportFileFormat.CBZ, importFormatOfFileName("comic.cbz"))
         assertEquals(ImportFileFormat.ZIP, importFormatOfFileName("comic.zip"))
+        assertEquals(ImportFileFormat.CBR, importFormatOfFileName("comic.cbr"))
+        assertEquals(ImportFileFormat.RAR, importFormatOfFileName("comic.rar"))
+        assertEquals(ImportFileFormat.FB2, importFormatOfFileName("book.fb2"))
+        assertEquals(ImportFileFormat.FB2, importFormatOfFileName("book.fbz"))
+        assertEquals(ImportFileFormat.RTF, importFormatOfFileName("doc.rtf"))
     }
 
     @Test
@@ -35,7 +40,6 @@ class ImportFileFormatTest {
     fun missingOrUnknownExtensionsAreUnknownNeverGuessed() {
         assertEquals(ImportFileFormat.UNKNOWN, importFormatOfFileName("book"))
         assertEquals(ImportFileFormat.UNKNOWN, importFormatOfFileName("book."))
-        assertEquals(ImportFileFormat.UNKNOWN, importFormatOfFileName("book.rar"))
         assertEquals(ImportFileFormat.UNKNOWN, importFormatOfFileName(null))
         assertEquals(ImportFileFormat.UNKNOWN, importFormatOfFileName(""))
     }

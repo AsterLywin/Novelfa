@@ -8,12 +8,19 @@ import com.novelfa.reader.domain.ContentHashChange
 import com.novelfa.reader.domain.contentHashChange
 import com.novelfa.reader.domain.isCompleted
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Before
 import org.junit.Test
 
 /** In-memory fake BookRepository for library tests. */
@@ -109,6 +116,24 @@ private fun book(
 )
 
 class LibraryViewModelTest {
+
+    // LibraryViewModel's init launches in viewModelScope, which runs on
+    // Dispatchers.Main — uninitialised in unit tests, so merely
+    // constructing the VM threw. Point Main at an unconfined test
+    // dispatcher: the init launch then runs eagerly and returns at
+    // once (prefs is null here), and the tested paths (filtered /
+    // combine) never touch Main themselves.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Before
+    fun setUpMain() {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @After
+    fun tearDownMain() {
+        Dispatchers.resetMain()
+    }
 
     private val completed = book("c1", "Done Book", lastChapterIndex = 9, lastOpenedDate = "2026-01-05T00:00:00Z")
     private val reading = book("c2", "Reading Book", lastChapterIndex = 2, lastOpenedDate = "2026-01-02T00:00:00Z")

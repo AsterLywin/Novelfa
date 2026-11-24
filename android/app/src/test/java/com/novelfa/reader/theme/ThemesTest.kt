@@ -74,10 +74,10 @@ class ThemesTest {
     }
 
     @Test
-    fun characterPages_size14() {
-        // 7 character themes (subaru, ram, rem, beatrice, emilia,
-        // echidna, tsugi) x night + day.
-        assertEquals(14, characterPages().size)
+    fun characterPages_size16() {
+        // 8 character themes (subaru, ram, rem, beatrice, emilia,
+        // echidna, tsugi, reif) x night + day.
+        assertEquals(16, characterPages().size)
     }
 
     @Test
