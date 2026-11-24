@@ -128,6 +128,8 @@ internal fun LazyGridScope.libraryHeaderSpan(
     rankTitle: String,
     rankStarFill: Float,
     bookCount: Int,
+    todayMinutes: Int = 0,
+    dailyGoalMinutes: Int = 30,
     avatarPath: String,
     avatarSignature: String,
     onAvatarClick: () -> Unit,
@@ -156,6 +158,8 @@ internal fun LazyGridScope.libraryHeaderSpan(
             rankTitle = rankTitle,
             rankStarFill = rankStarFill,
             bookCount = bookCount,
+            todayMinutes = todayMinutes,
+            dailyGoalMinutes = dailyGoalMinutes,
             avatarPath = avatarPath,
             avatarSignature = avatarSignature,
             onAvatarClick = onAvatarClick,
@@ -200,6 +204,8 @@ internal fun LazyListScope.libraryHeaderList(
     rankTitle: String,
     rankStarFill: Float,
     bookCount: Int,
+    todayMinutes: Int = 0,
+    dailyGoalMinutes: Int = 30,
     avatarPath: String,
     avatarSignature: String,
     onAvatarClick: () -> Unit,
@@ -228,6 +234,8 @@ internal fun LazyListScope.libraryHeaderList(
             rankTitle = rankTitle,
             rankStarFill = rankStarFill,
             bookCount = bookCount,
+            todayMinutes = todayMinutes,
+            dailyGoalMinutes = dailyGoalMinutes,
             avatarPath = avatarPath,
             avatarSignature = avatarSignature,
             onAvatarClick = onAvatarClick,
@@ -434,6 +442,8 @@ private fun ProfileHeader(
     rankTitle: String,
     rankStarFill: Float,
     bookCount: Int,
+    todayMinutes: Int = 0,
+    dailyGoalMinutes: Int = 30,
     avatarPath: String,
     avatarSignature: String,
     onAvatarClick: () -> Unit,
@@ -517,6 +527,23 @@ private fun ProfileHeader(
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(top = 2.dp)
                 )
+                // Smart daily goal (upstream LibraryWindow smart
+                // summary): "today X of Y min" with a thin progress
+                // bar under the book count.
+                if (dailyGoalMinutes > 0) {
+                    Text(
+                        text = stringResource(R.string.smart_today_read, todayMinutes, dailyGoalMinutes),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                    LinearProgressIndicator(
+                        progress = { (todayMinutes.toFloat() / dailyGoalMinutes).coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .fillMaxWidth()
+                    )
+                }
             }
         }
     }

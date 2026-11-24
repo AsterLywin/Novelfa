@@ -127,6 +127,7 @@ fun SettingsRoute(
                     notify = { msg -> scope.launch { snackbar.showSnackbar(msg) } }
                 )
             }
+            item { SmartSection(viewModel) }
             item { LanguageSection(viewModel) }
             item { ImportSection(viewModel) }
             item { LibrarySection(viewModel) }
@@ -651,6 +652,136 @@ private fun ReaderDefaultsSection(
     }
     if (fontDialog) {
         FontPickerDialog(fontStore = fontStore, onDismiss = { fontDialog = false })
+    }
+}
+
+/**
+ * Smart reading (upstream SmartSettings, Ali 2026-11-23): auto-scroll,
+ * eye care, reading speed and the daily goal. The mode segmented
+ * choice is the master switch — "off" stops the engine entirely.
+ */
+@Composable
+private fun SmartSection(viewModel: SettingsViewModel) {
+    val mode by viewModel.smartAutoScrollMode.collectAsState(initial = "off")
+    val interval by viewModel.smartAutoScrollInterval.collectAsState(initial = 2.0)
+    val stepPct by viewModel.smartAutoScrollStep.collectAsState(initial = 45)
+    val speed by viewModel.smartAutoScrollSpeed.collectAsState(initial = 45)
+    val autoNext by viewModel.smartAutoScrollAutoNext.collectAsState(initial = true)
+    val pause by viewModel.smartAutoScrollPause.collectAsState(initial = true)
+    val warmth by viewModel.smartEyeWarmth.collectAsState(initial = 0)
+    val brightness by viewModel.smartBrightness.collectAsState(initial = 100)
+    val wpm by viewModel.smartWpm.collectAsState(initial = 210)
+    val dailyGoal by viewModel.smartDailyGoalMin.collectAsState(initial = 30)
+    val scope = rememberCoroutineScope()
+
+    SectionCard(title = stringResource(R.string.smart_reading), icon = AppIconKind.Sparkle) {
+        SegmentedChoice(
+            options = listOf(
+                SegmentOption(stringResource(R.string.smart_autoscroll_off)),
+                SegmentOption(stringResource(R.string.smart_autoscroll_step)),
+                SegmentOption(stringResource(R.string.smart_autoscroll_smooth))
+            ),
+            selected = when (mode) {
+                "step" -> 1
+                "smooth" -> 2
+                else -> 0
+            },
+            onSelect = { index ->
+                scope.launch {
+                    viewModel.setSmartAutoScrollMode(
+                        when (index) {
+                            1 -> "step"
+                            2 -> "smooth"
+                            else -> "off"
+                        }
+                    )
+                }
+            }
+        )
+        if (mode == "step") {
+            RowDivider()
+            DoubleStepper(
+                label = stringResource(R.string.smart_autoscroll_interval),
+                value = interval,
+                step = 0.5,
+                range = 0.5..30.0,
+                onSet = { scope.launch { viewModel.setSmartAutoScrollInterval(it) } }
+            )
+            RowDivider()
+            IntStepper(
+                label = stringResource(R.string.smart_autoscroll_step_pct),
+                value = stepPct,
+                step = 5,
+                range = 10..100,
+                onSet = { scope.launch { viewModel.setSmartAutoScrollStep(it) } }
+            )
+        }
+        if (mode == "smooth") {
+            RowDivider()
+            IntStepper(
+                label = stringResource(R.string.smart_autoscroll_speed),
+                value = speed,
+                step = 5,
+                range = 10..240,
+                onSet = { scope.launch { viewModel.setSmartAutoScrollSpeed(it) } }
+            )
+        }
+        if (mode != "off") {
+            RowDivider()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.smart_autoscroll_autonext),
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = autoNext,
+                    onCheckedChange = { scope.launch { viewModel.setSmartAutoScrollAutoNext(it) } }
+                )
+            }
+            RowDivider()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.smart_autoscroll_pause),
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = pause,
+                    onCheckedChange = { scope.launch { viewModel.setSmartAutoScrollPause(it) } }
+                )
+            }
+        }
+        RowDivider()
+        IntStepper(
+            label = stringResource(R.string.smart_eye_warmth),
+            value = warmth,
+            step = 5,
+            range = 0..60,
+            onSet = { scope.launch { viewModel.setSmartEyeWarmth(it) } }
+        )
+        RowDivider()
+        IntStepper(
+            label = stringResource(R.string.smart_brightness),
+            value = brightness,
+            step = 5,
+            range = 45..100,
+            onSet = { scope.launch { viewModel.setSmartBrightness(it) } }
+        )
+        RowDivider()
+        IntStepper(
+            label = stringResource(R.string.smart_wpm),
+            value = wpm,
+            step = 10,
+            range = 80..600,
+            onSet = { scope.launch { viewModel.setSmartWpm(it) } }
+        )
+        RowDivider()
+        IntStepper(
+            label = stringResource(R.string.smart_daily_goal),
+            value = dailyGoal,
+            step = 5,
+            range = 5..300,
+            onSet = { scope.launch { viewModel.setSmartDailyGoalMin(it) } }
+        )
     }
 }
 

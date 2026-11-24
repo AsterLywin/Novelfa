@@ -60,6 +60,17 @@ class SettingsViewModel(
     val diagLogEnabled: Flow<Boolean> = prefs.diagLogEnabled
     val inPlaceImport: Flow<Boolean> = prefs.inPlaceImport
     val fileNameTitle: Flow<Boolean> = prefs.fileNameTitle
+    /** Smart reading prefs (upstream SmartSettings). */
+    val smartAutoScrollMode: Flow<String> = prefs.smartAutoScrollMode
+    val smartAutoScrollInterval: Flow<Double> = prefs.smartAutoScrollInterval
+    val smartAutoScrollStep: Flow<Int> = prefs.smartAutoScrollStep
+    val smartAutoScrollSpeed: Flow<Int> = prefs.smartAutoScrollSpeed
+    val smartAutoScrollAutoNext: Flow<Boolean> = prefs.smartAutoScrollAutoNext
+    val smartAutoScrollPause: Flow<Boolean> = prefs.smartAutoScrollPause
+    val smartEyeWarmth: Flow<Int> = prefs.smartEyeWarmth
+    val smartBrightness: Flow<Int> = prefs.smartBrightness
+    val smartWpm: Flow<Int> = prefs.smartWpm
+    val smartDailyGoalMin: Flow<Int> = prefs.smartDailyGoalMin
 
     fun rankService(): RankService = RankService(rankPrefs)
 
@@ -107,6 +118,16 @@ class SettingsViewModel(
     suspend fun setReaderLineHeight(value: String) = prefs.setReaderLineHeight(value)
     suspend fun setReaderMargin(value: String) = prefs.setReaderMargin(value)
     suspend fun setReaderSpacing(value: String) = prefs.setReaderSpacing(value)
+    suspend fun setSmartAutoScrollMode(value: String) = prefs.setSmartAutoScrollMode(value)
+    suspend fun setSmartAutoScrollInterval(seconds: Double) = prefs.setSmartAutoScrollInterval(seconds)
+    suspend fun setSmartAutoScrollStep(percent: Int) = prefs.setSmartAutoScrollStep(percent)
+    suspend fun setSmartAutoScrollSpeed(pxPerSec: Int) = prefs.setSmartAutoScrollSpeed(pxPerSec)
+    suspend fun setSmartAutoScrollAutoNext(value: Boolean) = prefs.setSmartAutoScrollAutoNext(value)
+    suspend fun setSmartAutoScrollPause(value: Boolean) = prefs.setSmartAutoScrollPause(value)
+    suspend fun setSmartEyeWarmth(value: Int) = prefs.setSmartEyeWarmth(value)
+    suspend fun setSmartBrightness(value: Int) = prefs.setSmartBrightness(value)
+    suspend fun setSmartWpm(value: Int) = prefs.setSmartWpm(value)
+    suspend fun setSmartDailyGoalMin(value: Int) = prefs.setSmartDailyGoalMin(value)
     suspend fun setSupportEnabled(value: Boolean) {
         prefs.setSupportEnabled(value)
         support.setEnabled(value)

@@ -464,6 +464,12 @@ fun LibraryScreen(
     // value, otherwise the welcome dialog opens on every cold start before
     // DataStore delivers the saved name (and never closes afterwards).
     val profileName by prefs.profileName.collectAsState(initial = null)
+    // Smart daily goal (upstream SmartSettings.DailyGoalMinutes +
+    // TodayReadSeconds): seconds read today, shown under the rank in
+    // the profile header. The header takes minutes — the goal is in
+    // minutes and a per-second number would churn it.
+    val todayReadSeconds by prefs.todayReadSeconds.collectAsState(initial = 0)
+    val dailyGoalMinutes by prefs.smartDailyGoalMin.collectAsState(initial = 30)
     // All collection names (book-anchored + manual empty ones, distinct
     // and sorted): the assign dialog picks from these instead of
     // making the user type a name every time.
@@ -868,6 +874,8 @@ fun LibraryScreen(
                     rankTitle = rankTitle,
                     rankStarFill = rankStarFill,
                     bookCount = visible.size,
+                    todayMinutes = todayReadSeconds / 60,
+                    dailyGoalMinutes = dailyGoalMinutes,
                     avatarPath = avatarPath,
                     avatarSignature = avatarSignature,
                     onAvatarClick = { avatarOpen = true },
@@ -962,6 +970,8 @@ fun LibraryScreen(
                     rankTitle = rankTitle,
                     rankStarFill = rankStarFill,
                     bookCount = visible.size,
+                    todayMinutes = todayReadSeconds / 60,
+                    dailyGoalMinutes = dailyGoalMinutes,
                     avatarPath = avatarPath,
                     avatarSignature = avatarSignature,
                     onAvatarClick = { avatarOpen = true },

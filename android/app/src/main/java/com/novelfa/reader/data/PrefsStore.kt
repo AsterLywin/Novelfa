@@ -60,6 +60,24 @@ class PrefsStore(private val context: Context) {
         val THEME_PARTICLES_LOW_END = booleanPreferencesKey("themeParticlesLowEnd")
         // Status preset collections seeded once (upstream CollectionPresets flag).
         val COLLECTION_PRESETS = booleanPreferencesKey("collectionPresets")
+        // Smart reading (upstream SmartSettings, Ali 2026-11-23):
+        // auto-scroll mode ("off" | "step" | "smooth"), its step/smooth
+        // config, eye care (warmth 0-60, brightness 45-100), reading
+        // speed (WPM 80-600) and the daily goal (minutes 5-300).
+        val SMART_AUTOSCROLL_MODE = stringPreferencesKey("smartAutoScrollMode")
+        val SMART_AUTOSCROLL_INTERVAL = stringPreferencesKey("smartAutoScrollInterval")
+        val SMART_AUTOSCROLL_STEP = intPreferencesKey("smartAutoScrollStep")
+        val SMART_AUTOSCROLL_SPEED = intPreferencesKey("smartAutoScrollSpeed")
+        val SMART_AUTOSCROLL_AUTONEXT = booleanPreferencesKey("smartAutoScrollAutoNext")
+        val SMART_AUTOSCROLL_PAUSE = booleanPreferencesKey("smartAutoScrollPause")
+        val SMART_EYE_WARMTH = intPreferencesKey("smartEyeWarmth")
+        val SMART_BRIGHTNESS = intPreferencesKey("smartBrightness")
+        val SMART_WPM = intPreferencesKey("smartWpm")
+        val SMART_DAILY_GOAL_MIN = intPreferencesKey("smartDailyGoalMin")
+        // Seconds read today, keyed by date (upstream TodayReadSeconds):
+        // the date guards the rollover — a stale date reads as 0.
+        val SMART_TODAY_DATE = stringPreferencesKey("smartTodayDate")
+        val SMART_TODAY_SECONDS = intPreferencesKey("smartTodaySeconds")
         val GUIDE_SHOWN = booleanPreferencesKey("guideShown")
         // Reading layout mode (replaces the old continuous toggle).
         val READING_MODE = stringPreferencesKey("readingMode")
@@ -210,6 +228,66 @@ class PrefsStore(private val context: Context) {
     /** Status preset collections seeded once (upstream CollectionPresets flag). */
     val collectionPresetsSeeded: Flow<Boolean> =
         context.dataStore.data.map { it[COLLECTION_PRESETS] ?: false }
+
+    /** Smart auto-scroll mode: "off" (default) | "step" | "smooth". */
+    val smartAutoScrollMode: Flow<String> =
+        context.dataStore.data.map { it[SMART_AUTOSCROLL_MODE] ?: "off" }
+    /** Step-mode interval, seconds (0.5-30, default 2.0). */
+    val smartAutoScrollInterval: Flow<Double> = context.dataStore.data.map {
+        (it[SMART_AUTOSCROLL_INTERVAL]?.toDoubleOrNull() ?: 2.0).coerceIn(0.5, 30.0)
+    }
+    /** Step-mode step, % of the viewport (10-100, default 45). */
+    val smartAutoScrollStep: Flow<Int> =
+        context.dataStore.data.map { (it[SMART_AUTOSCROLL_STEP] ?: 45).coerceIn(10, 100) }
+    /** Smooth-mode speed, px/s (10-240, default 45). */
+    val smartAutoScrollSpeed: Flow<Int> =
+        context.dataStore.data.map { (it[SMART_AUTOSCROLL_SPEED] ?: 45).coerceIn(10, 240) }
+    /** Auto-scroll moves to the next chapter at the end (default true). */
+    val smartAutoScrollAutoNext: Flow<Boolean> =
+        context.dataStore.data.map { it[SMART_AUTOSCROLL_AUTONEXT] ?: true }
+    /** A user scroll pauses auto-scroll for 2.5 s (default true). */
+    val smartAutoScrollPause: Flow<Boolean> =
+        context.dataStore.data.map { it[SMART_AUTOSCROLL_PAUSE] ?: true }
+    /** Eye-care warmth, 0-60 (default 0 = off). */
+    val smartEyeWarmth: Flow<Int> =
+        context.dataStore.data.map { (it[SMART_EYE_WARMTH] ?: 0).coerceIn(0, 60) }
+    /** Reader brightness, 45-100 (default 100 = off). */
+    val smartBrightness: Flow<Int> =
+        context.dataStore.data.map { (it[SMART_BRIGHTNESS] ?: 100).coerceIn(45, 100) }
+    /** Reading speed, words per minute (80-600, default 210). */
+    val smartWpm: Flow<Int> =
+        context.dataStore.data.map { (it[SMART_WPM] ?: 210).coerceIn(80, 600) }
+    /** Daily reading goal, minutes (5-300, default 30). */
+    val smartDailyGoalMin: Flow<Int> =
+        context.dataStore.data.map { (it[SMART_DAILY_GOAL_MIN] ?: 30).coerceIn(5, 300) }
+    /** Seconds read today (0 when the stored date is not today). */
+    val todayReadSeconds: Flow<Int> = context.dataStore.data.map { prefs ->
+        val today = todayKey()
+        if ((prefs[SMART_TODAY_DATE] ?: "") != today) 0
+        else (prefs[SMART_TODAY_SECONDS] ?: 0).coerceIn(0, 86_400)
+    }
+
+    /** Today's date key, "yyyy-MM-dd" in the device's local zone. */
+    private fun todayKey(): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            .format(java.util.Date())
+
+    /**
+     * Add seconds read today (upstream SmartSettings.AddTodayReadSeconds):
+     * a stale stored date resets the counter first; the total caps at
+     * one day. Called in 30 s chunks while the reader is open.
+     */
+    suspend fun addTodayReadSeconds(deltaSec: Int) {
+        if (deltaSec <= 0) return
+        val today = todayKey()
+        context.dataStore.edit { prefs ->
+            val cur = if ((prefs[SMART_TODAY_DATE] ?: "") == today) {
+                (prefs[SMART_TODAY_SECONDS] ?: 0).coerceIn(0, 86_400)
+            } else 0
+            prefs[SMART_TODAY_DATE] = today
+            prefs[SMART_TODAY_SECONDS] = minOf(86_400, cur + deltaSec)
+        }
+    }
 
     /** First-run guide shown (set on Done/Skip; never for existing users). */
     val guideShown: Flow<Boolean> = context.dataStore.data.map { it[GUIDE_SHOWN] ?: false }
@@ -398,6 +476,48 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setFootnoteDisplay(value: String) {
         context.dataStore.edit { it[FOOTNOTE_DISPLAY] = value }
+    }
+
+    /** Smart reading setters (ranges mirror upstream SmartSettings). */
+    suspend fun setSmartAutoScrollMode(value: String) {
+        val mode = if (value == "step" || value == "smooth") value else "off"
+        context.dataStore.edit { it[SMART_AUTOSCROLL_MODE] = mode }
+    }
+
+    suspend fun setSmartAutoScrollInterval(seconds: Double) {
+        context.dataStore.edit { it[SMART_AUTOSCROLL_INTERVAL] = seconds.coerceIn(0.5, 30.0).toString() }
+    }
+
+    suspend fun setSmartAutoScrollStep(percent: Int) {
+        context.dataStore.edit { it[SMART_AUTOSCROLL_STEP] = percent.coerceIn(10, 100) }
+    }
+
+    suspend fun setSmartAutoScrollSpeed(pxPerSec: Int) {
+        context.dataStore.edit { it[SMART_AUTOSCROLL_SPEED] = pxPerSec.coerceIn(10, 240) }
+    }
+
+    suspend fun setSmartAutoScrollAutoNext(value: Boolean) {
+        context.dataStore.edit { it[SMART_AUTOSCROLL_AUTONEXT] = value }
+    }
+
+    suspend fun setSmartAutoScrollPause(value: Boolean) {
+        context.dataStore.edit { it[SMART_AUTOSCROLL_PAUSE] = value }
+    }
+
+    suspend fun setSmartEyeWarmth(value: Int) {
+        context.dataStore.edit { it[SMART_EYE_WARMTH] = value.coerceIn(0, 60) }
+    }
+
+    suspend fun setSmartBrightness(value: Int) {
+        context.dataStore.edit { it[SMART_BRIGHTNESS] = value.coerceIn(45, 100) }
+    }
+
+    suspend fun setSmartWpm(value: Int) {
+        context.dataStore.edit { it[SMART_WPM] = value.coerceIn(80, 600) }
+    }
+
+    suspend fun setSmartDailyGoalMin(value: Int) {
+        context.dataStore.edit { it[SMART_DAILY_GOAL_MIN] = value.coerceIn(5, 300) }
     }
 
     suspend fun setComicBackground(value: String) {

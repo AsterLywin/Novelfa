@@ -135,6 +135,18 @@ class ReaderViewModel(
         runCatching { cb(unit, words) }
     }
 
+    /**
+     * Words in a chapter, for the Smart reading-time estimate (same
+     * count the XP credit uses, so the two never disagree). IO: the
+     * prepared body comes from the chapter cache when it is warm.
+     */
+    suspend fun chapterWordCount(index: Int): Int {
+        if (index !in chapters.indices) return 0
+        return withContext(Dispatchers.IO) {
+            runCatching { XpRank.wordsFromHtml(readPrepared(index)) }.getOrDefault(0)
+        }
+    }
+
     /** Credit the current unit on reader close, if its dwell qualified. */
     suspend fun xpFlush() {
         val toCredit = xpTracker.flush() ?: return

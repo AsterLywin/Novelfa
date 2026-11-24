@@ -368,6 +368,29 @@ fun ReaderScreen(
     var rev by remember { mutableIntStateOf(0) }
     var webView by remember { mutableStateOf<android.webkit.WebView?>(null) }
     var spacingOpen by remember { mutableStateOf(false) }
+    // Smart reading prefs (upstream SmartSettings): collected here so
+    // the engine, the eye-care overlay and the ETA all read the same
+    // values; the settings screen writes them.
+    val smartAutoScrollMode by prefs.smartAutoScrollMode.collectAsState(initial = "off")
+    val smartAutoScrollInterval by prefs.smartAutoScrollInterval.collectAsState(initial = 2.0)
+    val smartAutoScrollStep by prefs.smartAutoScrollStep.collectAsState(initial = 45)
+    val smartAutoScrollSpeed by prefs.smartAutoScrollSpeed.collectAsState(initial = 45)
+    val smartAutoScrollAutoNext by prefs.smartAutoScrollAutoNext.collectAsState(initial = true)
+    val smartAutoScrollPause by prefs.smartAutoScrollPause.collectAsState(initial = true)
+    val smartEyeWarmth by prefs.smartEyeWarmth.collectAsState(initial = 0)
+    val smartBrightness by prefs.smartBrightness.collectAsState(initial = 100)
+    val smartWpm by prefs.smartWpm.collectAsState(initial = 210)
+    // Auto-scroll engine state (upstream SmartWebBridge.__smartAutoScroll):
+    // running = the user started it from the mode dialog; the engine
+    // stops it at the end of the book, or of a chapter with auto-next
+    // off. The mode pref stays, so one tap restarts it.
+    var autoScrollRunning by remember { mutableStateOf(false) }
+    // Remaining minutes in the current chapter at the Smart WPM, or
+    // null while unknown (chapter not counted yet).
+    var etaMinutes by remember { mutableStateOf<Int?>(null) }
+    // Auto-scroll runtime (plain holder, see Smart.kt): the scroll
+    // reporter fires every 200 ms and must not recompose the reader.
+    val autoScrollRuntime = remember { AutoScrollRuntime() }
     // Footnote popup (see handleFootnoteTap): the resolved note, or
     // null when no popup is shown. The setting itself lives on the
     // ViewModel (v.footnotePopup) and in PrefsStore.
@@ -1582,6 +1605,24 @@ fun ReaderScreen(
                 val last = v.contLast
                 val first = v.contFirst
                 v.onScroll(t, h, c)
+                // Smart auto-scroll pause-on-interact (upstream
+                // markUserInteract): a scrollTop change outside the
+                // window after an engine-driven scroll is the user
+                // grabbing the page — pause the engine for 2.5 s.
+                // Geometry is recorded for the engine's own step and
+                // bottom checks either way.
+                autoScrollRuntime.apply {
+                    lastTop = t
+                    lastHeight = h
+                    lastClient = c
+                    if (smartAutoScrollPause && autoScrollRunning &&
+                        prevTop >= 0 && t != prevTop &&
+                        android.os.SystemClock.uptimeMillis() > programmaticUntilMs
+                    ) {
+                        pauseUntilMs = android.os.SystemClock.uptimeMillis() + 2500
+                    }
+                    prevTop = t
+                }
                 // NOTE: onScroll deliberately does NOT update the page
                 // pill anymore. It used to derive pill numbers from
                 // scroll geometry (t/c, h/c) on the assumption that
@@ -2025,6 +2066,77 @@ fun ReaderScreen(
     }
 
     /**
+     * End-of-chapter for the auto-scroll engine: the next chapter
+     * when auto-next is on and one exists, else the engine stops
+     * (returns false). A jump restarts the engine effect via the
+     * chapter-index key, so the loop below never double-advances.
+     * (Declared first: local functions are only visible after their
+     * declaration, and both step functions call this one.)
+     */
+    fun autoScrollNextChapter(v: ReaderViewModel): Boolean {
+        if (!smartAutoScrollAutoNext) return false
+        if (v.index >= v.chapters.size - 1) return false
+        jumpChapter(v, 1)
+        return true
+    }
+
+    /**
+     * Smart auto-scroll: one step (upstream `__smartAutoScroll.step`).
+     * Vertical: scroll by step% of the viewport; at the bottom, move
+     * on (auto-next) or stop. Paged: turn one page; on the last page,
+     * move on or stop. Returns false when the engine must stop.
+     */
+    fun autoScrollStep(v: ReaderViewModel): Boolean {
+        if (modeNow == ReadingMode.PAGED_HORIZONTAL) {
+            val total = pagedPageCount
+            if (total > 0 && pagedPage >= total) return autoScrollNextChapter(v)
+            autoScrollRuntime.programmaticUntilMs =
+                android.os.SystemClock.uptimeMillis() + 500
+            turnPage(v, forward = true)
+            return true
+        }
+        val rt = autoScrollRuntime
+        if (rt.lastHeight > 0 && rt.lastTop + rt.lastClient >= rt.lastHeight - 10) {
+            return autoScrollNextChapter(v)
+        }
+        val delta = autoScrollStepDelta(rt.lastClient, smartAutoScrollStep)
+        rt.programmaticUntilMs = android.os.SystemClock.uptimeMillis() + 500
+        webView?.evaluateJavascript("window.scrollBy(0, $delta);", null)
+        return true
+    }
+
+    /**
+     * Smart auto-scroll, smooth mode, one 100 ms tick (upstream
+     * `__smartAutoScroll.startContinuous`): vertical scrolls at
+     * speed px/s; paged turns a page every max(1 s, 60/speed).
+     * Returns false when the engine must stop.
+     */
+    fun autoScrollSmoothTick(v: ReaderViewModel, dtSec: Double): Boolean {
+        val rt = autoScrollRuntime
+        if (modeNow == ReadingMode.PAGED_HORIZONTAL) {
+            rt.smoothCarrySec += dtSec
+            if (rt.smoothCarrySec < smoothPageIntervalSec(smartAutoScrollSpeed)) return true
+            rt.smoothCarrySec = 0.0
+            val total = pagedPageCount
+            if (total > 0 && pagedPage >= total) return autoScrollNextChapter(v)
+            rt.programmaticUntilMs = android.os.SystemClock.uptimeMillis() + 500
+            turnPage(v, forward = true)
+            return true
+        }
+        if (rt.lastHeight > 0 && rt.lastTop + rt.lastClient >= rt.lastHeight - 10) {
+            return autoScrollNextChapter(v)
+        }
+        rt.smoothCarryPx += smartAutoScrollSpeed * dtSec
+        val move = rt.smoothCarryPx.toInt()
+        if (move >= 1) {
+            rt.smoothCarryPx -= move
+            rt.programmaticUntilMs = android.os.SystemClock.uptimeMillis() + 500
+            webView?.evaluateJavascript("window.scrollBy(0, $move);", null)
+        }
+        return true
+    }
+
+    /**
      * Switches the reading layout mode (from the mode popup): persists the
      * choice, rebuilds the current chapter in the new layout, and — when
      * entering vertical-continuous — stitches the next chapter right away
@@ -2301,6 +2413,71 @@ fun ReaderScreen(
                 light = readerThemeKey == "light",
                 lowEnd = particlesLowEnd
             )
+
+        // Smart auto-scroll engine (upstream SmartWebBridge
+        // __smartAutoScroll): runs while the mode is on, the user
+        // started it, and the page is loaded. A chapter jump restarts
+        // it via the index key; the pause deadline is honored inside
+        // the loop, so a user grab only delays the next step.
+        LaunchedEffect(smartAutoScrollMode, autoScrollRunning, pageLoaded, vm?.index, modeNow) {
+            if (smartAutoScrollMode == "off" || !autoScrollRunning || !pageLoaded) return@LaunchedEffect
+            val v = vm ?: return@LaunchedEffect
+            if (smartAutoScrollMode == "step") {
+                while (autoScrollRunning) {
+                    delay((smartAutoScrollInterval * 1000).toLong())
+                    if (!autoScrollRunning) break
+                    if (android.os.SystemClock.uptimeMillis() < autoScrollRuntime.pauseUntilMs) continue
+                    if (!autoScrollStep(v)) {
+                        autoScrollRunning = false
+                        break
+                    }
+                }
+            } else {
+                var lastTick = android.os.SystemClock.uptimeMillis()
+                while (autoScrollRunning) {
+                    delay(100)
+                    if (!autoScrollRunning) break
+                    val now = android.os.SystemClock.uptimeMillis()
+                    val dtSec = (now - lastTick) / 1000.0
+                    lastTick = now
+                    if (now < autoScrollRuntime.pauseUntilMs) continue
+                    if (!autoScrollSmoothTick(v, dtSec)) {
+                        autoScrollRunning = false
+                        break
+                    }
+                }
+            }
+        }
+
+        // Smart reading-time estimate (upstream __smartStats + WPM):
+        // remaining minutes in the current chapter at the Smart WPM,
+        // from the chapter's word count (the same count XP credits)
+        // and the fraction already read — paged page ratio, or the
+        // vertical section fraction. Shown in the mode dialog.
+        LaunchedEffect(vm?.index, pagedPage, pagedPageCount, verticalSection, smartWpm, modeNow) {
+            val v = vm ?: return@LaunchedEffect
+            val frac = if (modeNow == ReadingMode.PAGED_HORIZONTAL) {
+                if (pagedPageCount > 0) (pagedPage - 1).toFloat() / pagedPageCount else 0f
+            } else {
+                verticalSection?.takeIf { it.chapter == v.index }?.fraction ?: 0f
+            }
+            etaMinutes = remainingMinutes(v.chapterWordCount(v.index), frac, smartWpm)
+        }
+
+        // Smart today-read counter (upstream TodayReadSeconds): 30 s
+        // chunks while the reader is open AND resumed — a backgrounded
+        // reader must not count. The 30 s cadence bounds the loss on
+        // close to half a minute.
+        val lifecycleOwner = LocalLifecycleOwner.current
+        LaunchedEffect(Unit) {
+            while (true) {
+                delay(30_000)
+                if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                    runCatching { prefs.addTodayReadSeconds(30) }
+                }
+            }
+        }
+
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },
             containerColor = Color.Transparent,
@@ -2775,6 +2952,11 @@ fun ReaderScreen(
                         onTapMiddle = { fullscreenUi = !fullscreenUi }
                     )
                 }
+                // Smart eye care (upstream __smartEyeCare): a warm
+                // tint + dim over the page only, under the pill and
+                // the footnote bubble; touches pass through to the
+                // WebView below (a plain Box consumes nothing).
+                EyeCareOverlay(warmth = smartEyeWarmth, brightness = smartBrightness)
                 // Paged mode: ComicScreen-style page-move preview,
                 // text edition — a small "page X of Y" pill, so a turn
                 // is never a blind jump and a stuck pager (frozen
@@ -3525,6 +3707,69 @@ fun ReaderScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    // Smart auto-scroll (upstream SmartWebBridge): pick
+                    // the mode here without leaving the reader; the full
+                    // config (interval, step, speed) lives in Settings
+                    // > Smart reading. Picking a mode starts the engine;
+                    // picking Off stops it.
+                    Text(
+                        text = stringResource(R.string.smart_autoscroll),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        TextButton(onClick = {
+                            scope.launch { prefs.setSmartAutoScrollMode("off") }
+                            autoScrollRunning = false
+                        }) {
+                            Text(
+                                stringResource(R.string.smart_autoscroll_off),
+                                color = if (smartAutoScrollMode == "off") MaterialTheme.colorScheme.primary
+                                else LocalContentColor.current
+                            )
+                        }
+                        TextButton(onClick = {
+                            scope.launch { prefs.setSmartAutoScrollMode("step") }
+                            autoScrollRunning = true
+                        }) {
+                            Text(
+                                stringResource(R.string.smart_autoscroll_step),
+                                color = if (smartAutoScrollMode == "step") MaterialTheme.colorScheme.primary
+                                else LocalContentColor.current
+                            )
+                        }
+                        TextButton(onClick = {
+                            scope.launch { prefs.setSmartAutoScrollMode("smooth") }
+                            autoScrollRunning = true
+                        }) {
+                            Text(
+                                stringResource(R.string.smart_autoscroll_smooth),
+                                color = if (smartAutoScrollMode == "smooth") MaterialTheme.colorScheme.primary
+                                else LocalContentColor.current
+                            )
+                        }
+                    }
+                    if (autoScrollRunning) {
+                        Text(
+                            text = stringResource(R.string.smart_autoscroll_running),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    etaMinutes?.let { mins ->
+                        if (mins > 0) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = stringResource(R.string.smart_eta_section, mins),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
         }
