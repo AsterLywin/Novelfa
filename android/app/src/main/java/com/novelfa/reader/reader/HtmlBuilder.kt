@@ -123,8 +123,69 @@ object HtmlBuilder {
         sb.append("code{font-family:monospace;background:rgba(128,128,128,0.12);padding:0 4px;border-radius:4px;}")
         sb.append("pre code{background:transparent;padding:0;border-radius:0;}")
         sb.append("th{background:rgba(128,128,128,0.12);}")
+        // th/td text follows the paragraph's own alignment attribute
+        // (flexmark's TablesExtension writes align="left|right|center"
+        // per GFM's :---/:---:/---: column syntax) rather than
+        // inheriting the page's RTL default on every cell.
+        sb.append("th[align],td[align]{text-align:inherit;}")
         sb.append("hr{border:none;border-top:1px solid rgba(128,128,128,0.35);margin:1.5em 0;}")
+        // Markdown lists (flexmark's plain <ul>/<ol>/<li>, GFM task
+        // lists, and Windows-parity nesting): the WebView UA sheet
+        // indents lists with the PHYSICAL margin-left/padding-left,
+        // which is backwards for an RTL body (the bullets/numbers and
+        // the hanging indent end up on the wrong side, and a list
+        // inside a right-aligned paragraph looks unstyled/broken).
+        // padding-inline-start follows the element's own direction
+        // instead, so a nested English code block or link (wrapped in
+        // [data-rdr="l"] by HtmlText) still indents correctly even
+        // inside an RTL list.
+        sb.append("ul,ol{margin:0.5em 0;padding-inline-start:1.6em;padding-left:0;padding-right:0;}")
+        sb.append("li{margin:0.25em 0;}")
+        sb.append("li>ul,li>ol{margin:0.25em 0;}")
+        // GFM task list ([ ] / [x]): flexmark's TaskListExtension
+        // renders <li class="task-list-item"><input type="checkbox"
+        // disabled ...>. The bare native checkbox is a tiny OS widget
+        // that is barely visible (and often literally invisible) in
+        // the dark theme, and it sits flush against the RTL-mirrored
+        // list indent with no breathing room — this is the single
+        // most common "didn't render" complaint for Markdown task
+        // lists. Drop its own marker and give it a plain, theme-aware
+        // box instead; the item keeps its normal bullet removed since
+        // the checkbox already marks it.
+        sb.append("li.task-list-item{list-style:none;margin-inline-start:-1.6em;padding-inline-start:1.6em;}")
+        sb.append("input.task-list-item-checkbox{width:1em;height:1em;margin-inline-end:0.4em;vertical-align:middle;accent-color:")
+            .append(theme.link).append(";}")
+        // Definition lists (flexmark's DefinitionExtension: <dl><dt>
+        // term</dt><dd>definition</dd></dl>) had no rule at all, so
+        // every <dd> sat flush left under its <dt> with no visual
+        // relationship between them — indistinguishable from plain
+        // paragraphs. The indent follows direction like blockquote.
+        sb.append("dt{font-weight:bold;margin-top:0.6em;}")
+        sb.append("dd{margin:0.1em 0 0.6em;padding-inline-start:1.2em;border-inline-start:2px solid rgba(128,128,128,0.3);}")
+        // Footnote references ({ElementExtension} FootnoteExtension):
+        // the inline marker is <sup class="footnote-ref"><a href=
+        // "#fn-N">N</a></sup>; the block at the document's end is
+        // <div class="footnotes"><hr/><ol><li id="fn-N">...<a
+        // class="footnote-backref">↩</a></li></ol></div>. Neither the
+        // ref nor the backref had their own style, so both inherited
+        // the page's big reading font size and full link-color
+        // underline — a footnote marker the same size as the running
+        // text, underlined like a normal link, reads as unstyled.
+        sb.append("sup.footnote-ref{font-size:0.7em;line-height:0;}")
+        sb.append("sup.footnote-ref a,a.footnote-backref{text-decoration:none !important;}")
         sb.append(".footnotes{font-size:0.9em;}")
+        sb.append(".footnotes ol{padding-inline-start:1.4em;}")
+        sb.append(".footnotes li{margin:0.4em 0;}")
+        sb.append("a.footnote-backref{margin-inline-start:0.3em;}")
+        // Plain (non-footnote) <sup>/<sub> (SuperscriptExtension /
+        // StrikethroughSubscriptExtension): the WebView UA default
+        // shrinks the font but keeps the line-box tall, which opens a
+        // visible gap above/below the line wherever one appears — on
+        // the reader's already-large font size and custom line-height
+        // this gap is much more noticeable than on an ordinary web
+        // page. line-height:0 keeps the line from being pushed apart.
+        sb.append("sup,sub{line-height:0;}")
+        sb.append("del,s{opacity:0.75;}")
         sb.append("[data-theme=\"dark\"] [style*=\"background:#fff\" i],")
         sb.append("[data-theme=\"dark\"] [style*=\"background:white\" i]{background-color:transparent !important;}")
         // Search + highlight marks. The highlight background comes
@@ -2380,7 +2441,30 @@ object HtmlBuilder {
         if (!list || !list.length) return 'ok';
         for (var li = 0; li < list.length; li++) {
             var hl = list[li];
+            // BUG FIX (highlights turning black on reopen): chapDiv() falls back to
+            // document.body when the requested chapter isn't currently mounted in the
+            // DOM (the continuous-scroll reader only keeps a sliding window of chapters
+            // appended/prepended around the current position — see appendNext/prependPrev
+            // in ReaderViewModel). Right after reopening a book, only the chapter the
+            // reader lands on (plus whatever has been scrolled to since) is in the DOM;
+            // a saved highlight from any other chapter used to silently resolve against
+            // document.body instead. textNodes() then walked the WRONG chapter's text
+            // (or the whole body) using offsets captured from the RIGHT chapter, so the
+            // <mark> ended up wrapping unrelated text elsewhere while the actually
+            // highlighted passage never got wrapped at all — it rendered as plain text,
+            // i.e. in the dark theme: black. We now verify the returned div really is
+            // the requested chapter (matching data-idx) before using it, and skip the
+            // highlight entirely when that chapter isn't mounted yet. __rdrAfterBuild
+            // re-invokes rdrApplyHighlights on every pager rebuild and the continuous
+            // reader re-renders this effect as the user scrolls new chapters in
+            // (see the LaunchedEffect keyed on vm?.index in ReaderScreen.kt), so a
+            // skipped highlight is simply retried — and correctly applied — once its
+            // chapter is actually mounted, instead of being miswrapped right away.
             var div = chapDiv(hl.ch);
+            if (hl.ch !== undefined && hl.ch !== null && hl.ch >= 0) {
+                var gotIdx = div && div.getAttribute ? parseInt(div.getAttribute('data-idx'), 10) : NaN;
+                if (gotIdx !== hl.ch) continue;
+            }
             var strip = div.querySelector ? div.querySelector('.rdr-strip') : null;
             var root = strip ? strip : div;
             var nodes = textNodes(root), pos = 0, si = -1, ei = -1, so = 0, eo = 0;

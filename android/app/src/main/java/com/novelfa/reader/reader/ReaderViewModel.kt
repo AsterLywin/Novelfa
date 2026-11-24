@@ -443,6 +443,83 @@ class ReaderViewModel(
         }
     }
 
+    /**
+     * Standalone single-chapter document for chapter [i], built the
+     * same way [loadChapter] builds one (same prepared body, same
+     * font CSS, same [SharedReaderCache] keying) but with NO side
+     * effects: it never touches [index], [docGen], [contFirst]/
+     * [contLast], or saved progress, and it never reads or writes
+     * the per-instance [preparedCache] (not thread-safe, and keyed
+     * off [contFirst]/[contLast] for eviction — a background pass
+     * walking the whole book must not perturb the live reader's
+     * windowing or race its cache).
+     *
+     * Used by [BackgroundPaginator] to measure a chapter's exact
+     * page/screen count in a hidden WebView, independent of the
+     * live reader and independent of [isPaged] (the caller picks
+     * [paged] explicitly, since it measures both the paged count
+     * and the vertical screens count regardless of which mode the
+     * user is actually reading in).
+     *
+     * IO (file read) happens on the caller's dispatcher; call this
+     * off the main thread.
+     */
+    fun buildStandaloneChapterHtml(i: Int, paged: Boolean): Pair<String, String>? {
+        if (i < 0 || i >= chapters.size) return null
+        return try {
+            val chapterFile = chapters[i].file
+            val sharedKey = "$bookId:${chapterFile.absolutePath}:${chapterFile.length()}:${chapterFile.lastModified()}"
+            val body = SharedReaderCache.getPrepared(sharedKey) ?: run {
+                var raw = chapterFile.inputStream().bufferedReader(Charsets.UTF_8).use { it.readText() }
+                if (raw.isNotEmpty() && raw[0] == 0xFEFF.toChar()) raw = raw.substring(1)
+                val prepared = HtmlText.prepareChapterBody(raw, chapterFile.parentFile)
+                SharedReaderCache.putPrepared(sharedKey, prepared)
+                prepared
+            }
+            val wrapped = "<div class=\"rdr-chap\" data-idx=\"" + i + "\"" +
+                HtmlText.chapterDirAttr(body) + ">" + body + "</div>"
+            val base = baseUrl(i)
+            val fontCss = cachedFontFaceCss()
+            val htmlKey = listOf(
+                bookId, i.toString(), chapterFile.absolutePath,
+                chapterFile.length().toString(), chapterFile.lastModified().toString(),
+                theme.key, fontFamily, fontIdentity(fontFiles),
+                fontIdentity(fallbackFontFiles), fontSize.toString(),
+                lineHeight.toString(), sideMargin.toString(),
+                paragraphSpacing.toString(), isEnglish.toString(),
+                paged.toString(), footnotePopup.toString()
+            ).joinToString("|")
+            val cachedHtml = SharedReaderCache.getHtml(htmlKey)
+            val html = if (cachedHtml != null) {
+                // Generation is irrelevant off-screen (nothing ever
+                // compares __rdrGen there); 0 is fine.
+                cachedHtml.replace(
+                    "<script>window.__rdrGen=-1;</script>",
+                    "<script>window.__rdrGen=0;</script>"
+                )
+            } else {
+                val built = HtmlBuilder.build(
+                    base, wrapped, theme, fontFamily, fontSize,
+                    lineHeight, sideMargin, paragraphSpacing, isEnglish,
+                    fontCss, 0,
+                    paged = paged,
+                    footnotePopup = footnotePopup
+                )
+                SharedReaderCache.putHtml(
+                    htmlKey,
+                    built.replace(
+                        "<script>window.__rdrGen=0;</script>",
+                        "<script>window.__rdrGen=-1;</script>"
+                    )
+                )
+                built
+            }
+            html to base
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     suspend fun appendNext(expectedGen: Int = docGen): Boolean {
         // The JS scroll bridge fires on a WebView background thread; two rapid
         // scroll events could both pass a plain Boolean check and double-append.

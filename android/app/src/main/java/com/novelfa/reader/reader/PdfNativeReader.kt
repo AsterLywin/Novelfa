@@ -292,6 +292,38 @@ internal class ZipFileStore(
     }
 
     override fun openEntry(name: String): InputStream? {
+        // BUG FIX (imported CBZ/ZIP with chapter-per-archive
+        // packing fails to render): a book whose pages are packed
+        // as nested archives (e.g. "ch01.zip/ch01/001.jpg" — a
+        // ZIP of per-chapter ZIPs, supported by CbzBook/NestedArchive
+        // for the natural "one archive per chapter" packing some
+        // scan groups use) opened fine when read directly in place
+        // (SeekableEntryStore.openEntry below correctly detects
+        // NestedArchive.isVirtualPath(name) and resolves through
+        // NestedArchive), but the SAME file imported into the
+        // library (the normal in-app import, which stores a copy
+        // and reads it back through THIS store) rendered as a
+        // blank/broken comic: every page name here is a virtual
+        // path like "ch01.zip/ch01/001.jpg", which does not exist
+        // as a literal entry in the outer archive's central
+        // directory, so both the zip4j lookup above and the plain
+        // CbzBook.openEntryStream fallback always returned null for
+        // every single page. The importer's own CBZ validation
+        // loop never caught this either (CbzBook.entryMethod()
+        // also only looks up literal names, so it silently skips
+        // virtual-path entries as "cannot determine method" rather
+        // than failing the import), so the broken book imported
+        // without any warning. Nested virtual paths must be
+        // resolved the same way SeekableEntryStore already does,
+        // through NestedArchive, before falling back to a literal
+        // lookup for ordinary (non-nested) entries.
+        if (com.novelfa.reader.parser.NestedArchive.isVirtualPath(name)) {
+            return runCatching {
+                com.novelfa.reader.parser.NestedArchive.openPage(
+                    zipFile, name, com.novelfa.reader.parser.NestedArchive.defaultCacheDir()
+                )
+            }.getOrNull()
+        }
         // zip4j first: it alone decrypts password-protected
         // archives. But its header read throws for the whole
         // archive when any entry uses an unusual compression

@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import com.novelfa.reader.model.ParsedBook
 import com.novelfa.reader.parser.BookFormat
 import com.novelfa.reader.parser.CbzBook
+import com.novelfa.reader.parser.NestedArchive
 import java.io.File
 
 /**
@@ -64,9 +65,44 @@ object CbzEngine : BookEngine {
         // the cover extraction.)
         for (name in entries) {
             cancelCheck?.invoke()
-            val method = CbzBook.entryMethod(source, name)
+            // BUG FIX (nested-archive CBZ imports silently as a
+            // broken/blank book): a page name like
+            // "ch01.zip/ch01/001.jpg" (one archive per chapter,
+            // packed inside the outer CBZ — see NestedArchive) is
+            // not a literal entry of the OUTER archive's central
+            // directory, so CbzBook.entryMethod(source, name) used
+            // to always return null for it. That made the "method
+            // != 0 && method != 8" check true for every nested
+            // page, so this loop silently `continue`d past every
+            // one of them without ever calling readEntryBytes —
+            // the import "validated" successfully while never
+            // actually confirming a single nested page could be
+            // read. (Separately, the native viewer's imported-book
+            // path had its own matching bug reading these pages at
+            // render time, fixed in ZipFileStore.openEntry —
+            // PdfNativeReader.kt — but that fix alone would still
+            // leave a genuinely corrupt nested archive importing
+            // without any warning, which is what this validation
+            // loop exists to prevent.) Resolve a nested/virtual
+            // path to its real (innermost archive file, entry
+            // name) pair first, exactly like the read path does,
+            // and validate THAT — a flat (non-nested) name resolves
+            // to itself, so the existing behaviour for ordinary
+            // CBZ/ZIP archives is unchanged.
+            val resolved = if (NestedArchive.isVirtualPath(name)) {
+                NestedArchive.resolveFile(source, name, NestedArchive.defaultCacheDir())
+            } else {
+                source to name
+            }
+            if (resolved == null) {
+                throw IllegalArgumentException(
+                    "Comic archive has an unreadable page: $name ($displayName)"
+                )
+            }
+            val (resolvedFile, resolvedName) = resolved
+            val method = CbzBook.entryMethod(resolvedFile, resolvedName)
             if (method != 0 && method != 8) continue
-            if (CbzBook.readEntryBytes(source, name) == null) {
+            if (CbzBook.readEntryBytes(resolvedFile, resolvedName) == null) {
                 throw IllegalArgumentException(
                     "Comic archive has an unreadable page: $name ($displayName)"
                 )

@@ -438,9 +438,38 @@ fun ReaderScreen(
         extrasStore.chapterPageCounts(bookId, verticalFp)
     }.collectAsState(initial = emptyMap())
     // Per-chapter file sizes (free stats, no reads): the page-count
-    // estimate's calibration input (see BookPageCount.kt).
+    // estimate's calibration input (see BookPageCount.kt) — still
+    // used as a fallback label ("about N") for whichever chapters
+    // BackgroundPaginator (below) has not finished measuring yet.
     val chapterBytes = remember(vm?.chapters) {
         vm?.chapters?.map { it.file.length() } ?: emptyList()
+    }
+    // Exact book-wide page numbers (2026-11-23: "the total page
+    // count changes every time I scroll" — see BookPageCount.kt's
+    // doc comment and BackgroundPaginator's). Once the real WebView
+    // has a real size (pageCountFp is non-empty only then), silently
+    // paginate every not-yet-measured chapter in a hidden WebView so
+    // chapterCounts/verticalChapterCounts above fill in for real
+    // instead of staying on the shifting byte-ratio estimate. Keyed
+    // on (vm, pageCountFp): a new book, or any layout/viewport change
+    // that changes the fingerprint, cancels the old pass (its counts
+    // would be for the wrong layout) and starts a fresh one — cheap
+    // because finished chapters are read back from the store first
+    // and skipped.
+    LaunchedEffect(vm, pageCountFp) {
+        val v = vm ?: return@LaunchedEffect
+        if (pageCountFp.isEmpty()) return@LaunchedEffect
+        val wv = webView ?: return@LaunchedEffect
+        val density = context.resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
+        val wCss = (wv.width / density).roundToInt()
+        val hCss = (wv.height / density).roundToInt()
+        if (wCss <= 0 || hCss <= 0) return@LaunchedEffect
+        val paginator = BackgroundPaginator(context, v, bookId, extrasStore)
+        try {
+            paginator.run(wCss, hCss)
+        } finally {
+            paginator.cancel()
+        }
     }
     // Recent searches for this book (ReadEra's history list):
     // newest first, shown under the field while no results are
@@ -1680,7 +1709,29 @@ fun ReaderScreen(
             },
             onFootnoteClick = { href, chap, label, x, y ->
                 val v = vm
-                if (v != null) scope.launch { handleFootnoteTap(v, href, chap, label, Offset(x, y)) }
+                if (v != null) {
+                    // Vertical mode allows pinch zoom (unlike paged
+                    // mode, which locks scale=1 — see HtmlBuilder's
+                    // viewport meta): x/y are e.clientX/clientY,
+                    // i.e. CSS px in the PAGE's own zoomed coordinate
+                    // space, straight from LINK_JS. FootnoteBubble
+                    // anchors against footnoteAreaSize/the WebView's
+                    // own view-relative px (1 CSS px == 1 dp only at
+                    // scale 1), so a tap while pinched in/out lands
+                    // the tail somewhere else entirely — worse, the
+                    // zoom level is sticky across scrolls/gestures,
+                    // so it looked "different every time, depending
+                    // on scroll" (2026-11-23 bug report) when it was
+                    // really depending on whatever zoom the page
+                    // happened to be at. WebView.getScale() is the
+                    // page's current zoom factor (1f when never
+                    // pinched); dividing converts content CSS px back
+                    // to real view px, matching what the bubble math
+                    // (and the native touch listener's own cssX/cssY)
+                    // assumes.
+                    val scale = webView?.scale?.takeIf { it > 0f } ?: 1f
+                    scope.launch { handleFootnoteTap(v, href, chap, label, Offset(x / scale, y / scale)) }
+                }
             },
             onImageClick = { src, chap ->
                 val v = vm

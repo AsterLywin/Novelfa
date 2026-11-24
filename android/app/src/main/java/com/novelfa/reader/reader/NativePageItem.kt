@@ -41,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -788,7 +789,31 @@ internal fun NativePageItem(
     // recomposes the visible items (layout only — the bitmap
     // is remembered, never re-decoded mid-pinch; the sharp
     // re-render still runs once, at gesture end).
-    val stripScale = externalZoomState?.value?.scale ?: 1f
+    //
+    // derivedStateOf, not a plain `.value.scale` read (fixed
+    // 2026-11-23: "panning while zoomed is very slow" report):
+    // externalZoomState is ONE shared MutableState<PageZoomState>
+    // for the entire strip, written on every pointer-move frame
+    // while panning — including a PURE cross-axis pan, which
+    // only changes offsetX/offsetY and never scale. A plain
+    // `externalZoomState.value.scale` read still subscribes this
+    // item to the state's IDENTITY, because PageZoomState is a
+    // data class and every pan frame produces a new instance via
+    // .copy(offsetX = ...) — so every visible strip item
+    // recomposed and relaid-out (stripCrossDp -> requiredWidth/
+    // requiredHeight below) on every single pan frame, for every
+    // page on screen, which is the dropped-frame slowness. The
+    // pan itself is a GPU graphicsLayer translation inside
+    // ZoomablePageContainer and needs no recomposition at all.
+    // derivedStateOf re-runs its block on every state write but
+    // only notifies readers when the DERIVED VALUE (the Float)
+    // actually differs from last time, so an offset-only pan
+    // frame changes nothing here and this item is skipped by the
+    // recomposer entirely; only an actual pinch/double-tap scale
+    // change still recomposes it, as intended.
+    val stripScale by remember(externalZoomState) {
+        derivedStateOf { externalZoomState?.value?.scale ?: 1f }
+    }
     // The park key: exactly the remember keys below, so a
     // parked bitmap is only ever reused for the identical
     // render. A mode switch composes the new item before the
