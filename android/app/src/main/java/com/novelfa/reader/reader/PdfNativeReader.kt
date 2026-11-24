@@ -968,8 +968,16 @@ class PdfTextSearcher(pdfFile: File, password: CharArray? = null) : Closeable {
         )
     }.getOrDefault(0L)
 
-    /** False when the bridge is absent or the file would not open. */
-    val available: Boolean get() = doc != 0L
+    // Close is idempotent: the viewer closes the live searcher
+    // from the source's dispose effect (the bridge doc must die
+    // BEFORE the render document destroys the shared PDFium
+    // library) and the searcher's own effect closes it again —
+    // a second FPDF_CloseDocument on the same handle would be
+    // a native double-free.
+    private var closed = false
+
+    /** False when the bridge is absent, the file would not open, or this searcher is closed. */
+    val available: Boolean get() = !closed && doc != 0L
 
     /** Page count, or 0 when unavailable. */
     val pageCount: Int
@@ -1030,6 +1038,8 @@ class PdfTextSearcher(pdfFile: File, password: CharArray? = null) : Closeable {
     }
 
     override fun close() {
+        if (closed) return
+        closed = true
         if (doc != 0L) {
             runCatching { PdfiumText.closeDocument(doc) }
         }

@@ -13,6 +13,7 @@ import com.vladsch.flexmark.parser.Parser
 import com.vladsch.flexmark.util.data.MutableDataSet
 import com.vladsch.flexmark.util.misc.Extension
 import java.io.File
+import kotlinx.coroutines.CancellationException
 
 /**
  * Plain-text and Markdown books.
@@ -114,7 +115,22 @@ object TextBookParser {
     ): ParsedBook {
         val raw = decodeText(bytes).replace("\r\n", "\n").replace('\r', '\n')
             .trim('\uFEFF', '\n')
-        val (title, sections) = renderMarkdown(raw)
+        // Deeply nested Markdown overflows the parse thread's stack:
+        // flexmark recurses per nesting level, and a ~500-deep list
+        // already overflows a 1 MB IO-thread stack (probe, real 0.64.8
+        // jars). StackOverflowError is an Error, so no `catch
+        // (e: Exception)` upstream — import, reader open — would ever
+        // see it: without this the import (and the open) dies as an
+        // app crash instead of a readable import error. The shared
+        // parser/renderer hold no per-parse state, so the thread is
+        // safe to reuse after the unwind. Cancellation still propagates.
+        val (title, sections) = try {
+            renderMarkdown(raw)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            throw IllegalStateException("Markdown too deeply nested to render", t)
+        }
         return ConvertedBook.write(
             outDir, title ?: File(fileName).nameWithoutExtension,
             if (sections.isEmpty()) emptyList()
@@ -324,6 +340,17 @@ private fun renderMarkdown(raw: String): Pair<String?, List<Pair<String?, String
     }
     out.append(html, cursor, html.length)
     flushSection()
+    // A document with no sections but real content — a lone
+    // `# Title`, or headings with no body text — used to parse to
+    // ZERO chapters: the copy import failed it as "no readable
+    // chapters" and the reader opened a blank book. The title was
+    // already consumed as the book title above, so the rendered HTML
+    // itself becomes the one section (title included) and the book
+    // renders instead of vanishing. A truly empty document still
+    // yields zero sections.
+    if (sections.isEmpty() && html.isNotBlank()) {
+        sections += null to finishMarkdownHtml(html)
+    }
     return title to sections
 }
 

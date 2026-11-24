@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -540,6 +541,14 @@ internal fun NativeImageBookViewer(
             }
         }
     }
+    // Declared here, BEFORE the source effect below: the source's
+    // onDispose closes the live searcher first (the bridge doc
+    // must die before the render document destroys the shared
+    // PDFium library), so the state must already be in scope
+    // there. The searcher itself is built by the LaunchedEffect
+    // further down; this is only the slot.
+    var pdfSearcher by remember { mutableStateOf<PdfTextSearcher?>(null) }
+
     // THE "zip file closed" FIX: `source` is a MutableState, so
     // reading it inside onDispose reads its CURRENT value, not
     // the value the effect started with. When the open effect
@@ -556,7 +565,23 @@ internal fun NativeImageBookViewer(
         val toClose = source
         // A throw inside onDispose kills the app, so closing a
         // source that is already half-dead must never throw out.
-        onDispose { runCatching { toClose?.close() } }
+        onDispose {
+            // ORDER IS LOAD-BEARING: the PDF searcher's bridge
+            // document shares libmodpdfium.so with the render
+            // document but does NOT count in libjniPdfium's
+            // reference count, so closing the source first
+            // destroys the library (FPDF_DestroyLibrary) under
+            // the still-open bridge doc and the NEXT open dies
+            // natively. The bridge doc goes first, always.
+            // Reading pdfSearcher here reads its CURRENT value
+            // (that is what we want: whatever searcher is live
+            // at dispose time), unlike toClose above, which
+            // must be the source this effect started with.
+            // The searcher's own effect may close it again
+            // afterwards; PdfTextSearcher.close() is idempotent.
+            runCatching { pdfSearcher?.close() }
+            runCatching { toClose?.close() }
+        }
     }
 
     // PDF text search (task 4b): the engine ([PdfTextSearcher],
@@ -572,7 +597,8 @@ internal fun NativeImageBookViewer(
     // ([PdfiumText.available] is false) the searcher reports
     // available=false and the search entry point says so
     // through the snackbar instead of pretending search works.
-    var pdfSearcher by remember { mutableStateOf<PdfTextSearcher?>(null) }
+    // (The pdfSearcher slot itself is declared above the source
+    // effect — its onDispose closes the live searcher first.)
     LaunchedEffect(isPdf, resolvedFile, bookPassword) {
         // Drop the old searcher first: the dispose effect below
         // closes exactly the searcher it started with, so the
@@ -2307,6 +2333,13 @@ internal fun NativeImageBookViewer(
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth()
+                        // Status-bar inset (2026-11-25): this overlay
+                        // is a raw Column, not a TopAppBar, and the
+                        // activity is edge-to-edge — without the
+                        // inset its top ~16dp hid under the status
+                        // bar. The inset is 0 while the bars are
+                        // hidden, so fullscreen layout is unchanged.
+                        .statusBarsPadding()
                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
                         .padding(8.dp)
                 ) {

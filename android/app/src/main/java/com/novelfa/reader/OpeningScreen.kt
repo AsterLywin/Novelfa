@@ -138,13 +138,23 @@ fun OpeningScreen(
     // Back-stop: if this screen is ever visible again after a
     // successful open (reader popped back onto it because the
     // popUpTo above missed), don't re-open — go to the library.
-    // On the normal path this screen has already left composition
-    // by the time openedId is set, so the effect is cancelled
-    // before it can run; if it does run first, its library
-    // navigation is still a correct landing — the reader navigation
-    // that follows just pushes on top of it.
+    // It MUST be gated on actually standing on this route: the
+    // ungated version fired on the NORMAL path too and buried the
+    // reader under the library. The state write (openedId = …) and
+    // the reader navigation run in the same coroutine, but the
+    // NavHost learns the back-stack change asynchronously (Flow),
+    // so this screen survives one more recomposition with openedId
+    // set — and its library navigation landed ON TOP of the reader.
+    // The user then saw the library instead of the reader, tapped
+    // the file to open it again, and backing out of that reader
+    // resurfaced the buried first one ("the file opens again").
+    // currentDestination is updated synchronously by navigate(), so
+    // on the normal path it is the reader route here and the gate
+    // blocks; only a real pop-back onto this screen passes it.
     LaunchedEffect(openedId) {
-        if (openedId != null) {
+        if (openedId != null &&
+            navController.currentDestination?.route == Routes.OPENING
+        ) {
             navController.navigate(Routes.LIBRARY) {
                 popUpTo(Routes.OPENING) { inclusive = true }
             }

@@ -329,6 +329,55 @@ class TextBookParserTest {
     }
 
     @Test
+    fun markdown_titleOnly_rendersOneChapter() {
+        // A lone `# Title` used to parse to ZERO chapters: the title
+        // was consumed as the book title and no section remained, so
+        // the copy import failed it as "no readable chapters" and the
+        // reader opened a blank book. The rendered title itself must
+        // become the one section.
+        val out = tempFolder.newFolder("out-title-only")
+        val book = TextBookParser.parseMarkdown(
+            "# Title\n".toByteArray(Charsets.UTF_8), "t.md", out, ::fallback
+        )
+        assertEquals("Title", book.title)
+        assertEquals(1, book.chapters.size)
+        assertTrue(book.chapters[0].file.readText().contains("Title"))
+    }
+
+    @Test
+    fun markdown_empty_stillZeroChapters() {
+        // A truly empty document honestly has nothing to render.
+        val out = tempFolder.newFolder("out-empty")
+        val book = TextBookParser.parseMarkdown(
+            ByteArray(0), "t.md", out, ::fallback
+        )
+        assertEquals(0, book.chapters.size)
+    }
+
+    @Test
+    fun markdown_deeplyNested_noStackOverflowEscape() {
+        // ~2000 nested list levels overflow a 1 MB IO-thread stack
+        // inside flexmark (probe, real 0.64.8 jars). StackOverflowError
+        // is an Error, so it used to escape every `catch (Exception)`
+        // upstream and crash the app on import. The parse must turn it
+        // into a plain failure instead — never let the Error out.
+        val deep = buildString {
+            repeat(2000) { i -> append("  ".repeat(i)).append("- item\n") }
+        }
+        val out = tempFolder.newFolder("out-deep")
+        try {
+            TextBookParser.parseMarkdown(
+                deep.toByteArray(Charsets.UTF_8), "t.md", out, ::fallback
+            )
+        } catch (e: StackOverflowError) {
+            throw AssertionError("StackOverflowError escaped parseMarkdown", e)
+        } catch (e: IllegalStateException) {
+            // Expected on a small stack: the wrapped "too deeply nested" failure.
+            assertTrue(e.message?.contains("deeply nested") == true)
+        }
+    }
+
+    @Test
     fun convertedBook_writeRead_roundTripsTitles() {
         val out = tempFolder.newFolder("out")
         val written = ConvertedBook.write(

@@ -261,12 +261,31 @@ internal class PdfiumNativeSource(
         // Descriptor-backed documents have no path for the
         // text bridge: words read 0 and XP uses its floor.
         val path = pdfFile?.absolutePath ?: return 0
-        val bridge = bridgeDoc.takeIf { it != 0L } ?: runCatching {
+        // The bridge handle is shared with close(): a dispose
+        // flush can call pageWords after close() has run, and a
+        // doc opened after the destroy would never be closed by
+        // anyone (and would be opened after FPDF_DestroyLibrary).
+        // Take and publish the handle under one lock so exactly
+        // one side owns it.
+        val bridge = synchronized(this) { bridgeDoc }.takeIf { it != 0L } ?: runCatching {
             PdfiumText.openDocument(
                 path,
                 password?.let { String(it) }
-            ).also { bridgeDoc = it }
-        }.getOrNull() ?: return 0
+            )
+        }.getOrNull()?.let { handle ->
+            synchronized(this) {
+                if (closed) {
+                    // close() already ran and could not see this
+                    // handle: it was opened after the destroy.
+                    // Close it here, now, and report 0 words.
+                    runCatching { PdfiumText.closeDocument(handle) }
+                    0L
+                } else {
+                    bridgeDoc = handle
+                    handle
+                }
+            }
+        }?.takeIf { it != 0L } ?: return 0
         val text = runCatching { PdfiumText.pageText(bridge, index) }.getOrNull()
             ?: return 0
         return text.splitToSequence(' ', '\n', '\r', '\t')
@@ -276,9 +295,13 @@ internal class PdfiumNativeSource(
     override fun close() {
         if (closed) return
         closed = true
-        if (bridgeDoc != 0L) {
-            runCatching { PdfiumText.closeDocument(bridgeDoc) }
-            bridgeDoc = 0L
+        // Take the handle under the same lock pageWords
+        // publishes it under, and clear it BEFORE closing:
+        // whoever takes it owns it, so the doc is closed
+        // exactly once even if pageWords is mid-open.
+        val bridge = synchronized(this) { bridgeDoc.also { bridgeDoc = 0L } }
+        if (bridge != 0L) {
+            runCatching { PdfiumText.closeDocument(bridge) }
         }
         val document = doc
         doc = null
