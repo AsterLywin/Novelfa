@@ -73,6 +73,17 @@ class ReaderExtrasCodecTest {
     }
 
     @Test
+    fun quotes_cap_keepsNewest300() {
+        // Upstream QuoteStore.MaxPerBook: the 301st quote drops the
+        // oldest one, by createdAt — the list never grows past 300.
+        val many = (0 until 301).map { TextQuote(0, it, it + 1, "q$it", it.toLong()) }
+        val parsed = parseQuotes(serializeQuotes(many))
+        assertEquals(300, parsed.size)
+        assertTrue(parsed.none { it.text == "q0" })
+        assertTrue(parsed.any { it.text == "q300" })
+    }
+
+    @Test
     fun searchHistory_addDedupesAndCaps() {
         assertEquals(listOf("c", "b", "a"), addToSearchHistory(listOf("b", "a"), "c"))
         // Case-insensitive duplicate moves to the top.

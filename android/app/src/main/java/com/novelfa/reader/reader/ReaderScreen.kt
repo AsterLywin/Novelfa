@@ -796,7 +796,10 @@ fun ReaderScreen(
             .getOrDefault(false)
         if (!launched) {
             val short = t.take(1500)
-            val url = "https://translate.google.com/?sl=auto&text=" +
+            // Target language follows the app's UI language, like
+            // upstream ReaderSelect.Translate (tl=fa / tl=en).
+            val tl = if (java.util.Locale.getDefault().language.startsWith("en")) "en" else "fa"
+            val url = "https://translate.google.com/?sl=auto&tl=" + tl + "&text=" +
                 URLEncoder.encode(short, "UTF-8") + "&op=translate"
             val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
             val webLaunched = runCatching { context.startActivity(webIntent); true }

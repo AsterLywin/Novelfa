@@ -121,12 +121,21 @@ internal fun parseQuotes(raw: String?): List<TextQuote> {
 }
 
 internal fun serializeQuotes(quotes: List<TextQuote>): String {
-    return quotes.sortedWith(compareBy({ it.chapter }, { it.start }, { it.createdAt }))
+    // Cap (upstream QuoteStore.MaxPerBook): keep the 300 most
+    // recently added, by createdAt — the list never grows without
+    // bound, and the oldest quotes are the ones that go.
+    val kept = if (quotes.size > MAX_QUOTES_PER_BOOK) {
+        quotes.sortedByDescending { it.createdAt }.take(MAX_QUOTES_PER_BOOK)
+    } else quotes
+    return kept.sortedWith(compareBy({ it.chapter }, { it.start }, { it.createdAt }))
         .joinToString(";") {
             val b64 = Base64.getEncoder().encodeToString(it.text.toByteArray(Charsets.UTF_8))
             "${it.chapter}:${it.start}-${it.end}:${it.createdAt}:$b64"
         }
 }
+
+/** Max saved quotes per book (upstream QuoteStore.MaxPerBook). */
+internal const val MAX_QUOTES_PER_BOOK = 300
 
 /** Pure bookmark-list codec, unit-testable without DataStore. */
 internal fun parseBookmarkPages(raw: String?): Set<Int> {
