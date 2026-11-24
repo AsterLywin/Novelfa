@@ -153,12 +153,18 @@ object DiagLog {
     }
 
     fun w(tag: String, msg: String, e: Throwable? = null) {
-        Log.w(tag, msg, e)
+        // A logging call must never become a second crash: in unit
+        // tests android.util.Log is a stub that throws "not mocked",
+        // and that used to escape from here — it killed the flate
+        // retry inside PdfDoc.inflate (the catch logs, the log threw)
+        // and the XP recompute in RankHook. On a device Log.w never
+        // throws, so this guard is a no-op in production.
+        runCatching { Log.w(tag, msg, e) }
         append("W", tag, msg, e)
     }
 
     fun e(tag: String, msg: String, e: Throwable? = null) {
-        Log.e(tag, msg, e)
+        runCatching { Log.e(tag, msg, e) }
         append("E", tag, msg, e)
     }
 

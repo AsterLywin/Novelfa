@@ -1,5 +1,6 @@
 package com.novelfa.reader.reader
 
+import com.novelfa.reader.reader.ReaderSearchText.Occurrence
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -38,12 +39,18 @@ class ReaderSearchTextTest {
 
     @Test
     fun findOccurrences_offsetsInOrderWithLimit() {
-        assertEquals(listOf(0, 5, 10), ReaderSearchText.findOccurrences("Book book BOOK", "book"))
-        assertEquals(listOf(0), ReaderSearchText.findOccurrences("aaa", "aa"))
-        assertEquals(listOf(0), ReaderSearchText.findOccurrences("abcabc", "abc", limit = 1))
-        assertEquals(emptyList<Int>(), ReaderSearchText.findOccurrences("abc", ""))
-        assertEquals(emptyList<Int>(), ReaderSearchText.findOccurrences("", "x"))
-        assertEquals(emptyList<Int>(), ReaderSearchText.findOccurrences("abc", "x", limit = 0))
+        // findOccurrences returns Occurrence(offset, length), not bare
+        // offsets: the length is the span in ORIGINAL text coordinates
+        // and can differ from the query length when folding drops chars.
+        assertEquals(
+            listOf(Occurrence(0, 4), Occurrence(5, 4), Occurrence(10, 4)),
+            ReaderSearchText.findOccurrences("Book book BOOK", "book")
+        )
+        assertEquals(listOf(Occurrence(0, 2)), ReaderSearchText.findOccurrences("aaa", "aa"))
+        assertEquals(listOf(Occurrence(0, 3)), ReaderSearchText.findOccurrences("abcabc", "abc", limit = 1))
+        assertEquals(emptyList<Occurrence>(), ReaderSearchText.findOccurrences("abc", ""))
+        assertEquals(emptyList<Occurrence>(), ReaderSearchText.findOccurrences("", "x"))
+        assertEquals(emptyList<Occurrence>(), ReaderSearchText.findOccurrences("abc", "x", limit = 0))
     }
 
     @Test

@@ -58,6 +58,12 @@ class RankHookXpTest {
         // Earn XP past the next star boundary (title 2 spans 100..300;
         // 20% = 40 XP, so 140 XP = 2 stars).
         val store = XpStore(prefs)
+        // The one-time anti-cheat recompute already ran: refreshXpRank
+        // runs it first, and it re-derives total XP from the ledger —
+        // a hand-set total would be dropped back to the ledger value
+        // (100) before the celebration check ever sees it. Marking it
+        // done puts the store in the steady state celebrations run in.
+        store.recomputed = true
         store.totalXp = 140
         val up = RankHook.refreshXpRank(repo(), prefs, 0)!!
         assertEquals(1, up.fromLevel.stars)

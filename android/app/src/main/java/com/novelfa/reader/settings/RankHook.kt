@@ -181,7 +181,11 @@ object RankHook {
     suspend fun recomputeXpIfNeeded(
         repo: BookRepository,
         rankPrefs: RankPrefs,
-        prefs: PrefsStore
+        // Nullable with a default: unit tests have no Context to build
+        // a PrefsStore with, and the only thing the recompute writes
+        // through it is the finished-books count. Production callers
+        // always pass the real store, so behaviour there is unchanged.
+        prefs: PrefsStore? = null
     ) {
         rankPrefs.awaitLoaded()
         val store = XpStore(rankPrefs)
@@ -192,7 +196,7 @@ object RankHook {
         val finished = repo.books().first().count { !it.isPrivate && isCompleted(it) }
         val rank = RankService.rankIndexForStatic(finished)
         service.maxRank = rank
-        prefs.setFinishedBooksRestored(finished)
+        prefs?.setFinishedBooksRestored(finished)
         val total = store.recomputeTotalFromLedger(store.migrated, rank)
         store.recomputed = true
         DiagLog.w(
@@ -207,7 +211,7 @@ object RankHook {
         repo: BookRepository,
         rankPrefs: RankPrefs,
         floor: Int = 0,
-        prefs: PrefsStore
+        prefs: PrefsStore? = null
     ): XpLevel {
         migrateXpIfNeeded(repo, rankPrefs, floor)
         recomputeXpIfNeeded(repo, rankPrefs, prefs)
@@ -227,7 +231,7 @@ object RankHook {
         repo: BookRepository,
         rankPrefs: RankPrefs,
         floor: Int = 0,
-        prefs: PrefsStore
+        prefs: PrefsStore? = null
     ): XpRankUp? {
         rankPrefs.awaitLoaded()
         migrateXpIfNeeded(repo, rankPrefs, floor)

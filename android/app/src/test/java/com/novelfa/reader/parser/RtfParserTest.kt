@@ -64,9 +64,13 @@ class RtfParserTest {
         assertTrue(ch1.contains("سلام"))
         // Hex escape \'e9 in windows-1252 is é.
         assertTrue(ch1.contains("é"))
-        // Line break and tab survive.
+        // Line break and tab survive. The tab is four raw U+00A0
+        // characters, not "&nbsp;" entities: ConvertedBook.escape
+        // leaves U+00A0 untouched, and HtmlText normalises any
+        // "&nbsp;" entity to U+00A0 anyway, so the raw form is what
+        // the reader actually renders.
         assertTrue(ch1.contains("<br/>"))
-        assertTrue(ch1.contains("&nbsp;&nbsp;&nbsp;&nbsp;Indented"))
+        assertTrue(ch1.contains("\u00A0\u00A0\u00A0\u00A0Indented"))
         // Table text survives as paragraphs; the grid does not.
         assertTrue(ch1.contains("First cell"))
         assertTrue(ch1.contains("Second cell"))
