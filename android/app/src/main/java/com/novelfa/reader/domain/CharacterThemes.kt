@@ -251,4 +251,43 @@ object CharacterThemes {
      */
     fun visibleCount(isUnlocked: (CharacterTheme) -> Boolean): Int =
         All.count { !it.secretOnly || isUnlocked(it) }
+
+    /**
+     * Secret unlock codes, verbatim from upstream
+     * MainWindow.secretThemeCodes (d2850b8b): typing a code in the
+     * library search box unlocks its theme. 2026-11-25: Android was
+     * still carrying only the five pre-d2850b8b codes
+     * (BEAKO/EMT/TEA/TSUGI/PEIDE) — the six codes Ali added for the
+     * three new themes were never ported, so OTTO/VICE/GTA/JULIUS/
+     * JUKULIUS/JUUKULIUS did nothing here. Keep this list in upstream
+     * order and keep it here (not in the screen) so a port can never
+     * drop codes again. No code may be a suffix of another, or the
+     * first match below would pick the wrong theme (see
+     * SecretCodesTest).
+     */
+    val SecretCodes: List<Pair<String, String>> = listOf(
+        "BEAKO" to "beatrice",
+        "OTTO" to "otto",
+        "VICE" to "gta",
+        "GTA" to "gta",
+        "JULIUS" to "julius",
+        "JUKULIUS" to "julius",
+        "JUUKULIUS" to "julius",
+        "EMT" to "emilia",
+        "TEA" to "echidna",
+        "TSUGI" to "tsugi",
+        "PEIDE" to "reif"
+    )
+
+    /**
+     * The secret code a search query ends with, if any (WPF
+     * TrackSecretKeys parity): the trailing run of ASCII letters,
+     * upper-cased, must end with a code. Returns the (code, themeId)
+     * pair, or null when the query ends with no code.
+     */
+    fun matchSecretCode(query: String): Pair<String, String>? {
+        val run = query.takeLastWhile { it in 'A'..'Z' || it in 'a'..'z' }
+            .takeLast(16).uppercase()
+        return SecretCodes.firstOrNull { (code, _) -> run.endsWith(code) }
+    }
 }

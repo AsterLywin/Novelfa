@@ -181,13 +181,13 @@ fun LibraryScreen(
         debouncedQuery = query
     }
     var sort by rememberSaveable { mutableStateOf(SortMode.DEFAULT) }
-    // Secret theme codes (WPF TrackSecretKeys parity): typing BEAKO /
-    // EMT / TEA / TSUGI / PEIDE unlocks the hidden themes; the code letters are
-    // scrubbed from the search box like the desktop client does.
+    // Secret theme codes (WPF TrackSecretKeys parity): typing a code
+    // in the search box unlocks its hidden theme; the code letters are
+    // scrubbed from the search box like the desktop client does. The
+    // table lives on CharacterThemes so a port can never drop codes
+    // again (2026-11-25: the six d2850b8b codes for otto/julius/gta
+    // were missing here, so only the old five could ever fire).
     var secretUnlocked by remember { mutableStateOf<CharacterTheme?>(null) }
-    val secretCodes = remember {
-        listOf("BEAKO" to "beatrice", "EMT" to "emilia", "TEA" to "echidna", "TSUGI" to "tsugi", "PEIDE" to "reif")
-    }
     val context = LocalContext.current
     // PrefsStore must be built on the application context: the DataStore
     // delegate is process-wide, so an Activity context would leak the
@@ -199,19 +199,19 @@ fun LibraryScreen(
     val rankPrefs = remember(prefs) { PrefsStoreRankPrefs(prefs) }
     fun handleQuery(newQuery: String) {
         query = newQuery
-        val run = newQuery.takeLastWhile { it in 'A'..'Z' || it in 'a'..'z' }
-            .takeLast(16).uppercase()
-        for ((code, themeId) in secretCodes) {
-            if (!run.endsWith(code)) continue
-            val theme = CharacterThemes.find(themeId)
-            val service = RankService(rankPrefs)
-            if (theme != null && !service.isUnlocked(theme)) {
-                service.secretUnlock(themeId)
-                query = newQuery.dropLast(code.length)
-                secretUnlocked = theme
-            }
-            break
-        }
+        val (code, themeId) = CharacterThemes.matchSecretCode(newQuery) ?: return
+        val theme = CharacterThemes.find(themeId) ?: return
+        // A matched code ALWAYS unlocks and celebrates (2026-11-25):
+        // the old `!isUnlocked` guard swallowed the code whenever the
+        // theme was already unlocked — by an earlier code, by finished-
+        // books rank, or by XP title — so it looked dead although the
+        // theme was already yours. Only reif (requiredRank 99 AND
+        // xpTitle 99) can never be pre-unlocked, which is why only
+        // PEIDE visibly worked. secretUnlock is idempotent, so
+        // re-recording an already-known code changes nothing.
+        RankService(rankPrefs).secretUnlock(themeId)
+        query = newQuery.dropLast(code.length)
+        secretUnlocked = theme
     }
     var gridView by rememberSaveable { mutableStateOf(true) }
     // Scroll states for the library grid/list (the import FAB keys its
