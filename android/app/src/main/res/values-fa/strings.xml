@@ -265,6 +265,7 @@
     <string name="backup_result_fonts_failed">%1$d فونت اضافه نشد</string>
     <string name="backup_result_records_applied">پیشرفت مطالعه‌ی %1$d کتاب بازیابی شد</string>
     <string name="backup_result_records_kept">%1$d رکورد مطالعه برای ایمپورت‌های بعدی ذخیره شد</string>
+    <string name="backup_result_ledger_pending">%1$d ورودی XP برای کتاب‌هایی که بعداً وارد می‌کنی نگه داشته شد</string>
     <string name="backup_err_not_backup">این فایل بکاپ ناول‌فا نیست.</string>
     <string name="backup_err_too_new">این بکاپ با نسخه‌ی جدیدتری از برنامه ساخته شده است.</string>
     <string name="backup_err_corrupt">بکاپ خراب یا دست‌کاری شده است.</string>

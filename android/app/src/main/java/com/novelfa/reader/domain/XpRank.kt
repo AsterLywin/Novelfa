@@ -416,6 +416,76 @@ class XpLedger {
     }
 
     /**
+     * Merge another ledger wholesale (used by [XpStore.selfHeal] to
+     * restore the ledger from the guard's backup): units union, bonus
+     * flag union, bookXp = max — the same conservative rule as
+     * [mergeEntryInto], never a sum.
+     */
+    fun mergeAll(other: XpLedger) {
+        for ((key, entry) in other.books) {
+            val target = books.getOrPut(key) { BookLedger() }
+            mergeEntryInto(target, entry)
+            if (key in other.bonusAwarded) bonusAwarded += key
+        }
+    }
+
+    fun isEmpty(): Boolean = books.isEmpty()
+
+    /**
+     * Anti-cheat cap, ported from XpLedger.ClampBookXp (Ali 2026-11-23):
+     * at most 200 XP per credited unit (~400,000 words) — a backup
+     * entry claiming more is cut down to the cap. Only the merge path
+     * clamps; live credits are computed from real words and never pass
+     * through here.
+     */
+    private fun clampBookXp(entry: BookLedger): Int {
+        val units = (if (entry.upTo >= 0) entry.upTo + 1 else 0) + entry.extras.size
+        val cap = maxOf(1, units) * 200
+        return minOf(entry.bookXp, cap)
+    }
+
+    /**
+     * Anchored merge with a pending side, ported from
+     * XpLedger.MergeContentAnchored (Ali 2026-11-23): only content-keyed
+     * entries merge, and only for books actually on this device
+     * ([allowedContentHashes]); the rest are NOT dropped — they go to
+     * [pendingOut] so they apply when their book is imported
+     * ([XpStore.claimPending]). Excluded (private-book) hashes are
+     * skipped entirely, never even pended. Returns how many entries
+     * went pending.
+     */
+    fun mergeContentAnchored(
+        other: XpLedger,
+        allowedContentHashes: Set<String>?,
+        pendingOut: XpLedger?,
+        excludedContentHashes: Set<String> = emptySet()
+    ): Int {
+        var pending = 0
+        for ((key, entry) in other.books) {
+            if (!isContentKey(key)) continue
+            if (excludedContentHashes.isNotEmpty() &&
+                key.drop(1) in excludedContentHashes
+            ) continue
+            val clamped = BookLedger(
+                entry.upTo,
+                entry.extras.toMutableSet(),
+                clampBookXp(entry),
+                entry.smallCredited.toMutableSet()
+            )
+            val bonus = key in other.bonusAwarded
+            val dest = if (allowedContentHashes != null &&
+                key.drop(1) in allowedContentHashes
+            ) this else pendingOut
+            if (dest == null) continue
+            if (dest !== this) pending++
+            val target = dest.books.getOrPut(key) { BookLedger() }
+            dest.mergeEntryInto(target, clamped)
+            if (bonus) dest.bonusAwarded += key
+        }
+        return pending
+    }
+
+    /**
      * Serialize only the portable (content-keyed) entries, for backup.
      * Phase 2 (ADR-4 / DB-01): entries whose content hash is in
      * [excludedContentHashes] are left out, including their bonus
@@ -572,6 +642,7 @@ class XpStore(private val prefs: RankPrefs) {
         const val CELEBRATED_XP_KEY = "XpCelebratedXp"
         const val REKEYED_KEY = "XpRekeyed"
         const val RECOMPUTED_KEY = "XpRecomputedV1"
+        const val PENDING_KEY = "XpPendingLedger"
 
         /**
          * One lock for every ledger read-modify-write in the process
@@ -584,16 +655,35 @@ class XpStore(private val prefs: RankPrefs) {
         private val ledgerLock = Any()
     }
 
+    /**
+     * Total XP, guarded (Ali 2026-11-23): reading returns the max of the
+     * stored number and the guard's peak, so a corrupt or rolled-back
+     * prefs file can never lower the total; writing never stores below
+     * the peak and notifies the guard. A drop (write below stored, or
+     * stored below peak) is logged to the guard log.
+     */
     var totalXp: Int
-        get() = prefs.getString(TOTAL_XP_KEY, "0").toIntOrNull()?.coerceAtLeast(0) ?: 0
+        get() = maxOf(storedTotalXp, XpGuard.peakValue)
         set(value) {
-            prefs.setString(TOTAL_XP_KEY, max(0, value).toString())
+            val v = maxOf(0, value)
+            val stored = storedTotalXp
+            if (v < stored || stored < XpGuard.peakValue) {
+                XpGuard.log("TotalXp write=$v stored=$stored peak=${XpGuard.peakValue}")
+            }
+            prefs.setString(TOTAL_XP_KEY, maxOf(v, XpGuard.peakValue).toString())
+            XpGuard.noteTotal(v)
         }
+
+    /** Stored total as written, without the guard peak (for heal logging). */
+    private val storedTotalXp: Int
+        get() = prefs.getString(TOTAL_XP_KEY, "0").toIntOrNull()?.coerceAtLeast(0) ?: 0
 
     var ledger: XpLedger
         get() = XpLedger.parse(prefs.getString(LEDGER_KEY, ""))
         set(value) {
-            prefs.setString(LEDGER_KEY, value.serialize())
+            val s = value.serialize()
+            prefs.setString(LEDGER_KEY, s)
+            XpGuard.noteLedger(s)
         }
 
     var migrated: Boolean
@@ -657,6 +747,118 @@ class XpStore(private val prefs: RankPrefs) {
             )
             ledger = led
             return dropped
+        }
+    }
+
+    /**
+     * Backup restore, ported from XpStore.MergeBackupLedger (Ali
+     * 2026-11-23): entries for books actually on this device merge
+     * into the ledger; entries for absent books are NOT dropped — they
+     * wait in the pending ledger ([PENDING_KEY]) until their book is
+     * imported, when [claimPending] applies them. Per-entry XP is
+     * capped at 200 per unit ([XpLedger.mergeContentAnchored]). A
+     * backup's total is never accepted directly: only
+     * [raiseTotalToLedger] raises the total, and only to what the
+     * merged ledger derives. Returns how many entries went pending.
+     */
+    fun mergeBackupLedger(
+        serialized: String,
+        allowedContentHashes: Set<String>,
+        excludedContentHashes: Set<String> = emptySet()
+    ): Int {
+        if (serialized.isBlank()) return 0
+        synchronized(ledgerLock) {
+            val led = ledger
+            val pend = XpLedger.parse(prefs.getString(PENDING_KEY, ""))
+            val pending = led.mergeContentAnchored(
+                XpLedger.parse(serialized), allowedContentHashes, pend,
+                excludedContentHashes
+            )
+            ledger = led
+            prefs.setString(PENDING_KEY, pend.serialize())
+            return pending
+        }
+    }
+
+    /** True when a backup left XP entries waiting for their books. */
+    val hasPending: Boolean
+        get() = prefs.getString(PENDING_KEY, "").isNotEmpty()
+
+    /**
+     * A book that was added after a restore: its pending entries apply
+     * now. Total XP only ever goes up ([raiseTotalToLedger]). Returns
+     * the XP gained (0 when nothing was pending for the books on this
+     * device).
+     */
+    fun claimPending(
+        allowedContentHashes: Set<String>,
+        excludedContentHashes: Set<String> = emptySet()
+    ): Int {
+        synchronized(ledgerLock) {
+            val raw = prefs.getString(PENDING_KEY, "")
+            if (raw.isEmpty()) return 0
+            val pend = XpLedger.parse(raw)
+            val led = ledger
+            val before = led.derivedTotal()
+            val stillPending = XpLedger()
+            led.mergeContentAnchored(
+                pend, allowedContentHashes, stillPending, excludedContentHashes
+            )
+            ledger = led
+            prefs.setString(
+                PENDING_KEY,
+                if (stillPending.isEmpty()) "" else stillPending.serialize()
+            )
+            raiseTotalToLedger()
+            return maxOf(0, led.derivedTotal() - before)
+        }
+    }
+
+    /**
+     * Total XP = max(current, derivable from the ledger). The backup
+     * number is never accepted directly.
+     */
+    fun raiseTotalToLedger(): Int =
+        synchronized(ledgerLock) {
+            val derived = ledger.derivedTotal()
+            if (derived > totalXp) totalXp = derived
+            totalXp
+        }
+
+    /**
+     * Startup self-heal, ported from XpStore.SelfHeal (Ali 2026-11-23):
+     * when the main prefs lost anything, the guard's ledger backup heals
+     * the ledger and the total is raised to max(stored, derived). Runs
+     * under the ledger lock; never throws — callers run it in a
+     * background coroutine at app start, after [RankPrefs.awaitLoaded].
+     */
+    fun selfHeal() {
+        try {
+            synchronized(ledgerLock) {
+                val stored = storedTotalXp
+                val backup = XpGuard.ledgerBackupValue
+                val led = ledger
+                if (backup.isNotEmpty()) {
+                    val b = XpLedger.parse(backup)
+                    val before = led.derivedTotal()
+                    led.mergeAll(b)
+                    if (led.derivedTotal() > before) {
+                        XpGuard.log("ledger healed from backup: $before -> ${led.derivedTotal()}")
+                        ledger = led
+                    }
+                }
+                var total = totalXp
+                val derived = ledger.derivedTotal()
+                if (derived > total) total = derived
+                if (total != stored) {
+                    XpGuard.log("TotalXp healed: stored=$stored -> $total")
+                    totalXp = total
+                } else {
+                    XpGuard.noteTotal(total)
+                }
+            }
+        } catch (e: Exception) {
+            XpGuard.log("SelfHeal failed: ${e.message}")
         }
     }
 
@@ -752,7 +954,13 @@ class XpStore(private val prefs: RankPrefs) {
             // the two writes can never leave the ledger saying
             // "credited" while the total missed the XP. XpStore
             // never checks which implementation it holds.
-            prefs.setXpState(led.serialize(), newTotal.toString())
+            // setXpState bypasses the totalXp/ledger setters, so the
+            // guard is notified explicitly: the peak, the title and
+            // the ledger backup all track live credits too.
+            val serialized = led.serialize()
+            prefs.setXpState(serialized, newTotal.toString())
+            XpGuard.noteTotal(newTotal)
+            XpGuard.noteLedger(serialized)
             XpCreditResult(unitXp, bonus, newTotal, credited)
         }
     }

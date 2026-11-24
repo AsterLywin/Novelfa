@@ -15,7 +15,10 @@ import com.novelfa.reader.data.MIGRATION_4_5
 import com.novelfa.reader.data.ReaderDb
 import com.novelfa.reader.data.RecommendedFonts
 import com.novelfa.reader.data.PrefsStore
+import com.novelfa.reader.data.PrefsStoreRankPrefs
 import com.novelfa.reader.data.isUuidLikeTitle
+import com.novelfa.reader.domain.XpGuard
+import com.novelfa.reader.domain.XpStore
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +54,21 @@ class NovelfaApplication : Application(), ImageLoaderFactory {
         // point lands in the file.
         DiagLog.init(this)
         DiagLog.installUncaughtHandler()
+        // XP guard (Ali 2026-11-23): the separate guard file (peak +
+        // highest title + ledger backup) lives in filesDir. SelfHeal
+        // runs once per process start, in the background, after the
+        // rank bridge preload — a corrupt or rolled-back prefs file
+        // heals from the guard instead of losing XP. Never fatal:
+        // a failure here must not break app start.
+        XpGuard.init(filesDir)
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                val store = PrefsStore(this@NovelfaApplication)
+                val bridge = PrefsStoreRankPrefs(store)
+                bridge.awaitLoaded()
+                XpStore(bridge).selfHeal()
+            }
+        }
         // Diagnostics are opt-in (default OFF): apply the saved choice
         // so the log file is only written when the user turned it on.
         // The read is async; until it lands, DiagLog drops file writes

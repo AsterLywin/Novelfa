@@ -506,6 +506,13 @@ fun LibraryScreen(
         }.onFailure { e ->
             DiagLog.w("NovelfaXp", "XP ledger rekeying failed", e)
         }
+        // Pending XP from a backup restore: entries whose books were
+        // not on the device yet apply now that they may be imported.
+        runCatching {
+            RankHook.claimPendingXpIfNeeded(viewModel.repo, rankPrefs)
+        }.onFailure { e ->
+            DiagLog.w("NovelfaXp", "XP pending claim failed", e)
+        }
     }
     // Re-check XP on resume (gateTick): returning from the reader does not
     // change `tab`, so the effect above would not re-run — and the

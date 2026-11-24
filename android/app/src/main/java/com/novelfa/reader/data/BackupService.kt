@@ -83,7 +83,9 @@ data class BackupApplyResult(
     /** Library books whose reading state was updated from a record. */
     val recordsApplied: Int = 0,
     /** Records kept in the store for books not (yet) in the library. */
-    val recordsKept: Int = 0
+    val recordsKept: Int = 0,
+    /** Ledger entries kept pending for books not (yet) in the library. */
+    val ledgerPending: Int = 0
 )
 
 /**
@@ -957,21 +959,24 @@ class BackupService(
             }
 
             // --- rank + XP recompute (anti-cheat) ---
-            // The ledger merges ANCHORED to the books actually on this
-            // device: entries for books that are not here are refused
-            // (a hand-made ledger for a book the user never had cannot
-            // mint XP). Refused entries are logged, not fatal:
-            // re-restoring after importing the books applies them.
+            // Pending-ledger restore (Ali 2026-11-23): the ledger
+            // merges ANCHORED to the books actually on this device,
+            // and entries for books that are not here are KEPT, not
+            // refused — they apply when their book is imported
+            // (XpStore.claimPending), so a restore never loses XP
+            // for books the user adds later. A hand-made ledger for
+            // a book the user never had still cannot mint XP: the
+            // entries only ever apply to a real book on this device.
             val xpStore = XpStore(rankPrefs)
-            val droppedLedger = if (preview.xpLedger.isNotBlank()) {
-                xpStore.mergeContentLedgerAnchored(
+            val pendingLedger = if (preview.xpLedger.isNotBlank()) {
+                xpStore.mergeBackupLedger(
                     preview.xpLedger, libraryContentHashes(), privateKeys.hashes
                 )
             } else 0
-            if (droppedLedger > 0) {
+            if (pendingLedger > 0) {
                 DiagLog.w(
                     "NovelfaBackup",
-                    "restore refused $droppedLedger ledger entries " +
+                    "restore kept $pendingLedger ledger entries pending " +
                         "for books not on this device"
                 )
             }
@@ -1002,7 +1007,8 @@ class BackupService(
                 finishedAdded = maxOf(0, finishedTotal - finishedBefore),
                 finishedTotal = finishedTotal,
                 recordsApplied = recordsApplied,
-                recordsKept = recordsKept
+                recordsKept = recordsKept,
+                ledgerPending = pendingLedger
             )
         }
 }

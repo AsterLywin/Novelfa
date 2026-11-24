@@ -265,6 +265,7 @@
     <string name="backup_result_fonts_failed">%1$d fonts couldn\'t be added</string>
     <string name="backup_result_records_applied">Reading progress restored for %1$d books</string>
     <string name="backup_result_records_kept">%1$d reading records saved for books you import later</string>
+    <string name="backup_result_ledger_pending">%1$d XP entries kept for books you import later</string>
     <string name="backup_err_not_backup">This file is not a Novelfa backup.</string>
     <string name="backup_err_too_new">This backup was made by a newer version of the app.</string>
     <string name="backup_err_corrupt">The backup is damaged or was modified.</string>

@@ -1243,6 +1243,9 @@ private fun BackupSection(viewModel: SettingsViewModel, notify: (String) -> Unit
                     if (r.recordsKept > 0) {
                         Text(stringResource(R.string.backup_result_records_kept, r.recordsKept))
                     }
+                    if (r.ledgerPending > 0) {
+                        Text(stringResource(R.string.backup_result_ledger_pending, r.ledgerPending))
+                    }
                 }
             },
             confirmButton = {

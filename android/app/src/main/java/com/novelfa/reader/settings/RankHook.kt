@@ -206,6 +206,26 @@ object RankHook {
         )
     }
 
+    /**
+     * Pending-ledger claim (Ali 2026-11-23): a backup may have left XP
+     * entries for books that were not on the device yet; when such a
+     * book is imported, its entries apply and the total only ever goes
+     * up. Runs on the home screen next to the rekeying — cheap when
+     * nothing is pending (one prefs read, no library scan).
+     */
+    suspend fun claimPendingXpIfNeeded(repo: BookRepository, rankPrefs: RankPrefs) {
+        val store = XpStore(rankPrefs)
+        if (!store.hasPending) return
+        val hashes = repo.books().first()
+            .filter { !it.isPrivate }
+            .mapNotNull { it.contentHash?.takeIf { h -> h.isNotBlank() } }
+            .toSet()
+        val gained = store.claimPending(hashes)
+        if (gained > 0) {
+            DiagLog.w("NovelfaXp", "claimed $gained pending XP")
+        }
+    }
+
     /** Current XP level (migrates first; idempotent after the first run). */
     suspend fun xpLevelNow(
         repo: BookRepository,
