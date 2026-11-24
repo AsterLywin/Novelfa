@@ -50,7 +50,7 @@ fun RanksDialog(totalXp: Int, isEnglishUi: Boolean, onDismiss: () -> Unit) {
         text = {
             Column {
                 Text(
-                    text = level.title.displayName(isEnglishUi),
+                    text = level.icon + " " + level.title.displayName(isEnglishUi),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary

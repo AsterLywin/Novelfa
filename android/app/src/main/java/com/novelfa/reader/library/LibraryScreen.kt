@@ -650,7 +650,8 @@ fun LibraryScreen(
 
     val finishedCount = remember(allBooks) { allBooks.count { isCompleted(it) } }
     val rankTitle = remember(xpLevel, isEnglishUi) {
-        (xpLevel ?: XpRank.levelFor(0)).title.displayName(isEnglishUi)
+        val level = xpLevel ?: XpRank.levelFor(0)
+        level.icon + " " + level.title.displayName(isEnglishUi)
     }
     val rankStarFill = remember(xpLevel) {
         (xpLevel ?: XpRank.levelFor(0)).starFill

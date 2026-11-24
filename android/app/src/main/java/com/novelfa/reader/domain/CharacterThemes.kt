@@ -83,11 +83,12 @@ data class CharacterTheme(
 }
 
 object CharacterThemes {
-    // Order follows the XP titles: subaru (open from the start) to
-    // tsugi, plus the secret reif (rank 99, never unlocked by rank).
-    // requiredRank stays the OLD 0..6 finished-books rank and
-    // xpTitle is the new title gate (0..11, see XpRank) — a theme unlocks
-    // via EITHER gate, so no previously unlocked theme is lost.
+    // Order follows the upstream list: subaru, ram, rem, beatrice, otto,
+    // emilia, julius, gta, echidna, tsugi, plus the secret reif (rank 99,
+    // never unlocked by rank). requiredRank stays the OLD 0..6
+    // finished-books rank and xpTitle is the new title gate (0..11,
+    // see XpRank) — a theme unlocks via EITHER gate, so no previously
+    // unlocked theme is lost.
     // Palette strings + fa texts copied VERBATIM from CharacterThemes.cs:129-170.
     // Verified 2026-10-13 by diffing each Parse("...") literal and each fa
     // literal against the C# source (see task-7-report.md for the method).
@@ -139,6 +140,21 @@ object CharacterThemes {
             emblemData = "F0 M53,45 C57,23 80,5 96,9 C102,23 95,43 80,51 C71,55 61,52 53,45 Z M47,45 C43,23 20,5 4,9 C-2,23 5,43 20,51 C29,55 39,52 47,45 Z M87.2,27 C87.2,29.87 84.87,32.2 82,32.2 C79.13,32.2 76.8,29.87 76.8,27 C76.8,24.13 79.13,21.8 82,21.8 C84.87,21.8 87.2,24.13 87.2,27 Z M12.8,27 C12.8,29.87 15.13,32.2 18,32.2 C20.87,32.2 23.2,29.87 23.2,27 C23.2,24.13 20.87,21.8 18,21.8 C15.13,21.8 12.8,24.13 12.8,27 Z M53,55 C64,54 77,58 83,68 C86,82 72,92 63,85 C56,79 54,65 53,55 Z M47,55 C36,54 23,58 17,68 C14,82 28,92 37,85 C44,79 46,65 47,55 Z M75.6,76 C75.6,77.99 73.99,79.6 72,79.6 C70.01,79.6 68.4,77.99 68.4,76 C68.4,74.01 70.01,72.4 72,72.4 C73.99,72.4 75.6,74.01 75.6,76 Z M24.4,76 C24.4,77.99 26.01,79.6 28,79.6 C29.99,79.6 31.6,77.99 31.6,76 C31.6,74.01 29.99,72.4 28,72.4 C26.01,72.4 24.4,74.01 24.4,76 Z M48.4,36 C48.4,31 51.6,31 51.6,36 L51.6,73 C51.6,78 48.4,78 48.4,73 Z M49.2,35 C47.6,25 42,18 35,13.5 L34.2,15.6 C40,19.5 45,26.5 47.6,35.5 Z M50.8,35 C52.4,25 58,18 65,13.5 L65.8,15.6 C60,19.5 55,26.5 52.4,35.5 Z",
             xpTitle = 5
         ),
+        // Upstream d2850b8b: «اتو سوئن» (rank 3, coins, xpTitle 4).
+        // Palettes + fa texts copied verbatim from CharacterThemes.cs;
+        // en texts translated from the fa ones.
+        CharacterTheme(
+            "otto", "اتو سوئن",
+            "طلای سکه و سبزِ برگ؛ چرب‌زبانیِ تاجری که بی‌ادعا از همه جلوتره",
+            "Otto Suwen",
+            "Coin gold and leaf green; the smooth tongue of a merchant who, unassuming, stays ahead of everyone",
+            "coins", 3,
+            ThemePalette.parse("#0D110A #131810 #1B2114 #F3F1DC #A7A887 #272E1A #323B21 #3B3512 #2B341A #11150B #E6BA3E #CB9B1C #F7D97C #D6A62B #E6BA3E #6FCF6A"),
+            ThemePalette.parse("#F8F7E9 #FFFFFF #FFFFFF #252B14 #77794F #F0EFCA #DDDCAA #FBF0C6 #F2F1CF #EEECBA #9A6F0A #7A5606 #E8C25A #C99A1E #E6BA3E #4FA84A")
+       ,
+            emblemData = "F0 M50,6 A44,44 0 1 1 50,94 A44,44 0 1 1 50,6 Z M50,13 A37,37 0 1 0 50,87 A37,37 0 1 0 50,13 Z M50,24 A26,26 0 1 1 50,76 A26,26 0 1 1 50,24 Z M50,29 A21,21 0 1 0 50,71 A21,21 0 1 0 50,29 Z M50,36 L62,50 L50,64 L38,50 Z M50,43 L55.5,50 L50,57 L44.5,50 Z",
+            xpTitle = 4
+        ),
         CharacterTheme(
             "emilia", "امیلیا",
             "نقره‌ای و یخی؛ آرامشِ برف و بنفشِ گل‌های بهاری",
@@ -150,6 +166,36 @@ object CharacterThemes {
        ,
             emblemData = "F1 M64,50 C64,57.73 57.73,64 50,64 C42.27,64 36,57.73 36,50 C36,42.27 42.27,36 50,36 C57.73,36 64,42.27 64,50 Z M60.5,50 C60.5,44.2 55.8,39.5 50,39.5 C44.2,39.5 39.5,44.2 39.5,50 C39.5,55.8 44.2,60.5 50,60.5 C55.8,60.5 60.5,55.8 60.5,50 Z M48.3,39 L48.3,12 L51.7,12 L51.7,39 Z M49.35,29.13 L39.82,23.63 L41.12,21.37 L50.65,26.87 Z M49.35,26.87 L58.88,21.37 L60.18,23.63 L50.65,29.13 Z M49.35,21.13 L42.85,17.38 L44.15,15.12 L50.65,18.87 Z M49.35,18.87 L55.85,15.12 L57.15,17.38 L50.65,21.13 Z M46.4,9 L50,2 L53.6,9 L50,15 Z M58.68,43.03 L82.06,29.53 L83.76,32.47 L60.38,45.97 Z M67.75,39 L67.75,28 L70.35,28 L70.35,39 Z M69.7,37.87 L79.23,43.37 L77.93,45.63 L68.4,40.13 Z M74.68,35 L74.68,27.5 L77.28,27.5 L77.28,35 Z M76.63,33.87 L83.13,37.62 L81.83,39.88 L75.33,36.13 Z M83.71,26.38 L91.57,26 L87.31,32.62 L80.31,32.5 Z M60.38,54.03 L83.76,67.53 L82.06,70.47 L58.68,56.97 Z M68.4,59.87 L77.93,54.37 L79.23,56.63 L69.7,62.13 Z M70.35,61 L70.35,72 L67.75,72 L67.75,61 Z M75.33,63.87 L81.83,60.12 L83.13,62.38 L76.63,66.13 Z M77.28,65 L77.28,72.5 L74.68,72.5 L74.68,65 Z M87.31,67.38 L91.57,74 L83.71,73.62 L80.31,67.5 Z M51.7,61 L51.7,88 L48.3,88 L48.3,61 Z M50.65,70.87 L60.18,76.37 L58.88,78.63 L49.35,73.13 Z M50.65,73.13 L41.12,78.63 L39.82,76.37 L49.35,70.87 Z M50.65,78.87 L57.15,82.62 L55.85,84.88 L49.35,81.13 Z M50.65,81.13 L44.15,84.88 L42.85,82.62 L49.35,78.87 Z M53.6,91 L50,98 L46.4,91 L50,85 Z M41.32,56.97 L17.94,70.47 L16.24,67.53 L39.62,54.03 Z M32.25,61 L32.25,72 L29.65,72 L29.65,61 Z M30.3,62.13 L20.77,56.63 L22.07,54.37 L31.6,59.87 Z M25.32,65 L25.32,72.5 L22.72,72.5 L22.72,65 Z M23.37,66.13 L16.87,62.38 L18.17,60.12 L24.67,63.87 Z M16.29,73.62 L8.43,74 L12.69,67.38 L19.69,67.5 Z M39.62,45.97 L16.24,32.47 L17.94,29.53 L41.32,43.03 Z M31.6,40.13 L22.07,45.63 L20.77,43.37 L30.3,37.87 Z M29.65,39 L29.65,28 L32.25,28 L32.25,39 Z M24.67,36.13 L18.17,39.88 L16.87,37.62 L23.37,33.87 Z M22.72,35 L22.72,27.5 L25.32,27.5 L25.32,35 Z M12.69,32.62 L8.43,26 L16.29,26.38 L19.69,32.5 Z",
             xpTitle = 8
+        ),
+        // Upstream d2850b8b: «جولیوس جوکولیوس» (rank 99, orbs, xpTitle 7).
+        // requiredRank 99 keeps the legacy gate closed like reif; it
+        // unlocks through the XP title gate (5000 XP). Palettes + fa
+        // texts copied verbatim from CharacterThemes.cs.
+        CharacterTheme(
+            "julius", "جولیوس جوکولیوس",
+            "سفیدِ گارد سلطنتی و بنفشِ ارواحِ شش‌گانه؛ شمشیری که به عهدش وفاداره",
+            "Julius Juukulius",
+            "Royal-guard white and the purple of six spirits; a sword loyal to its oath",
+            "orbs", 99,
+            ThemePalette.parse("#0A0C1F #0F1230 #161A40 #EFF0FF #9AA2D2 #1F2454 #2A316B #2B295E #232A66 #0C0F28 #D2B0FF #A97CF0 #EBD9FF #B58BF5 #D2B0FF #F4D26B"),
+            ThemePalette.parse("#F5F3FF #FFFFFF #FFFFFF #1E1B45 #6F6AA6 #ECE8FF #DAD3F6 #EADFFF #F0EBFF #E3DAFF #6B3FD0 #5429B0 #B79BFF #7B52E0 #B58BF5 #D9A91E")
+       ,
+            emblemData = "F1 M50,3 L56,16 L56,56 L44,56 L44,16 Z M28,58 L72,58 L72,65 L28,65 Z M46.5,65 L53.5,65 L53.5,82 L46.5,82 Z M45,88 A5,5 0 1 1 55,88 A5,5 0 1 1 45,88 Z M83.5,40 A4.5,4.5 0 1 1 92.5,40 A4.5,4.5 0 1 1 83.5,40 Z M83.5,66 A4.5,4.5 0 1 1 92.5,66 A4.5,4.5 0 1 1 83.5,66 Z M7.5,40 A4.5,4.5 0 1 1 16.5,40 A4.5,4.5 0 1 1 7.5,40 Z M7.5,66 A4.5,4.5 0 1 1 16.5,66 A4.5,4.5 0 1 1 7.5,66 Z M19.5,86 A4.5,4.5 0 1 1 28.5,86 A4.5,4.5 0 1 1 19.5,86 Z M71.5,86 A4.5,4.5 0 1 1 80.5,86 A4.5,4.5 0 1 1 71.5,86 Z",
+            xpTitle = 7
+        ),
+        // Upstream d2850b8b: «جی‌تی‌ای ۶» (rank 4, sparkles, xpTitle 6).
+        // Palettes + fa texts copied verbatim from CharacterThemes.cs.
+        CharacterTheme(
+            "gta", "جی‌تی‌ای ۶",
+            "غروبِ صورتیِ وایس‌سیتی و نئونِ فیروزه‌ای؛ نخل‌ها، موج‌ها و شبی که تمومی نداره",
+            "GTA 6",
+            "Vice City's pink sunset and turquoise neon; palms, waves, and a night that never ends",
+            "sparkles", 4,
+            ThemePalette.parse("#12061F #1A0B2E #230F3D #FFF0F8 #C79BC8 #2E1450 #451E6E #4A1A52 #3A1A66 #14072A #FF4FA3 #E0348A #FFA6D2 #FF4FA3 #27E0D0 #FFB547"),
+            ThemePalette.parse("#FFF4FA #FFFFFF #FFFFFF #3A1248 #8C5C98 #FFE3F1 #F6C6E0 #FFD9EC #FFE9D6 #FFDDF0 #D81F7F #B0126A #FF8FC4 #FF4FA3 #19B7AA #F59E0B")
+       ,
+            emblemData = "F1 M20.27,50 A30,30 0 1 1 79.73,50 Z M21.09,54 L78.91,54 L77.27,58.5 L22.73,58.5 Z M24.95,62.5 L75.05,62.5 L72.36,66 L27.64,66 Z M31.35,69.5 L68.65,69.5 L64.97,72 L35.03,72 Z M6,80 L94,80 L94,84 L6,84 Z M83,84 L85,84 L83.6,40 L81.6,40 Z M83,39 Q72,24 54,31 Q73,29 83,39 Z M83,39 Q80,22 66,16 Q84,22 83,39 Z M83,39 Q94,24 100,34 Q92,28 83,39 Z M83,39 Q90,18 98,20 Q90,24 83,39 Z M83,39 Q70,34 62,46 Q74,38 83,39 Z",
+            xpTitle = 6
         ),
         CharacterTheme(
             "echidna", "اکیدنا",

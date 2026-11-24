@@ -74,4 +74,32 @@ class RankHookXpTest {
         RankHook.acknowledgeXpCelebration(prefs, up.toXp)
         assertNull(RankHook.refreshXpRank(repo(), prefs, 0))
     }
+
+    @Test
+    fun rankIcons_upstream_d2850b8b() {
+        // One icon per title, index = title index; clamped at the last.
+        assertEquals("\uD83C\uDF31", XpRank.iconFor(0))
+        assertEquals("\uD83D\uDCD6", XpRank.iconFor(2))
+        assertEquals("\uD83C\uDF0C", XpRank.iconFor(11))
+        assertEquals("\uD83C\uDF0C", XpRank.iconFor(99))
+        assertEquals("\uD83C\uDF31", XpRank.iconFor(-1))
+        // One icon per eternity mark, count 1-based; clamped at the last.
+        assertEquals("", XpRank.eternityIcon(0))
+        assertEquals("\uD83D\uDD25", XpRank.eternityIcon(1))
+        assertEquals("\uD83C\uDF1F", XpRank.eternityIcon(10))
+        assertEquals("\uD83C\uDF1F", XpRank.eternityIcon(99))
+        // Level icon: title icon below the cap, mark icon past it.
+        // At exactly 27,000 XP there is no mark yet (0 marks), so the
+        // title icon stays; one full mark later it is the mark icon.
+        assertEquals("\uD83C\uDF31", XpRank.levelFor(0).icon)
+        assertEquals("\uD83D\uDCD6", XpRank.levelFor(100).icon)
+        assertEquals("\uD83C\uDF0C", XpRank.levelFor(27_000).icon)
+        assertEquals("\uD83D\uDD25", XpRank.levelFor(37_000).icon)
+        assertEquals("\uD83D\uDCA7", XpRank.levelFor(47_000).icon)
+        // "X of Y XP" already ported: 100 XP sits 0 into the 200-XP
+        // step of title 2 (100..300).
+        val level = XpRank.levelFor(100)
+        assertEquals(0, level.xpIntoStep)
+        assertEquals(200, level.xpStepTotal)
+    }
 }

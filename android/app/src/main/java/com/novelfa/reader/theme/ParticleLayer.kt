@@ -133,6 +133,10 @@ private fun paramsFor(type: String) = when (type) {
     "leaves" -> KindParams(16, 10f, 20f, 10f, 22f, 0.9f, false, 48f, true, "leaf")
     "ash" -> KindParams(22, 3f, 9f, 14f, 28f, 0.6f, false, 22f, true, "shard")
     "snow" -> KindParams(18, 5f, 11f, 12f, 24f, 0.85f, false, 28f, true, "snow")
+    // Upstream d2850b8b adds coin (otto) and orb (julius) glyphs;
+    // coins fall and spin, orbs drift up like sparkles.
+    "coins" -> KindParams(12, 8f, 16f, 12f, 22f, 0.75f, false, 30f, true, "coin")
+    "orbs" -> KindParams(10, 8f, 16f, 12f, 22f, 0.8f, true, 20f, false, "orb")
     else -> KindParams(14, 6f, 12f, 12f, 20f, 0.75f, false, 24f, false, null)
 }
 
@@ -142,7 +146,10 @@ private val GLYPH_DATA = mapOf(
     "leaf" to "F0 M10,1 C16,4 18,12 10,19 C2,12 4,4 10,1 Z M9.4,6 L10.6,6 L10.6,17 L9.4,17 Z",
     "spark" to "F0 M10,0 L12.2,7.8 L20,10 L12.2,12.2 L10,20 L7.8,12.2 L0,10 L7.8,7.8 Z",
     "shard" to "F0 M3,2 L14,1 L18,8 L15,18 L6,19 L1,10 Z",
-    "snow" to "F1 M12.2,10 C12.2,11.22 11.22,12.2 10,12.2 C8.78,12.2 7.8,11.22 7.8,10 C7.8,8.78 8.78,7.8 10,7.8 C11.22,7.8 12.2,8.78 12.2,10 Z M9.15,19 L9.15,1 L10.85,1 L10.85,19 Z M1.78,13.76 L17.37,4.76 L18.22,6.24 L2.63,15.24 Z M2.63,4.76 L18.22,13.76 L17.37,15.24 L1.78,6.24 Z"
+    "snow" to "F1 M12.2,10 C12.2,11.22 11.22,12.2 10,12.2 C8.78,12.2 7.8,11.22 7.8,10 C7.8,8.78 8.78,7.8 10,7.8 C11.22,7.8 12.2,8.78 12.2,10 Z M9.15,19 L9.15,1 L10.85,1 L10.85,19 Z M1.78,13.76 L17.37,4.76 L18.22,6.24 L2.63,15.24 Z M2.63,4.76 L18.22,13.76 L17.37,15.24 L1.78,6.24 Z",
+    // Upstream d2850b8b glyphs, verbatim from CharacterThemes.cs.
+    "coin" to "F0 M0.5,10 A9.5,9.5 0 1 1 19.5,10 A9.5,9.5 0 1 1 0.5,10 Z M2.4,10 A7.6,7.6 0 1 1 17.6,10 A7.6,7.6 0 1 1 2.4,10 Z M10,4.8 L15.2,10 L10,15.2 L4.8,10 Z",
+    "orb" to "F0 M0.5,10 A9.5,9.5 0 1 1 19.5,10 A9.5,9.5 0 1 1 0.5,10 Z M3,10 A7,7 0 1 1 17,10 A7,7 0 1 1 3,10 Z M6.6,10 A3.4,3.4 0 1 1 13.4,10 A3.4,3.4 0 1 1 6.6,10 Z"
 )
 
 /** Fallback colors when no character palette is available. */
@@ -154,6 +161,8 @@ private fun fallbackColors(type: String): List<Color> = when (type) {
     "snow" -> listOf(Color.White, Color.White, Color.White)
     "leaves" -> listOf(Color(0xFF86EFAC), Color(0xFF4ADE80), Color(0xFFBBF7D0))
     "ash" -> listOf(Color(0xFF9A8C80), Color(0xFFA39286), Color(0xFF7C6068))
+    "coins" -> listOf(Color(0xFFE6BA3E), Color(0xFFF7D97C), Color(0xFFCB9B1C))
+    "orbs" -> listOf(Color(0xFFD2B0FF), Color(0xFFB58BF5), Color(0xFFEBD9FF))
     else -> listOf(Color.White, Color.White, Color.White)
 }
 

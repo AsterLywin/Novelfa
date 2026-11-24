@@ -74,10 +74,31 @@ class ThemesTest {
     }
 
     @Test
-    fun characterPages_size16() {
-        // 8 character themes (subaru, ram, rem, beatrice, emilia,
-        // echidna, tsugi, reif) x night + day.
-        assertEquals(16, characterPages().size)
+    fun characterPages_size22() {
+        // 11 character themes (subaru, ram, rem, beatrice, otto, emilia,
+        // julius, gta, echidna, tsugi, reif) x night + day.
+        assertEquals(22, characterPages().size)
+    }
+
+    @Test
+    fun newThemes_upstream_d2850b8b() {
+        val otto = CharacterThemes.find("otto")!!
+        assertEquals(3, otto.requiredRank)
+        assertEquals(4, otto.xpTitle)
+        assertEquals("coins", otto.particle)
+        assertEquals("#1B2114", otto.dark.card)
+        val julius = CharacterThemes.find("julius")!!
+        assertEquals(99, julius.requiredRank)
+        assertEquals(7, julius.xpTitle)
+        assertEquals("orbs", julius.particle)
+        assertEquals("#161A40", julius.dark.card)
+        val gta = CharacterThemes.find("gta")!!
+        assertEquals(4, gta.requiredRank)
+        assertEquals(6, gta.xpTitle)
+        assertEquals("sparkles", gta.particle)
+        assertEquals("#230F3D", gta.dark.card)
+        assertEquals("rz.otto.night", otto.pageKeyNight)
+        assertEquals("rz.gta.day", gta.pageKeyDay)
     }
 
     @Test

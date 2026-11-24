@@ -36,6 +36,9 @@ import kotlin.math.max
 
 data class XpTitle(val index: Int, val nameFa: String, val nameEn: String, val minXp: Int) {
     fun displayName(isEnglish: Boolean): String = if (isEnglish) nameEn else nameFa
+
+    /** Rank icon (upstream XpRank.TitleIcons, emoji, Segoe UI Emoji on Windows). */
+    val icon: String get() = XpRank.iconFor(index)
 }
 
 data class EternityMark(val index: Int, val nameFa: String, val nameEn: String) {
@@ -67,6 +70,16 @@ data class XpLevel(
         XpRank.eternityMarkFor(eternityMarks)
     } else {
         null
+    }
+
+    /**
+     * Rank icon (upstream XpLevel.Icon): the title's emoji below the
+     * cap, the current eternity mark's emoji past it.
+     */
+    val icon: String get() = if (eternityMarks >= 1) {
+        XpRank.eternityIcon(eternityMarks)
+    } else {
+        title.icon
     }
 
     /**
@@ -132,6 +145,26 @@ object XpRank {
         EternityMark(9, "تخت ابدیت", "Throne of Eternity"),
         EternityMark(10, "خورشید ابدیتِ جهان‌ها", "Eternal Sun of Worlds")
     )
+
+    /**
+     * Rank icons, verbatim from upstream XpRank.TitleIcons (one per
+     * XP title, index = title index; clamped at the last one) and
+     * EternityMarkIcons (one per mark, count 1-based; clamped).
+     */
+    private val TitleIcons: List<String> = listOf(
+        "\uD83C\uDF31", "\uD83D\uDEB6", "\uD83D\uDCD6", "\uD83D\uDC1B", "\uD83C\uDFF9", "\uD83D\uDCDA",
+        "\uD83C\uDF0A", "\uD83D\uDDDD", "\uD83C\uDFDB", "\uD83D\uDD2E", "\uD83D\uDC41", "\uD83C\uDF0C"
+    )
+    private val EternityMarkIcons: List<String> = listOf(
+        "\uD83D\uDD25", "\uD83D\uDCA7", "\uD83C\uDF42", "\uD83C\uDF19", "\u2600",
+        "\uD83D\uDC51", "\uD83E\uDEB6", "\u2764", "\uD83E\uDE90", "\uD83C\uDF1F"
+    )
+
+    fun iconFor(titleIndex: Int): String =
+        TitleIcons[titleIndex.coerceIn(0, TitleIcons.size - 1)]
+
+    fun eternityIcon(count: Int): String =
+        if (count < 1) "" else EternityMarkIcons[minOf(count, EternityMarkIcons.size) - 1]
 
     /** Mark design for a count: 1..10 by index, 11+ reuse the 10th design. */
     fun eternityMarkFor(count: Int): EternityMark =
