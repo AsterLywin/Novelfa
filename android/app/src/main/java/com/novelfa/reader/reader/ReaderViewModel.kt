@@ -784,6 +784,25 @@ class ReaderViewModel(
         pagedAnchorChapter = -1
     }
 
+    /**
+     * New document generation for an in-place HTML patch (font size /
+     * line spacing): the patched HTML is reloaded by the WebView, so it
+     * IS a new document — the generation counter and the embedded
+     * `window.__rdrGen` in the HTML must move together (exactly like
+     * [loadChapter]'s cache swap), or the scroll bridge drops every
+     * report from the reloaded document as stale AND the vertical
+     * restore refuses to run (its guards compare against [docGen]):
+     * that combination was the "settings change jumps to page 1" bug —
+     * the reload wiped the scroll position and nothing restored it.
+     */
+    private fun bumpDocGenForPatch() {
+        docGen++
+        if (html.isNotEmpty()) {
+            html = Regex("window\\.__rdrGen=-?\\d+;")
+                .replaceFirst(html, "window.__rdrGen=$docGen;")
+        }
+    }
+
     suspend fun applySpacing(lh: Double, margin: Int, para: Double) {
         lineHeight = lh.coerceIn(1.2, 3.0)
         sideMargin = margin.coerceIn(0, 160)
@@ -816,6 +835,10 @@ class ReaderViewModel(
         repo.update(book)
         if (html.isNotEmpty()) {
             html = Regex("font-size:\\d+px").replaceFirst(html, "font-size:" + next + "px")
+            // The patched HTML reloads: new generation, or the
+            // vertical restore refuses to run for it (see
+            // bumpDocGenForPatch) and the reader lands on page 1.
+            bumpDocGenForPatch()
         }
     }
 
@@ -905,6 +928,10 @@ class ReaderViewModel(
             html = Regex("<style id=\"rdrPaged\">[\\s\\S]*?</style>")
                 .replace(html, "<style id=\"rdrPaged\">" + HtmlBuilder.pagedCss(sideMargin) + "</style>")
         }
+        // The patched HTML reloads: new generation, or the vertical
+        // restore refuses to run for it (see bumpDocGenForPatch) and
+        // the reader lands on page 1.
+        bumpDocGenForPatch()
     }
 
     private fun putLocalPrepared(i: Int, value: String) {

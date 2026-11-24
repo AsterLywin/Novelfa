@@ -83,6 +83,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -99,6 +101,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.lifecycle.Lifecycle
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -152,6 +155,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
@@ -213,6 +217,7 @@ fun ReaderScreen(
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -296,6 +301,9 @@ fun ReaderScreen(
     var zipCandidates by remember { mutableStateOf<List<ArchiveCandidate>?>(null) }
     var zipCandidate by remember { mutableStateOf<ArchiveCandidate?>(null) }
     var pageHtml by remember { mutableStateOf("") }
+    // Serialises chapter jumps (see gotoChapter): a second tap while a
+    // chapter is still loading must not start a second load.
+    val gotoChapterMutex = remember { Mutex() }
     var pendingLastPage by remember { mutableStateOf(false) }
     // Pager-recovery guard (see recoverPagerTurn): the chapter index
     // whose pager already got its one reload; reset in gotoChapter
@@ -499,6 +507,12 @@ fun ReaderScreen(
     // shown; tap re-runs, long-press deletes one entry.
     val searchHistory by extrasStore.searchHistory(bookId).collectAsState(initial = emptyList())
     var searchOpen by remember { mutableStateOf(false) }
+    // Search-field focus: the keyboard must stay up while the user
+    // refines a query — submitting a search (magnifier tap, IME
+    // search key) moves focus off the field, which hides the keyboard
+    // with no way back except tapping the field again. The requester
+    // re-focuses the field after every submit, and on open.
+    val searchFocusRequester = remember { FocusRequester() }
     var searchQuery by remember { mutableStateOf("") }
     var searchCount by remember { mutableIntStateOf(0) }
     var searchIndex by remember { mutableIntStateOf(-1) }
@@ -1216,6 +1230,15 @@ fun ReaderScreen(
     }
 
     suspend fun gotoChapter(v: ReaderViewModel, i: Int) {
+        // One jump at a time: the drawer stays open while a big chapter
+        // builds, so a second tap (same row, or a neighbour, when the
+        // first tap seems to do nothing) used to launch a second load
+        // racing the first — the LAST FINISHER won, not the last tap,
+        // so a TOC tap landed on the chapter before/after the one
+        // tapped. A jump already in flight drops the new one; the user
+        // taps again after it lands.
+        if (!gotoChapterMutex.tryLock()) return
+        try {
         // A real chapter change re-arms pager recovery; a same-chapter
         // reload (the recovery itself, a mode switch) must not, or a
         // permanently torn-down chapter would reload-loop on every tap.
@@ -1238,7 +1261,17 @@ fun ReaderScreen(
             pagedPageCount = 0
             rev++
         } else {
+            // A failed jump must not leave its pendings behind: a
+            // stale pendingLastPage would fire rdrLast() on the NEXT
+            // successful load and land on that chapter's last page,
+            // and a stale pendingAnchor would jump to a fragment of
+            // a chapter it was never meant for.
+            pendingLastPage = false
+            pendingAnchor = null
             showVmError(v)
+        }
+        } finally {
+            gotoChapterMutex.unlock()
         }
     }
 
@@ -1708,6 +1741,14 @@ fun ReaderScreen(
                         pagedPage = page
                         pagedPageCount = total
                         pagerBuilding = false
+                        // The saved text anchor must track the LIVE page:
+                        // JS tap-zone turns call rdrTurn directly and
+                        // only report here — they never pass through
+                        // turnPage, so without this the anchor stayed
+                        // at the chapter-open page and a settings
+                        // reload restored to page 1 instead of the
+                        // page being read.
+                        refreshPagedAnchor()
                         // Book-wide page count: every adopted report
                         // is a FINAL total now (the pager reports
                         // total 0 while building), so it is safe to
@@ -2336,10 +2377,16 @@ fun ReaderScreen(
                                     .fillMaxWidth()
                                     .heightIn(min = 52.dp)
                                     .clickable {
-                                        scope.launch {
-                                            gotoChapter(v, i)
-                                            drawerState.close()
-                                        }
+                                        // Close at once, concurrent with
+                                        // the load: the drawer used to stay
+                                        // open until the chapter finished
+                                        // building, so a second tap during
+                                        // a slow load launched a second
+                                        // jump and the reader landed on
+                                        // the wrong chapter (see
+                                        // gotoChapter's guard).
+                                        scope.launch { drawerState.close() }
+                                        scope.launch { gotoChapter(v, i) }
                                     }
                                     .padding(horizontal = 16.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -2893,7 +2940,14 @@ fun ReaderScreen(
                                         applySectionRestore(vv.docGen, bmPos)
                                     }
                                 } else {
-                                    val pos = sectionTracker.saved
+                                    // Freshest position wins: `saved` is
+                                    // throttled (500ms), so after a fast
+                                    // scroll + settings reload it can lag
+                                    // a page behind; `lastReported` is the
+                                    // latest report from the same document
+                                    // (gen-guarded on arrival), `saved` is
+                                    // the persisted fallback (reopen).
+                                    val pos = sectionTracker.lastReported ?: sectionTracker.saved
                                     if (pos != null && sectionTracker.restoredGen != vv.docGen &&
                                         sectionTracker.scrolledGen != vv.docGen
                                     ) {
@@ -3140,6 +3194,12 @@ fun ReaderScreen(
                 // match. There is no chapter-only scope: every
                 // search covers the whole book.
                 if (searchOpen && vm != null && pageHtml.isNotEmpty()) {
+                    // Focus the field (and raise the keyboard) when the
+                    // bar opens, so the user types straight away.
+                    LaunchedEffect(searchOpen) {
+                        searchFocusRequester.requestFocus()
+                        keyboardController?.show()
+                    }
                     Column(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
@@ -3161,13 +3221,28 @@ fun ReaderScreen(
                                 },
                                 singleLine = true,
                                 placeholder = { Text(stringResource(R.string.search_hint)) },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).focusRequester(searchFocusRequester),
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                                 keyboardActions = KeyboardActions(
-                                    onSearch = { searchWholeBook() }
+                                    onSearch = {
+                                        searchWholeBook()
+                                        // Submitting must not close the
+                                        // keyboard: the user refines the
+                                        // query right after, without
+                                        // tapping the field again.
+                                        searchFocusRequester.requestFocus()
+                                        keyboardController?.show()
+                                    }
                                 )
                             )
-                            IconButton(onClick = { searchWholeBook() }) {
+                            IconButton(onClick = {
+                                searchWholeBook()
+                                // The tap moves focus to the button and
+                                // hides the keyboard — put it back on
+                                // the field, same as the IME action.
+                                searchFocusRequester.requestFocus()
+                                keyboardController?.show()
+                            }) {
                                 AppIcon(AppIconKind.Search, tint = LocalContentColor.current, size = 18.dp)
                             }
                             IconButton(onClick = { clearSearch(); searchOpen = false }) {
@@ -3280,6 +3355,8 @@ fun ReaderScreen(
                                                     onClick = {
                                                         searchQuery = past
                                                         searchWholeBook()
+                                                        searchFocusRequester.requestFocus()
+                                                        keyboardController?.show()
                                                     },
                                                     onLongClick = {
                                                         scope.launch {

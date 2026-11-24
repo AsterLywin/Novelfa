@@ -424,4 +424,46 @@ class ReaderViewModelTest {
         val v = vm(repo, footnoteChapters())
         assertEquals(null, v.footnoteFor("#no-such-note", 0, "9"))
     }
+
+    @Test
+    fun setFontSize_bumpsDocGenAndPatchesEmbeddedGen() = runBlocking {
+        // Bug 1 (2026-11-25): a font-size change reloaded the document
+        // without bumping docGen, so the vertical restore refused to
+        // run (its guards compare against docGen) and the scroll bridge
+        // would have kept the old generation — the reader landed on
+        // page 1. The patched HTML must carry the new generation.
+        val repo = FakeReaderRepo(listOf(book()))
+        val v = vm(repo, twoChapters())
+        assertTrue(v.loadChapter(0))
+        val genBefore = v.docGen
+        assertTrue(v.html.contains("window.__rdrGen=$genBefore;"))
+        v.setFontSize(v.fontSize + 2)
+        assertEquals(genBefore + 1, v.docGen)
+        assertTrue(v.html.contains("window.__rdrGen=${genBefore + 1};"))
+        assertTrue(v.html.contains("font-size:${v.fontSize}px"))
+    }
+
+    @Test
+    fun applySpacing_bumpsDocGenAndPatchesEmbeddedGen() = runBlocking {
+        // Same Bug 1 root cause as setFontSize, for line spacing /
+        // side margin / paragraph spacing.
+        val repo = FakeReaderRepo(listOf(book()))
+        val v = vm(repo, twoChapters())
+        assertTrue(v.loadChapter(0))
+        val genBefore = v.docGen
+        assertTrue(v.html.contains("window.__rdrGen=$genBefore;"))
+        v.applySpacing(2.0, 32, 0.5)
+        assertEquals(genBefore + 1, v.docGen)
+        assertTrue(v.html.contains("window.__rdrGen=${genBefore + 1};"))
+    }
+
+    @Test
+    fun setFontSize_noopWhenUnchanged_doesNotBumpDocGen() = runBlocking {
+        val repo = FakeReaderRepo(listOf(book()))
+        val v = vm(repo, twoChapters())
+        assertTrue(v.loadChapter(0))
+        val genBefore = v.docGen
+        v.setFontSize(v.fontSize)
+        assertEquals(genBefore, v.docGen)
+    }
 }
