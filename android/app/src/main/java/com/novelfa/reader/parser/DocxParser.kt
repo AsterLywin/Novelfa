@@ -24,6 +24,9 @@ object DocxParser {
     private const val CP_NS = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
     private const val DC_NS = "http://purl.org/dc/elements/1.1/"
 
+    /** Same 10 MB cap EpubParser puts on its package XML. */
+    private const val MAX_DOCUMENT_XML_BYTES = 10L * 1024 * 1024
+
     /**
      * Convenience entry: unzips the .docx into [outDir] (same zip-bomb
      * and path-traversal guards as the EPUB importer) and parses it.
@@ -90,6 +93,11 @@ object DocxParser {
         val document = File(extractDir, "word/document.xml")
         if (!document.isFile) {
             throw IllegalArgumentException("Not a valid DOCX: word/document.xml missing")
+        }
+        // Check the length before the DOM build, so a hostile
+        // document.xml can't OOM the import (same cap as EpubParser).
+        if (document.length() > MAX_DOCUMENT_XML_BYTES) {
+            throw IllegalArgumentException("DOCX document too large: word/document.xml")
         }
         val dbf = secureFactory()
         val doc = dbf.newDocumentBuilder().parse(document)
@@ -251,6 +259,9 @@ object DocxParser {
         val referencedEndnotes = mutableListOf<Int>()
         /** Rel target → dest file, so reused images share one file. */
         val imageDestByTarget = mutableMapOf<String, File>()
+        /** Canonical extract dir, computed once: rels Targets must resolve inside it. */
+        val canonicalExtractDir: String =
+            runCatching { extractDir.canonicalPath }.getOrNull() ?: extractDir.absolutePath
     }
 
     private data class Para(
@@ -415,7 +426,17 @@ object DocxParser {
                     // Embedded image: blip/imageData r:embed → media file.
                     val embed = findEmbedId(el)
                     val target = embed?.let { state.rels[it] } ?: continue
+                    // Confine the rels Target inside the extract dir —
+                    // the same canonical-path check unzip() applies to
+                    // zip entries. A crafted Target of
+                    // "../../secret.txt" must not copy an arbitrary
+                    // local file into media/ and make it the cover:
+                    // the image is skipped entirely.
                     val srcFile = File(state.extractDir, "word/" + target)
+                    val canonicalSrc = runCatching { srcFile.canonicalPath }.getOrNull()
+                    if (canonicalSrc == null ||
+                        !canonicalSrc.startsWith(state.canonicalExtractDir + File.separatorChar)
+                    ) continue
                     if (!srcFile.isFile) continue
                     // Same basename in different folders must not
                     // collide: the plain basename is kept (the common

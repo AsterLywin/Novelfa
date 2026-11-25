@@ -636,15 +636,18 @@ class LibraryViewModel(
     }
 
     /**
-     * Overwrites existing books with the given URIs: removes the old book
-     * then imports the new file. [existingIds] is parallel to [uris]
+     * Overwrites existing books with the given URIs: imports the new
+     * file FIRST, then removes the old book — only once the new file
+     * is safely in. [existingIds] is parallel to [uris]
      * (see [ImportSummary.duplicateBookIds]): a non-null id removes
      * THAT book, which is the only correct match for a duplicate found
      * by content under a new name; a null id falls back to the old
      * same-name match (in-batch repeats and undecided collisions).
+     * The old order removed first: a failed import then left the user
+     * with nothing — the user confirmed a SWAP, not a delete.
      * Deliberately SEQUENTIAL, unlike importMultiple's step-4
-     * parallelism: remove-then-import for the same name from two
-     * coroutines would race (both remove, both import, or one
+     * parallelism: import-then-remove for the same name from two
+     * coroutines would race (both import, both remove, or one
      * removes the other's fresh row).
      */
     suspend fun overwriteDuplicates(
@@ -670,20 +673,35 @@ class LibraryViewModel(
             onFile?.invoke(index + 1, displayName)
             val key = displayName?.lowercase()
             try {
-                // Remove the matched book: by id when the duplicate
-                // screen identified one, else by same file name.
+                // Resolve the matched book, but do NOT remove it yet:
+                // the import below can fail, and a failed overwrite
+                // must leave the old book (row, file, progress)
+                // alone. The user confirmed a SWAP, not a delete.
                 val existingId = existingIds.getOrNull(index)
                 val existing = if (existingId != null) {
                     snapshot.firstOrNull { it.id == existingId }
                 } else if (key != null) {
                     snapshot.firstOrNull { it.originalFileName?.lowercase() == key }
                 } else null
+                // Preserve the old book's reading position across
+                // the swap: capture its record BEFORE importing,
+                // while the row still exists (removeBook does this
+                // too, but only as part of deleting it — and the
+                // new row's applyReadingRecord below restores from
+                // it). A failed import leaves the captured record
+                // as an orphan, which a later re-import restores
+                // from — the same position either way.
                 if (existing != null) {
-                    removeBook(existing)
+                    imp.captureReadingRecord(existing.id)
                 }
                 val newId = imp.importBook(
                     uri, passwordProvider = passwordProvider, onStage = onStage
                 )
+                // Only once the new file is safely in: remove the
+                // old book the user agreed to replace.
+                if (existing != null) {
+                    removeBook(existing)
+                }
                 added++
                 if (key != null) addedNames.add(key)
                 if (imp.applyReadingRecord(newId)) restored++

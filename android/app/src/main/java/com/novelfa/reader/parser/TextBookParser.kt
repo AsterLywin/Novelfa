@@ -212,8 +212,17 @@ object TextBookParser {
                 .containsMatchIn(line)
         ) return true
         // ALL-CAPS Latin line, or a line underlined with === (setext).
+        // Latin-script only: Persian/Arabic has no case, so a dialogue
+        // line holding a Latin acronym ("او گفت: OK") has no lowercase
+        // and one uppercase letter and would otherwise become a bogus
+        // chapter heading.
         if (line.length >= 3 && line.none { it.isLowerCase() } &&
-            line.any { it.isUpperCase() }
+            line.any { it.isUpperCase() } &&
+            line.none {
+                it in '\u0600'..'\u06FF' || it in '\u0750'..'\u077F' ||
+                    it in '\u08A0'..'\u08FF' || it in '\uFB50'..'\uFDFF' ||
+                    it in '\uFE70'..'\uFEFF'
+            }
         ) return true
         return false
     }

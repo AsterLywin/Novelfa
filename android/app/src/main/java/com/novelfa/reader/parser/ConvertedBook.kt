@@ -135,7 +135,10 @@ object ConvertedBook {
      * Splits a long section body at paragraph boundaries so no section
      * exceeds [MAX_SECTION_CHARS]. Later chunks keep the section title
      * with a language-neutral `(2)`, `(3)`… suffix — no hardcoded words
-     * in either UI language.
+     * in either UI language. A section that is one huge `<pre>` or
+     * `<table>` has no `<p>` boundaries at all, so those blocks are
+     * split first ([splitLongBlocks]); the boundary split below then
+     * also breaks before them.
      */
     private val voidTags = setOf(
         "area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -152,11 +155,183 @@ object ConvertedBook {
     private val paraPattern = Regex(
         "<p(\\s[^>]*)?>([\\s\\S]*?)</p\\s*>", RegexOption.IGNORE_CASE
     )
+    private val prePattern = Regex(
+        "<pre(\\s[^>]*)?>([\\s\\S]*?)</pre\\s*>", RegexOption.IGNORE_CASE
+    )
+    private val tablePattern = Regex(
+        "<table(\\s[^>]*)?>([\\s\\S]*?)</table\\s*>", RegexOption.IGNORE_CASE
+    )
     private val tokenPattern = Regex("<[^>]*>|[^<]+")
     private val tagNamePattern = Regex("</?\\s*([A-Za-z][A-Za-z0-9-]*)")
 
     private fun plainTextLength(html: String): Int =
         Regex("<[^>]*>").replace(html, "").length
+
+    /**
+     * Splits any single `<pre>` or `<table>` block whose TEXT exceeds
+     * [MAX_SECTION_CHARS] into consecutive blocks of the same kind,
+     * each holding at most [MAX_SECTION_CHARS] of text — the
+     * `<p>`-boundary split cannot see inside these blocks. Blocks
+     * already under the cap pass through untouched, so short sections
+     * keep their exact HTML.
+     */
+    private fun splitLongBlocks(bodyHtml: String): String {
+        var out = prePattern.replace(bodyHtml) { m ->
+            val inner = m.groupValues[2]
+            if (plainTextLength(inner) <= MAX_SECTION_CHARS) {
+                m.value
+            } else {
+                val pieces = splitPreBlock(m.groupValues[1], inner)
+                if (pieces.isEmpty()) m.value else pieces.joinToString("")
+            }
+        }
+        out = tablePattern.replace(out) { m ->
+            val inner = m.groupValues[2]
+            if (plainTextLength(inner) <= MAX_SECTION_CHARS) {
+                m.value
+            } else {
+                val pieces = splitTableBlock(m.groupValues[1], inner)
+                if (pieces.isEmpty()) m.value else pieces.joinToString("")
+            }
+        }
+        return out
+    }
+
+    /**
+     * Splits one over-long `<pre>` block (attributes in [attrs]) into
+     * consecutive `<pre>` blocks. A `<code ...>...</code>` wrapper
+     * (what fenced code renders as) is peeled and re-added verbatim
+     * around every piece, so each piece stays valid HTML.
+     */
+    private fun splitPreBlock(attrs: String, inner: String): List<String> {
+        var codeOpen = ""
+        var codeInner = inner
+        var codeClose = ""
+        if (inner.startsWith("<code", ignoreCase = true) &&
+            inner.endsWith("</code>", ignoreCase = true)
+        ) {
+            val openEnd = inner.indexOf('>')
+            if (openEnd > 0) {
+                codeOpen = inner.substring(0, openEnd + 1)
+                codeInner = inner.substring(openEnd + 1, inner.length - "</code>".length)
+                codeClose = "</code>"
+            }
+        }
+        val pieces = splitPreText(codeInner)
+        if (pieces.isEmpty()) return emptyList()
+        return pieces.map { "<pre$attrs>$codeOpen$it$codeClose</pre>" }
+    }
+
+    /**
+     * Splits preformatted text into pieces of at most
+     * [MAX_SECTION_CHARS] characters, cutting at line breaks first
+     * and at spaces inside over-long lines. Newlines and spaces are
+     * preserved — a cut space stays at the head of the next piece —
+     * so the text survives exactly; a hard cut is moved back out of
+     * any entity (`&amp;`) and out of any surrogate pair, as in
+     * [splitParagraph].
+     */
+    private fun splitPreText(text: String): List<String> {
+        val pieces = mutableListOf<String>()
+        val current = StringBuilder()
+        fun flush() {
+            if (current.isNotEmpty()) {
+                pieces += current.toString()
+                current.clear()
+            }
+        }
+        // Split keeping the line breaks: a line is its text plus its '\n'.
+        var start = 0
+        while (start < text.length) {
+            val nl = text.indexOf('\n', start)
+            val end = if (nl < 0) text.length else nl + 1
+            var line = text.substring(start, end)
+            start = end
+            while (line.isNotEmpty()) {
+                val room = MAX_SECTION_CHARS - current.length
+                if (line.length <= room) {
+                    current.append(line)
+                    line = ""
+                    break
+                }
+                if (room <= 0) {
+                    flush()
+                    continue
+                }
+                var cut = line.lastIndexOf(' ', room.coerceAtMost(line.length - 1))
+                if (cut < 0) cut = room
+                cut = safeCut(line, cut)
+                if (cut <= 0) cut = room.coerceAtMost(line.length)
+                current.append(line.substring(0, cut))
+                flush()
+                line = line.substring(cut)
+            }
+        }
+        flush()
+        return pieces
+    }
+
+    /**
+     * Splits one over-long `<table>` block (attributes in [attrs])
+     * into consecutive `<table>` blocks by rows, each holding at
+     * most [MAX_SECTION_CHARS] of text. A `<thead>` (and `<tfoot>`)
+     * is kept in every piece; the `<tbody>` wrapper is kept when the
+     * original had one. A single over-long row stays whole in its
+     * own piece — splitting a row would break its cells. Returns
+     * empty when the table has no rows to split (the caller then
+     * keeps the original block).
+     */
+    private fun splitTableBlock(attrs: String, inner: String): List<String> {
+        val head = Regex("<thead[\\s\\S]*?</thead\\s*>", RegexOption.IGNORE_CASE)
+            .find(inner)?.value ?: ""
+        val foot = Regex("<tfoot[\\s\\S]*?</tfoot\\s*>", RegexOption.IGNORE_CASE)
+            .find(inner)?.value ?: ""
+        val tbodyMatch = Regex(
+            "<tbody(\\s[^>]*)?>([\\s\\S]*?)</tbody\\s*>", RegexOption.IGNORE_CASE
+        ).find(inner)
+        val rows: List<String>
+        val tbodyAttrs: String
+        if (tbodyMatch != null) {
+            tbodyAttrs = tbodyMatch.groupValues[1]
+            rows = tbodyMatch.groupValues[2]
+                .split("(?=<tr[ >])".toRegex()).filter { it.isNotBlank() }
+        } else {
+            tbodyAttrs = ""
+            val withoutHeadFoot = inner
+                .replace(
+                    Regex("<thead[\\s\\S]*?</thead\\s*>", RegexOption.IGNORE_CASE), ""
+                )
+                .replace(
+                    Regex("<tfoot[\\s\\S]*?</tfoot\\s*>", RegexOption.IGNORE_CASE), ""
+                )
+            rows = withoutHeadFoot
+                .split("(?=<tr[ >])".toRegex()).filter { it.isNotBlank() }
+        }
+        if (rows.isEmpty()) return emptyList()
+        val out = mutableListOf<String>()
+        var current = StringBuilder()
+        var currentText = 0
+        fun flush() {
+            if (current.isNotEmpty()) {
+                val body = if (tbodyMatch != null) {
+                    "<tbody$tbodyAttrs>$current</tbody>"
+                } else {
+                    current.toString()
+                }
+                out += "<table$attrs>$head$body$foot</table>"
+                current = StringBuilder()
+                currentText = 0
+            }
+        }
+        for (row in rows) {
+            val len = plainTextLength(row)
+            if (current.isNotEmpty() && currentText + len > MAX_SECTION_CHARS) flush()
+            current.append(row)
+            currentText += len
+        }
+        flush()
+        return out
+    }
 
     /**
      * Splits any single <p>...</p> block whose TEXT exceeds
@@ -319,13 +494,15 @@ object ConvertedBook {
             }
             // A section over the cap may still be ONE paragraph (a TXT
             // with no blank lines, a DOCX paragraph holding hundreds of
-            // lines): the <p>-boundary split below would pass it through
-            // whole, and the paged reader then binary-searches that
-            // single leaf for every page break — tens of seconds on a
-            // phone, i.e. the chapter effectively never renders. Split
-            // such paragraphs first; the boundary split then works.
-            val body = splitLongParagraphs(section.bodyHtml)
-            val paragraphs = body.split("(?=<p[ >])".toRegex())
+            // lines) or ONE <pre>/<table> block (a long fenced code
+            // block, a big table): the <p>-boundary split below would
+            // pass it through whole, and the paged reader then
+            // binary-searches that single leaf for every page break —
+            // tens of seconds on a phone, i.e. the chapter effectively
+            // never renders. Split such blocks first; the boundary
+            // split then works.
+            val body = splitLongBlocks(splitLongParagraphs(section.bodyHtml))
+            val paragraphs = body.split("(?=<p[ >]|<pre[ >]|<table[ >])".toRegex())
                 .filter { it.isNotBlank() }
             var current = StringBuilder()
             var chunk = 1

@@ -80,7 +80,13 @@ class RankService(private val prefs: RankPrefs) {
     var maxRank: Int
         get() = parseMaxRank(prefs.getString(MAX_RANK_KEY, "-1"))
         set(value) {
-            prefs.setString(MAX_RANK_KEY, value.toString())
+            // Monotonic: deleting a book never relocks themes. A
+            // lower assignment (restore / recompute with fewer
+            // finished books than the stored peak) is a no-op
+            // instead of a demotion. Both production writers
+            // (BackupService.applyBackup, RankHook.recomputeXpIfNeeded)
+            // write through this setter, so both are fixed here.
+            if (value > maxRank) prefs.setString(MAX_RANK_KEY, value.toString())
         }
 
     fun isRankUnlocked(requiredRank: Int): Boolean =

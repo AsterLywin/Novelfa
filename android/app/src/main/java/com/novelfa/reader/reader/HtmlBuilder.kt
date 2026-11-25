@@ -1769,6 +1769,24 @@ object HtmlBuilder {
         show(i, 2);
         return cur;
     };
+    // Bookmark landing: turn to the page the fraction names
+    // (0-based, of the FINAL page total). While the pager is
+    // still building, pages.length is partial — resolving the
+    // fraction against it now would land on the wrong page —
+    // so the request is queued in __rdrPendingBookmark and
+    // __rdrAfterBuild runs it once the build finishes (the
+    // same pattern as rdrGoToQuote's __rdrPendingQuote).
+    window.rdrGoToBookmark = function (f) {
+        try {
+            if (!ready || building) { window.__rdrPendingBookmark = f; return 'queued'; }
+            var c = pages.length;
+            if (c <= 0) { window.__rdrPendingBookmark = f; return 'queued'; }
+            var i = Math.min(c - 1, Math.floor(f * c));
+            if (i < 0) i = 0;
+            show(i, 2);
+            return cur;
+        } catch (e) { return 'no'; }
+    };
     // In-book link navigation: jump to the page containing the element
     // with the given id (or <a name>). Pre-ready calls are queued and
     // applied when the build finishes (cross-chapter link landings).
@@ -2519,6 +2537,15 @@ object HtmlBuilder {
             if (pq) {
                 window.__rdrPendingQuote = null;
                 if (document.querySelector('.rdr-chap[data-idx="' + pq.c + '"]')) window.rdrGoToQuote(pq.c, pq.t);
+            }
+            // A bookmark landing requested before the pager
+            // finished building: the total is final now, so turn
+            // to the page the fraction names — once. The null
+            // check (not truthiness) so a 0 fraction still turns.
+            var pb = window.__rdrPendingBookmark;
+            if (pb != null) {
+                window.__rdrPendingBookmark = null;
+                window.rdrGoToBookmark(pb);
             }
         } catch (e) { }
     };

@@ -26,10 +26,12 @@ class MainActivity : ComponentActivity() {
     /**
      * Book opened from a file manager (ACTION_VIEW, WPF file-association
      * parity) or shared to the app (ACTION_SEND, e.g. Telegram's Share:
-     * the file rides in EXTRA_STREAM). singleTop + onNewIntent so
-     * tapping a file while the app is open reuses this activity
-     * instead of stacking a new one. Both actions land on
-     * OpeningScreen, straight into the reader — never the library.
+     * the file rides in EXTRA_STREAM; ACTION_SEND_MULTIPLE shares
+     * 2+ files the same way, and the first one is opened).
+     * singleTop + onNewIntent so tapping a file while the app is
+     * open reuses this activity instead of stacking a new one.
+     * Both actions land on OpeningScreen, straight into the
+     * reader — never the library.
      */
     private var viewUri by mutableStateOf<Uri?>(null)
 
@@ -122,6 +124,14 @@ class MainActivity : ComponentActivity() {
             Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(
                 intent, Intent.EXTRA_STREAM, Uri::class.java
             )
+            // Share of 2+ files: EXTRA_STREAM is a list, not one
+            // Uri — open the first file, exactly as a single-file
+            // share opens its one file. (Falling through to else
+            // dropped the whole share: the library opened and
+            // nothing was imported.)
+            Intent.ACTION_SEND_MULTIPLE -> IntentCompat.getParcelableArrayListExtra(
+                intent, Intent.EXTRA_STREAM, Uri::class.java
+            )?.firstOrNull()
             else -> null
         }
     }

@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -70,16 +71,68 @@ fun NavGraph(
     // falls back to the route arg (process-death restore, where
     // the in-memory value is gone).
     var lastExternalUri by remember { mutableStateOf(openBookUri) }
-    var lastHandledExternalUri by remember { mutableStateOf<Uri?>(null) }
-    LaunchedEffect(openBookUri) {
-        val uri = openBookUri ?: return@LaunchedEffect
-        if (uri == lastHandledExternalUri) return@LaunchedEffect
-        lastHandledExternalUri = uri
+    // Starts at the cold-start URI: the OpeningScreen already has
+    // that URI from the start destination, so the first intake run
+    // is a duplicate delivery, not a new one (see below).
+    var lastHandledExternalUri by remember { mutableStateOf(openBookUri) }
+    // The URI the OpeningScreen already has. The intake must not
+    // re-deliver it while the screen is still opening it.
+    var deliveredUri by remember { mutableStateOf(openBookUri) }
+    // True while the OpeningScreen is working on the delivered URI
+    // (set on delivery, cleared by onOpenSettled). A URI that
+    // arrives while true waits in pendingExternalUri instead of
+    // being consumed and lost.
+    var openingBusy by remember { mutableStateOf(openBookUri != null) }
+    // One queued URI is enough: the intake replaces a still
+    // undelivered pending URI with the newest one — the user
+    // always wants the latest file they tapped.
+    var pendingExternalUri by remember { mutableStateOf<Uri?>(null) }
+    // Bumps on every delivery so the OpeningScreen restarts its
+    // open even for a re-delivery of the SAME Uri (a failed open
+    // retried by tapping the same file again).
+    var openDelivery by remember { mutableIntStateOf(0) }
+    // Delivers one URI to the OpeningScreen: the screen reads it
+    // from lastExternalUri and restarts its open on the delivery
+    // key. Navigates there too when the user is elsewhere.
+    fun deliverExternalUri(uri: Uri) {
         lastExternalUri = uri
-        onBookUriConsumed()
+        deliveredUri = uri
+        openDelivery++
+        openingBusy = true
         val current = navController.currentDestination?.route
         if (current != null && current != Routes.OPENING) {
             navController.navigate(Routes.openingRoute(uri))
+        }
+    }
+    LaunchedEffect(openBookUri) {
+        val uri = openBookUri ?: run {
+            // Consumed: the intake is done, so the next delivery
+            // of this same Uri is a NEW attempt, not a duplicate
+            // — a failed open retried by tapping the same file
+            // again must actually re-open it.
+            lastHandledExternalUri = null
+            return@LaunchedEffect
+        }
+        if (uri == lastHandledExternalUri) {
+            // Already handled in this composition (the cold-start
+            // intake: the screen already has this URI from the
+            // start destination). Consume it so a later
+            // re-delivery can register, but do not deliver it
+            // twice.
+            onBookUriConsumed()
+            return@LaunchedEffect
+        }
+        lastHandledExternalUri = uri
+        onBookUriConsumed()
+        if (openingBusy && uri == deliveredUri) {
+            // The screen is already opening this exact file.
+        } else if (openingBusy) {
+            // Busy with another file: queue this one — it is
+            // delivered when the current open settles instead of
+            // being consumed and lost.
+            pendingExternalUri = uri
+        } else {
+            deliverExternalUri(uri)
         }
     }
     // Navigation transitions: explicit horizontal slides, mirrored
@@ -115,7 +168,15 @@ fun NavGraph(
             OpeningScreen(
                 directUri = lastExternalUri,
                 encodedUri = encoded,
-                navController = navController
+                navController = navController,
+                deliveryKey = openDelivery,
+                onOpenSettled = {
+                    openingBusy = false
+                    pendingExternalUri?.let { next ->
+                        pendingExternalUri = null
+                        deliverExternalUri(next)
+                    }
+                }
             )
         }
         composable(Routes.LIBRARY) {

@@ -482,7 +482,24 @@ class Importer(
                 )
             }.isSuccess
             if (persisted) {
-                return@withContext importInPlaceContent(sourceUri, id, fastImport, ioCtx, reportStage)
+                // A failed in-place import must not keep the grant:
+                // the book was never registered, so the permission
+                // serves nothing — and every leak is one grant
+                // closer to Android's 128-grant cap, after which
+                // new in-place imports silently fall back to
+                // copies (or fail to take the grant at all). The
+                // copy flow below cleans up after itself in its
+                // own catch blocks; this early return sits outside
+                // them, so the release lives here.
+                try {
+                    return@withContext importInPlaceContent(sourceUri, id, fastImport, ioCtx, reportStage)
+                } catch (e: CancellationException) {
+                    releaseInPlacePermission(sourceUri.toString())
+                    throw e
+                } catch (e: Exception) {
+                    releaseInPlacePermission(sourceUri.toString())
+                    throw e
+                }
             }
         }
         // In-place `file://` import: the real file is the book.

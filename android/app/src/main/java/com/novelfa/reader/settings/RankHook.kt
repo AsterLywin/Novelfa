@@ -5,6 +5,7 @@ import com.novelfa.reader.data.DiagLog
 import com.novelfa.reader.data.PrefsStore
 import com.novelfa.reader.domain.isCompleted
 import com.novelfa.reader.data.sha256OfFile
+import com.novelfa.reader.domain.Book
 import com.novelfa.reader.domain.CelebrationTier
 import com.novelfa.reader.domain.CharacterTheme
 import com.novelfa.reader.domain.CharacterThemes
@@ -37,6 +38,14 @@ data class RankUp(
  * so the UI can celebrate like the desktop client's AnnounceUnlocks.
  */
 object RankHook {
+
+    /**
+     * Files at or above this size are never hashed — must match
+     * Importer.MAX_BOOK_BYTES: the importer's deferred hash job
+     * skips them too, so their pending XP waits for a manual
+     * re-import instead of an unbounded hash pass.
+     */
+    private const val MAX_HASH_BYTES = 500L * 1024 * 1024
 
     /** Await the DataStore preload (a no-op for plain in-memory
      * RankPrefs — see the interface default). */
@@ -216,14 +225,46 @@ object RankHook {
     suspend fun claimPendingXpIfNeeded(repo: BookRepository, rankPrefs: RankPrefs) {
         val store = XpStore(rankPrefs)
         if (!store.hasPending) return
-        val hashes = repo.books().first()
-            .filter { !it.isPrivate }
-            .mapNotNull { it.contentHash?.takeIf { h -> h.isNotBlank() } }
-            .toSet()
+        val books = repo.books().first().filter { !it.isPrivate }
+        // Plain loop (not mapNotNull): hashBookFileOnDemand is suspend and
+        // cannot be called from a non-suspend transform lambda.
+        val hashes = mutableSetOf<String>()
+        for (book in books) {
+            val hash = book.contentHash?.takeIf { it.isNotBlank() }
+                ?: hashBookFileOnDemand(repo, book)
+            if (hash != null) hashes += hash
+        }
         val gained = store.claimPending(hashes)
         if (gained > 0) {
             DiagLog.w("NovelfaXp", "claimed $gained pending XP")
         }
+    }
+
+    /**
+     * On-demand content hash for a book whose row hash has not landed
+     * yet (the importer's deferred background hash job, or a first
+     * open that never ran). Without it, a book that arrived after a
+     * restore could never claim its pending XP: the claim only ever
+     * saw the books whose hash had already landed. A hash computed
+     * here is also noted on the row (first knowledge persists, per
+     * contentHashChange), so the next claim does not re-hash the file.
+     * Same rule as the importer's deferred job: files over 500 MB are
+     * never hashed, and a missing or unreadable file is skipped — its
+     * pending XP waits for the hash job instead of being claimed
+     * blindly (which would mint XP for a book that may not match).
+     */
+    private suspend fun hashBookFileOnDemand(
+        repo: BookRepository,
+        book: Book
+    ): String? {
+        val file = File(book.filePath)
+        if (!file.isFile) return null
+        if (file.length() > MAX_HASH_BYTES) return null
+        val hash = withContext(Dispatchers.IO) {
+            runCatching { sha256OfFile(file) }.getOrNull()
+        } ?: return null
+        runCatching { repo.noteContentHash(book.id, hash) }
+        return hash
     }
 
     /** Current XP level (migrates first; idempotent after the first run). */

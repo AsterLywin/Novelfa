@@ -48,6 +48,9 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    // Robolectric (standing rule, 2026-11-25): unit tests run the
+    // real app under a simulated Android, so resources must resolve.
+    testOptions { unitTests { isIncludeAndroidResources = true } }
     // AVIF engine: prebuilt .so files in src/main/jniLibs are
     // packaged automatically. If the .so files are absent, the
     // Kotlin code degrades gracefully (AVIF pages fail,
@@ -89,6 +92,18 @@ dependencies {
     implementation("com.vladsch.flexmark:flexmark-ext-superscript:0.64.8")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    // Robolectric end-to-end tests (standing rule, 2026-11-25):
+    // the real app code runs under a simulated Android and is
+    // driven like a user, so connected-system bugs (navigation,
+    // error surfacing) are caught instead of only isolated
+    // subsystem bugs. ui-test-junit4 is the unit-test variant
+    // of the Compose test rule; navigation-testing supplies
+    // TestNavHostController. Robolectric 4.14.1 is the first
+    // version with an android-all for compileSdk 35.
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.navigation:navigation-testing:2.7.7")
+    testImplementation("org.robolectric:robolectric:4.14.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:core:1.6.1")
@@ -97,6 +112,22 @@ dependencies {
     androidTestImplementation("androidx.room:room-testing:2.6.1")
 }
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
+// Robolectric fetches its android-all jars at test runtime with its
+// own HTTP client (not through Gradle's repositories), so it cannot
+// see the VM mirror on its own. Forward the repo URL into the test
+// JVM: on this VM ~/.gradle/gradle.properties sets it to the local
+// mirror (plain HTTP, no MITM TLS issue); anywhere else it defaults
+// to Maven Central, so CI is unaffected.
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    systemProperty(
+        "robolectric.dependency.repo.url",
+        System.getProperty(
+            "robolectric.dependency.repo.url",
+            "https://repo.maven.apache.org/maven2"
+        )
+    )
+}
 
 // App UI fonts (Vazirmatn): the TTFs already ship in src/main/assets/fonts,
 // so a build-time task copies + renames them into a generated res/font dir.

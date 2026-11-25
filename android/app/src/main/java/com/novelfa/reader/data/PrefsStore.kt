@@ -32,6 +32,7 @@ class PrefsStore(private val context: Context) {
         // XP rank system additive keys (XpStore, same cache pattern).
         val TOTAL_XP = stringPreferencesKey("TotalXp")
         val XP_LEDGER = stringPreferencesKey("XpLedger")
+        val XP_PENDING = stringPreferencesKey("XpPendingLedger")
         val XP_MIGRATED = stringPreferencesKey("XpMigrated")
         val XP_CELEBRATED = stringPreferencesKey("XpCelebratedXp")
         val XP_REKEYED = stringPreferencesKey("XpRekeyed")
@@ -440,12 +441,16 @@ class PrefsStore(private val context: Context) {
     }
 
     /**
-     * Exact set (anti-cheat recompute only): the floor is re-derived from
-     * real finished books, so a stale floor from a forged restore must be
-     * allowed to move DOWN to the true count. Nobody else sets it.
+     * Monotonic set (anti-cheat recompute / restore only): the floor
+     * only ever moves up — deleting a book never relocks themes
+     * (RankService KDoc). A stale-high floor is kept, not corrected
+     * down: the floor is always derived from real finished books on
+     * this device (backup manifest numbers are never trusted), so it
+     * cannot be forged upward through a restore. Same behaviour as
+     * [raiseFinishedBooksRestored].
      */
     suspend fun setFinishedBooksRestored(value: Int) {
-        context.dataStore.edit { it[FINISHED_BOOKS_RESTORED] = maxOf(0, value) }
+        raiseFinishedBooksRestored(value)
     }
 
     suspend fun setThemeParticles(value: Boolean) {

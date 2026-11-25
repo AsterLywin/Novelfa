@@ -524,6 +524,12 @@ fun ReaderScreen(
     // Exact match to land on after a chapter jump from a results
     // row (index inside that chapter); null means the first match.
     var pendingSearchIndex by remember { mutableStateOf<Int?>(null) }
+    // Chapter the pending search belongs to: onPageFinished only
+    // runs it when the chapter that just loaded is this one —
+    // the same chapter check the bookmark and quote landings
+    // have. A pending from a failed jump is dropped, not run in
+    // whatever chapter loads next.
+    var pendingSearchChapter by remember { mutableIntStateOf(-1) }
     // Text-reader bookmarks (chapter + in-section fraction, see
     // TextBookmark): the toggle in the top bar marks the current
     // chapter, the list lives in the section drawer. One bookmark
@@ -635,7 +641,12 @@ fun ReaderScreen(
         searchChap = -1
         searchBookResults = emptyList()
         searchBookShown = false
+        // A jump from a results row can still be in flight (its
+        // chapter loading): dropping the pending stops it landing
+        // in the chapter that loads next.
+        pendingSearchQuery = null
         pendingSearchIndex = null
+        pendingSearchChapter = -1
     }
 
     fun searchWholeBook() {
@@ -704,15 +715,21 @@ fun ReaderScreen(
 
     /**
      * Asks the live pager to show the page the fraction names
-     * (0-based): the pager computes the count itself, so this
-     * works while it is still building (rdrGoToPage's building
-     * branch shows directly) and after it is ready alike.
+     * (0-based). The fraction must be resolved against the FINAL
+     * page total, so the call goes through rdrGoToBookmark:
+     * while the pager is still building (pages.length partial)
+     * it queues the fraction and __rdrAfterBuild turns to it
+     * once the build finishes — the same deferral the pending
+     * quote already uses. The old rdrPageCount math stays as a
+     * fallback for documents built before the new function
+     * existed (a torn-down chapter can still hold one).
      */
     fun goToBookmarkPage(fraction: Float) {
         val wv = webView ?: return
         val frac = "%.4f".format(Locale.US, fraction.coerceIn(0f, 0.999f))
         wv.evaluateJavascript(
-            "(function(){try{if(window.rdrPageCount&&window.rdrGoToPage)" +
+            "(function(){try{if(window.rdrGoToBookmark){window.rdrGoToBookmark($frac);return 'ok';}" +
+                "if(window.rdrPageCount&&window.rdrGoToPage)" +
                 "{var c=window.rdrPageCount();if(c>0)" +
                 "{window.rdrGoToPage(Math.min(c-1,Math.floor($frac*c)));return 'ok';}}" +
                 "return 'no';}catch(e){return 'err';}})();",
@@ -1239,6 +1256,12 @@ fun ReaderScreen(
         // taps again after it lands.
         if (!gotoChapterMutex.tryLock()) return
         try {
+        // The chapter being left, for the success branch below:
+        // the in-chapter search is cleared only once the new
+        // chapter has actually loaded (a failed jump leaves the
+        // reader in the old chapter, where its marks and count
+        // are still live).
+        val prevIndex = v.index
         // A real chapter change re-arms pager recovery; a same-chapter
         // reload (the recovery itself, a mode switch) must not, or a
         // permanently torn-down chapter would reload-loop on every tap.
@@ -1260,14 +1283,33 @@ fun ReaderScreen(
             pagedPage = 0
             pagedPageCount = 0
             rev++
+            if (prevIndex != i) {
+                // The in-chapter search belongs to the chapter
+                // being left: its count and current match are
+                // that chapter's, so clear them now — otherwise
+                // the bar keeps showing the old chapter's "N / M"
+                // while the new chapter holds different marks
+                // (it can even read "5 / 2": the count refreshed,
+                // the index did not). The query and the whole-book
+                // results stay: tapping a result row, or
+                // submitting again, searches the new chapter.
+                searchCount = 0
+                searchIndex = -1
+                searchChap = -1
+            }
         } else {
             // A failed jump must not leave its pendings behind: a
             // stale pendingLastPage would fire rdrLast() on the NEXT
             // successful load and land on that chapter's last page,
-            // and a stale pendingAnchor would jump to a fragment of
-            // a chapter it was never meant for.
+            // a stale pendingAnchor would jump to a fragment of
+            // a chapter it was never meant for, and a stale
+            // pendingSearchQuery would run the search in whatever
+            // chapter loads next instead of the one it was meant for.
             pendingLastPage = false
             pendingAnchor = null
+            pendingSearchQuery = null
+            pendingSearchIndex = null
+            pendingSearchChapter = -1
             showVmError(v)
         }
         } finally {
@@ -2844,11 +2886,20 @@ fun ReaderScreen(
                             // just loaded, so run the search in it now
                             // (pre-pagination marks are replayed by
                             // the PAGER_JS hook once pages are built).
+                            // The chapter check drops a stale pending
+                            // (a failed load, or a load that raced a
+                            // newer one) instead of running the search
+                            // in a different chapter — the same guard
+                            // the bookmark and quote landings have.
                             pendingSearchQuery?.let { q ->
                                 pendingSearchQuery = null
                                 val idx = pendingSearchIndex
                                 pendingSearchIndex = null
-                                runInChapterSearch(q, idx ?: 0)
+                                val chap = pendingSearchChapter
+                                pendingSearchChapter = -1
+                                if (vm?.index == chap) {
+                                    runInChapterSearch(q, idx ?: 0)
+                                }
                             }
                             // Bookmark landing (paged mode): the chapter
                             // just loaded, so turn to the page the
@@ -3304,6 +3355,7 @@ fun ReaderScreen(
                                                         scope.launch {
                                                             pendingSearchQuery = searchQuery
                                                             pendingSearchIndex = result.matchIndex
+                                                            pendingSearchChapter = result.chapter
                                                             gotoChapter(vv, result.chapter)
                                                         }
                                                     }

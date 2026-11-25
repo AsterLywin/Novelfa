@@ -62,7 +62,16 @@ private sealed interface OpeningState {
 fun OpeningScreen(
     directUri: Uri? = null,
     encodedUri: String,
-    navController: NavController
+    navController: NavController,
+    // Bumps on every delivery from NavGraph (see NavGraph's
+    // deliverExternalUri), so a re-delivery of the SAME Uri —
+    // a failed open retried by tapping the same file again —
+    // restarts the open below. Defaults keep the old call sites
+    // (tests) working.
+    deliveryKey: Int = 0,
+    // Called once per open, success or failure, so NavGraph can
+    // deliver a URI that arrived while this screen was busy.
+    onOpenSettled: () -> Unit = {}
 ) {
     val context = LocalContext.current
     // The Uri object itself is the primary source: the route arg
@@ -70,10 +79,18 @@ fun OpeningScreen(
     // Telegram open once reached the importer with an EMPTY uri
     // ("No content provider:" and no address), and the route
     // round-trip is the only lossy step in the chain — so the
-    // in-memory Uri wins whenever it is present. Keyless remember:
-    // the first value is kept even after the intake consumes the
-    // Uri (a keyed remember would re-resolve to the empty fallback).
-    val uri = remember { directUri ?: Routes.decodeOpeningUri(encodedUri) }
+    // in-memory Uri wins whenever it is present.
+    // Keyed on the delivery, not on the Uri value: a new delivery
+    // of the same Uri must re-open it (retry after a failure),
+    // and a delivery of a different Uri while this screen is
+    // showing must pick the new file up instead of keeping the
+    // first one. The old keyless remember kept the first file
+    // forever, so a second file arriving mid-open was silently
+    // dropped. Keying is safe against the old fear (re-resolving
+    // to the empty fallback after consumption): NavGraph only
+    // ever sets lastExternalUri to a real delivered Uri, never
+    // back to null.
+    val uri = remember(deliveryKey) { directUri ?: Routes.decodeOpeningUri(encodedUri) }
     val db = remember { (context.applicationContext as NovelfaApplication).db }
     val prefs = remember { PrefsStore(context.applicationContext) }
     val viewModel: LibraryViewModel = viewModel(
@@ -87,11 +104,15 @@ fun OpeningScreen(
         )
     )
     val pdfPasswordPrompt = rememberPdfPasswordPrompt()
-    var state by remember { mutableStateOf<OpeningState>(OpeningState.Opening) }
+    // Keyed on the delivery, like uri above: a new delivery
+    // restarts from a spinner with no stale success behind it.
+    var state by remember(deliveryKey) { mutableStateOf<OpeningState>(OpeningState.Opening) }
     // Retry bumps this key to re-run the open below.
     var attempt by remember { mutableIntStateOf(0) }
     // Set on a successful open; see the back-stop effect below.
-    var openedId by remember { mutableStateOf<String?>(null) }
+    // Keyed on the delivery: a new file must not inherit the
+    // previous file's success.
+    var openedId by remember(deliveryKey) { mutableStateOf<String?>(null) }
 
     // A password question left hanging when this screen goes away
     // must not outlive it: the importer's await would wait forever.
@@ -102,7 +123,7 @@ fun OpeningScreen(
     // Already opened once: re-entering this screen (back from the
     // reader, if the popUpTo below ever missed) must not re-open
     // the file — the back-stop effect sends the user to the library.
-    LaunchedEffect(uri, attempt) {
+    LaunchedEffect(deliveryKey, attempt) {
         if (openedId != null) return@LaunchedEffect
         val target = uri
         if (target == null || target.toString().isEmpty()) {
@@ -113,6 +134,7 @@ fun OpeningScreen(
                 context.getString(R.string.import_error_generic),
                 "empty file uri received"
             )
+            onOpenSettled()
             return@LaunchedEffect
         }
         state = OpeningState.Opening
@@ -122,6 +144,7 @@ fun OpeningScreen(
                 navController.navigate("reader/${result.bookId}") {
                     popUpTo(Routes.OPENING) { inclusive = true }
                 }
+                onOpenSettled()
             }
             is LibraryViewModel.OpenExternalResult.Failed -> {
                 // The attempted URI rides along in the detail: on
@@ -132,6 +155,7 @@ fun OpeningScreen(
                     "URI: $target"
                 ).joinToString("\n")
                 state = OpeningState.Failed(result.reason, diag)
+                onOpenSettled()
             }
         }
     }

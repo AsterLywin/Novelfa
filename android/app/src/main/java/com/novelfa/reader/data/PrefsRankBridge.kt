@@ -8,6 +8,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -40,6 +42,17 @@ class PrefsStoreRankPrefs(
          * with a stale DataStore read that raced it.
          */
         private val sharedCache = ConcurrentHashMap<String, String>()
+
+        /**
+         * Serializes every background DataStore write from every bridge
+         * instance in the process. setString launches one coroutine per
+         * call on Dispatchers.IO, so two rapid writes (e.g. two secret
+         * unlocks in a row) could land out of order and the older value
+         * would overwrite the newer one in DataStore — the second unlock
+         * lost on the next restart even though the cache held it. With
+         * the mutex, writes land in call order.
+         */
+        private val writeMutex = Mutex()
     }
 
     private val cache: ConcurrentHashMap<String, String> get() = sharedCache
@@ -53,6 +66,7 @@ class PrefsStoreRankPrefs(
                     RankService.SECRET_KEY to store.getString(PrefsStore.SECRET_THEMES, ""),
                     XpStore.TOTAL_XP_KEY to store.getString(PrefsStore.TOTAL_XP, "0"),
                     XpStore.LEDGER_KEY to store.getString(PrefsStore.XP_LEDGER, ""),
+                    XpStore.PENDING_KEY to store.getString(PrefsStore.XP_PENDING, ""),
                     XpStore.MIGRATED_KEY to store.getString(PrefsStore.XP_MIGRATED, "0"),
                     XpStore.CELEBRATED_XP_KEY to store.getString(PrefsStore.XP_CELEBRATED, "0"),
                     XpStore.REKEYED_KEY to store.getString(PrefsStore.XP_REKEYED, "0"),
@@ -79,18 +93,59 @@ class PrefsStoreRankPrefs(
 
     override fun setString(key: String, value: String) {
         cache[key] = value
-        scope.launch {
+        scope.launch { persistString(key, value) }
+    }
+
+    /** Serialized DataStore write (see writeMutex). */
+    private suspend fun persistString(key: String, value: String) {
+        writeMutex.withLock {
             when (key) {
-                RankService.MAX_RANK_KEY -> store.setString(PrefsStore.MAX_RANK, value)
-                RankService.SECRET_KEY -> store.setString(PrefsStore.SECRET_THEMES, value)
+                RankService.MAX_RANK_KEY -> {
+                    // Max with the stored value: this write was
+                    // read-modify-written from the cache, and a
+                    // failed preload leaves the cache reading -1 —
+                    // a plain overwrite could demote a stored rank.
+                    val stored = store.getString(PrefsStore.MAX_RANK, "-1")
+                        .toIntOrNull() ?: -1
+                    val merged = maxOf(stored, value.toIntOrNull() ?: -1)
+                    store.setString(PrefsStore.MAX_RANK, merged.toString())
+                    cache[key] = merged.toString()
+                }
+                RankService.SECRET_KEY -> {
+                    // Union with the stored value: secrets are
+                    // append-only, and this write was
+                    // read-modify-written from the cache — a failed
+                    // preload leaves the cache reading "" and a plain
+                    // overwrite would wipe the stored secrets.
+                    val merged = unionSecretCsv(
+                        store.getString(PrefsStore.SECRET_THEMES, ""), value
+                    )
+                    store.setString(PrefsStore.SECRET_THEMES, merged)
+                    cache[key] = merged
+                }
                 XpStore.TOTAL_XP_KEY -> store.setString(PrefsStore.TOTAL_XP, value)
                 XpStore.LEDGER_KEY -> store.setString(PrefsStore.XP_LEDGER, value)
+                XpStore.PENDING_KEY -> store.setString(PrefsStore.XP_PENDING, value)
                 XpStore.MIGRATED_KEY -> store.setString(PrefsStore.XP_MIGRATED, value)
                 XpStore.CELEBRATED_XP_KEY -> store.setString(PrefsStore.XP_CELEBRATED, value)
                 XpStore.REKEYED_KEY -> store.setString(PrefsStore.XP_REKEYED, value)
                 XpStore.RECOMPUTED_KEY -> store.setString(PrefsStore.XP_RECOMPUTED, value)
             }
         }
+    }
+
+    /**
+     * Union of two secret-theme CSVs (stored order first, then any new
+     * ids in incoming order). Secrets are append-only — there is no
+     * removal path — so a union can never lose an unlock.
+     */
+    private fun unionSecretCsv(stored: String, incoming: String): String {
+        val out = ArrayList<String>()
+        for (part in stored.split(',') + incoming.split(',')) {
+            val id = part.trim()
+            if (id.isNotEmpty() && id !in out) out += id
+        }
+        return out.joinToString(",")
     }
 
     /**
@@ -104,15 +159,17 @@ class PrefsStoreRankPrefs(
         cache[XpStore.LEDGER_KEY] = ledgerValue
         cache[XpStore.TOTAL_XP_KEY] = totalValue
         scope.launch {
-            // Explicit Pair: the `to` infix here would otherwise resolve
-            // to DataStore's Key.to(value) (a Preferences.Pair), not a
-            // kotlin.Pair, and mapOf would reject it.
-            store.setStrings(
-                mapOf(
-                    kotlin.Pair(PrefsStore.XP_LEDGER, ledgerValue),
-                    kotlin.Pair(PrefsStore.TOTAL_XP, totalValue)
+            writeMutex.withLock {
+                // Explicit Pair: the `to` infix here would otherwise resolve
+                // to DataStore's Key.to(value) (a Preferences.Pair), not a
+                // kotlin.Pair, and mapOf would reject it.
+                store.setStrings(
+                    mapOf(
+                        kotlin.Pair(PrefsStore.XP_LEDGER, ledgerValue),
+                        kotlin.Pair(PrefsStore.TOTAL_XP, totalValue)
+                    )
                 )
-            )
+            }
         }
     }
 }

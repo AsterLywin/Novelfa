@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,8 +31,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
@@ -112,6 +114,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -415,6 +418,130 @@ private fun PdfSearchHighlightOverlay(
                     (r.bottom - r.top) * sy
                 )
             )
+        }
+    }
+}
+
+/**
+ * PDF search overlay, extracted from [NativeImageBookViewer] so the
+ * inset regression test can render it alone (and so the viewer body
+ * stays readable). Pure UI: every state lives in the caller, this
+ * only lays it out. The Column carries `.windowInsetsPadding()` on
+ * [statusBarInsets] — without it the bar's top hid under the status
+ * bar on edge-to-edge devices (fixed 2026-11-25) — and the field
+ * Row carries the `pdfSearchBar` test tag the inset test measures;
+ * both are inert at runtime. [statusBarInsets] defaults to the real
+ * status bars; the test passes a fake 24dp inset instead, because
+ * Robolectric's window reports 0 insets and no injected value ever
+ * reaches the composition there (proven 2026-11-25).
+ *
+ * Behaviour (from task 4b): the bar paints above the top bar and
+ * swallows its own taps like the chrome bars, so a tap on it never
+ * reaches the page. The field is gated on the searcher: it only
+ * ever opens when available, and the enabled flags are the second
+ * gate. Prev/next clamp at the ends (no wrap); the count reads
+ * "N of M" while there are hits and "No match" once a search ran
+ * with none.
+ */
+@Composable
+internal fun PdfSearchOverlay(
+    searchOpen: Boolean,
+    searchQuery: String,
+    onQueryChange: (String) -> Unit,
+    searchResult: PdfSearchState,
+    searchRan: Boolean,
+    searchAvailable: Boolean,
+    searchBusy: Boolean,
+    chromeTapSource: MutableInteractionSource,
+    onRunSearch: () -> Unit,
+    onClearAndClose: () -> Unit,
+    onStep: (Int) -> Unit,
+    statusBarInsets: WindowInsets = WindowInsets.statusBars,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter
+    ) {
+        AnimatedVisibility(
+            visible = searchOpen,
+            modifier = Modifier.fillMaxWidth()
+                .clickable(interactionSource = chromeTapSource, indication = null) {},
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    // Status-bar inset (2026-11-25): this overlay
+                    // is a raw Column, not a TopAppBar, and the
+                    // activity is edge-to-edge — without the
+                    // inset its top ~16dp hid under the status
+                    // bar. The inset is 0 while the bars are
+                    // hidden, so fullscreen layout is unchanged.
+                    .windowInsetsPadding(statusBarInsets)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
+                    .padding(8.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.testTag("pdfSearchBar")
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = onQueryChange,
+                        singleLine = true,
+                        enabled = searchAvailable,
+                        placeholder = { Text(stringResource(R.string.search_hint)) },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(
+                            onSearch = { onRunSearch() }
+                        )
+                    )
+                    IconButton(
+                        onClick = { onRunSearch() },
+                        enabled = searchAvailable
+                    ) {
+                        AppIcon(AppIconKind.Search, tint = LocalContentColor.current, size = 18.dp)
+                    }
+                    IconButton(onClick = { onClearAndClose() }) {
+                        AppIcon(AppIconKind.Close, tint = LocalContentColor.current, size = 16.dp)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (searchResult.count > 0) {
+                            stringResource(
+                                R.string.search_count,
+                                searchResult.index + 1, searchResult.count
+                            )
+                        } else if (searchRan) {
+                            stringResource(R.string.search_no_match)
+                        } else {
+                            ""
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = { onStep(-1) },
+                        enabled = searchResult.index > 0
+                    ) {
+                        Text(stringResource(R.string.search_prev))
+                    }
+                    TextButton(
+                        onClick = { onStep(1) },
+                        enabled = searchResult.index >= 0 &&
+                            searchResult.index < searchResult.count - 1
+                    ) {
+                        Text(stringResource(R.string.search_next))
+                    }
+                }
+                if (searchBusy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
         }
     }
 }
@@ -2309,109 +2436,30 @@ internal fun NativeImageBookViewer(
                     }
                 }
         }
-        // PDF search bar (task 4b): the text reader's bar in
-        // ReaderScreen, as an overlay at the top of the reading
-        // area, so it works in fullscreen too once opened. It
-        // paints above the top bar (it is a later child of this
-        // outer Box) and swallows its own taps like the chrome
-        // bars, so a tap on the bar never reaches the page. The
-        // field is gated on the searcher: it only ever opens
-        // when available, and the enabled flags below are the
-        // second gate. Prev/next clamp at the ends (no wrap);
-        // the count reads "N of M" while there are hits and
-        // "No match" once a search ran with none.
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.TopCenter
-        ) {
-            AnimatedVisibility(
-                visible = searchOpen,
-                modifier = Modifier.fillMaxWidth()
-                    .clickable(interactionSource = chromeTapSource, indication = null) {},
-                enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                        // Status-bar inset (2026-11-25): this overlay
-                        // is a raw Column, not a TopAppBar, and the
-                        // activity is edge-to-edge — without the
-                        // inset its top ~16dp hid under the status
-                        // bar. The inset is 0 while the bars are
-                        // hidden, so fullscreen layout is unchanged.
-                        .statusBarsPadding()
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
-                        .padding(8.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = {
-                                searchQuery = it
-                                // The shown results belong to the
-                                // old query: clear them while the
-                                // user edits, so the count never
-                                // disagrees with the field.
-                                if (pdfSearch.count > 0 || pdfSearchRan) {
-                                    pdfSearch = PdfSearchState(emptyList())
-                                    pdfSearchRan = false
-                                }
-                            },
-                            singleLine = true,
-                            enabled = pdfSearchAvailable,
-                            placeholder = { Text(stringResource(R.string.search_hint)) },
-                            modifier = Modifier.weight(1f),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(
-                                onSearch = { runPdfSearch() }
-                            )
-                        )
-                        IconButton(
-                            onClick = { runPdfSearch() },
-                            enabled = pdfSearchAvailable
-                        ) {
-                            AppIcon(AppIconKind.Search, tint = LocalContentColor.current, size = 18.dp)
-                        }
-                        IconButton(onClick = { clearPdfSearch(); searchOpen = false }) {
-                            AppIcon(AppIconKind.Close, tint = LocalContentColor.current, size = 16.dp)
-                        }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = if (pdfSearch.count > 0) {
-                                stringResource(
-                                    R.string.search_count,
-                                    pdfSearch.index + 1, pdfSearch.count
-                                )
-                            } else if (pdfSearchRan) {
-                                stringResource(R.string.search_no_match)
-                            } else {
-                                ""
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f)
-                        )
-                        TextButton(
-                            onClick = { stepPdfSearch(-1) },
-                            enabled = pdfSearch.index > 0
-                        ) {
-                            Text(stringResource(R.string.search_prev))
-                        }
-                        TextButton(
-                            onClick = { stepPdfSearch(1) },
-                            enabled = pdfSearch.index >= 0 &&
-                                pdfSearch.index < pdfSearch.count - 1
-                        ) {
-                            Text(stringResource(R.string.search_next))
-                        }
-                    }
-                    if (pdfSearchBusy) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
+        // PDF search bar (task 4b): extracted to PdfSearchOverlay
+        // above so the inset regression test can render it alone.
+        PdfSearchOverlay(
+            searchOpen = searchOpen,
+            searchQuery = searchQuery,
+            onQueryChange = {
+                searchQuery = it
+                // The shown results belong to the old query: clear
+                // them while the user edits, so the count never
+                // disagrees with the field.
+                if (pdfSearch.count > 0 || pdfSearchRan) {
+                    pdfSearch = PdfSearchState(emptyList())
+                    pdfSearchRan = false
                 }
-            }
-        }
+            },
+            searchResult = pdfSearch,
+            searchRan = pdfSearchRan,
+            searchAvailable = pdfSearchAvailable,
+            searchBusy = pdfSearchBusy,
+            chromeTapSource = chromeTapSource,
+            onRunSearch = { runPdfSearch() },
+            onClearAndClose = { clearPdfSearch(); searchOpen = false },
+            onStep = { stepPdfSearch(it) }
+        )
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.BottomCenter

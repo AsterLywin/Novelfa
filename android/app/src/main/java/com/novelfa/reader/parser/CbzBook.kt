@@ -778,7 +778,12 @@ object CbzBook {
         if (pages.isEmpty()) return emptyList()
         val parents = pages.map { it.substringBeforeLast('/', "") }
         val foldered = parents.filter { it.isNotEmpty() }
-        val common: List<String> = if (foldered.isNotEmpty() && foldered.size == parents.size) {
+        // The shared prefix is computed over the FOLDERED pages only:
+        // a root-level page (a cover) must not disable the strip —
+        // otherwise "Series/Ch 01" and "Series/Ch 02" collapse into
+        // one chapter called "Series", the exact outcome the strip
+        // exists to prevent. Root pages still belong to no chapter.
+        val common: List<String> = if (foldered.isNotEmpty()) {
             foldered.map { it.split('/') }.reduce { acc, parts ->
                 acc.zip(parts).takeWhile { (a, b) -> a == b }.map { it.first }
             }

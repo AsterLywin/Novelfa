@@ -914,9 +914,13 @@ class BackupService(
             // against current private books AND the confidential
             // deleted-private hash list.
             val recordStore = ReadingRecordStore.getInstance(context)
-            recordStore.mergeAll(
-                filterPrivateRecords(preview.records, privateKeys.hashes, privateKeys.epubIds)
+            // The filtered list is the one the store actually receives
+            // — count "kept" over it too, so private records (never
+            // stored) are not reported as kept.
+            val keptRecords = filterPrivateRecords(
+                preview.records, privateKeys.hashes, privateKeys.epubIds
             )
+            recordStore.mergeAll(keptRecords)
             var recordsApplied = 0
             val matchedKeys = mutableSetOf<String>()
             if (preview.records.isNotEmpty()) {
@@ -953,7 +957,7 @@ class BackupService(
                     }
                 }
             }
-            val recordsKept = preview.records.count { rec ->
+            val recordsKept = keptRecords.count { rec ->
                 (rec.sha256.isBlank() || rec.sha256 !in matchedKeys) &&
                     (rec.epubId.isBlank() || rec.epubId !in matchedKeys)
             }
