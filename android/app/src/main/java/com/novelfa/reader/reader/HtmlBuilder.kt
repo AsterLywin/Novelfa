@@ -140,8 +140,13 @@ object HtmlBuilder {
         // [data-rdr="l"] by HtmlText) still indents correctly even
         // inside an RTL list.
         sb.append("ul,ol{margin:0.5em 0;padding-inline-start:1.6em;padding-left:0;padding-right:0;}")
-        sb.append("li{margin:0.25em 0;}")
-        sb.append("li>ul,li>ol{margin:0.25em 0;}")
+        // Windows parity: the Windows reader's bare <li> items sit
+        // tight with no gap between them. The 0.25em item margin made
+        // every Markdown list look gappy next to Windows even after
+        // the <p> unwrap (2026-11-26 follow-up: Aster still saw list
+        // spacing wrong on the phone with the unwrap in place).
+        sb.append("li{margin:0;}")
+        sb.append("li>ul,li>ol{margin:0;}")
         // GFM task list ([ ] / [x]): flexmark's TaskListExtension
         // renders <li class="task-list-item"><input type="checkbox"
         // disabled ...>. The bare native checkbox is a tiny OS widget
