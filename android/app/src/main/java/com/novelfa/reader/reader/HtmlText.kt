@@ -255,6 +255,46 @@ object HtmlText {
         return if (latin > rtl) 1 else 2
     }
 
+    /**
+     * Windows parity (MainWindow.DetectParagraphDirection, d2850b8b):
+     * the first strong letter wins unless the other script outnumbers
+     * it 4:1, biased toward the chapter direction. Plain majority
+     * ([detectDirection]) stays for the chapter-level attribute.
+     * 0 = no letters, 1 = LTR, 2 = RTL.
+     */
+    fun detectParagraphDirection(text: String, chapterIsRtl: Boolean): Int {
+        var latin = 0
+        var rtl = 0
+        var firstStrong = 0
+        for (c in text) {
+            if ((c in 'A'..'Z') || (c in 'a'..'z') ||
+                (c in 0x00C0.toChar()..0x024F.toChar() &&
+                    c != 0x00D7.toChar() && c != 0x00F7.toChar())
+            ) {
+                latin++
+                if (firstStrong == 0) firstStrong = 1
+            } else if ((c in 0x0590.toChar()..0x08FF.toChar()) ||
+                (c in 0xFB1D.toChar()..0xFDFF.toChar()) ||
+                (c in 0xFE70.toChar()..0xFEFF.toChar())
+            ) {
+                rtl++
+                if (firstStrong == 0) firstStrong = 2
+            }
+        }
+        if (latin == 0 && rtl == 0) {
+            return 0
+        }
+        return if (chapterIsRtl) {
+            if (rtl == 0) 1
+            else if (firstStrong == 2) 2
+            else if (latin >= rtl * 4) 1 else 2
+        } else {
+            if (latin == 0) 2
+            else if (firstStrong == 1) 1
+            else if (rtl >= latin * 4) 2 else 1
+        }
+    }
+
     fun chapterDirAttr(bodyHtml: String): String {
         return if (detectDirection(htmlToPlainText(bodyHtml)) == 1) {
             " dir=\"ltr\" data-rdr=\"l\""
@@ -268,8 +308,8 @@ object HtmlText {
         RegexOption.IGNORE_CASE
     )
 
-    private fun stamp(tag: String, attrs: String, inner: String, full: String): String {
-        val d = detectDirection(htmlToPlainText(inner))
+    private fun stamp(tag: String, attrs: String, inner: String, full: String, chapterIsRtl: Boolean): String {
+        val d = detectParagraphDirection(htmlToPlainText(inner), chapterIsRtl)
         if (d == 0) {
             return full
         }
@@ -279,23 +319,26 @@ object HtmlText {
     }
 
     fun applyTextDirection(body: String): String {
+        // The chapter direction biases every paragraph (Windows:
+        // ApplyTextDirection computes it once from the whole body).
+        val chapterIsRtl = detectDirection(htmlToPlainText(body)) != 1
         var b = Regex(
             "<(p|h[1-6]|dd|dt|figcaption|caption)\\b([^>]*?)(?<!/)>([\\s\\S]*?)</\\1\\s*>",
             RegexOption.IGNORE_CASE
         ).replace(body) { m ->
-            stamp(m.groupValues[1], m.groupValues[2], m.groupValues[3], m.value)
+            stamp(m.groupValues[1], m.groupValues[2], m.groupValues[3], m.value, chapterIsRtl)
         }
         b = Regex(
             "<(div)\\b([^>]*?)(?<!/)>((?:(?!<div\\b|</div|<p\\b|<h[1-6]\\b|<ul\\b|<ol\\b|<table\\b|<blockquote\\b)[\\s\\S])*?)</div\\s*>",
             RegexOption.IGNORE_CASE
         ).replace(b) { m ->
-            stamp(m.groupValues[1], m.groupValues[2], m.groupValues[3], m.value)
+            stamp(m.groupValues[1], m.groupValues[2], m.groupValues[3], m.value, chapterIsRtl)
         }
         b = Regex(
             "<(ul|ol|blockquote)\\b([^>]*?)(?<!/)>([\\s\\S]*?)</\\1\\s*>",
             RegexOption.IGNORE_CASE
         ).replace(b) { m ->
-            stamp(m.groupValues[1], m.groupValues[2], m.groupValues[3], m.value)
+            stamp(m.groupValues[1], m.groupValues[2], m.groupValues[3], m.value, chapterIsRtl)
         }
         return b
     }
@@ -318,7 +361,7 @@ object HtmlText {
      * says so, instead of navigating away. EPUB chapters are the
      * book's own XHTML, so the mark is a heuristic — the href
      * fragment looks like a footnote id (fn1, footnote-2, ch1-fn3,
-     * note_4, endnote1), or the link carries epub:type="noteref",
+     * note_4, endnote1, ftn1, f1, n1), or the link carries epub:type="noteref",
      * or its class names a footnote. DOCX references are marked
      * deterministically by the parser instead (data-novelfa-footnote
      * is already on them; an existing mark is never doubled). The
@@ -357,9 +400,9 @@ object HtmlText {
         }
     }
 
-    /** A footnote-id fragment: fn1, footnote-2, ch1-fn3, note_4, endnote1. */
+    /** A footnote-id fragment: fn1, footnote-2, ch1-fn3, note_4, endnote1, ftn1, f1, n1. */
     private val FOOTNOTE_FRAG = Regex(
-        "(?:^|[-_.])(?:fn|footnote|note|endnote)[-_]?[0-9]+[a-z]?$",
+        "(?:^|[-_.])(?:fn|footnote|note|endnote|ftn|f|n)[-_]?[0-9]+[a-z]?$",
         RegexOption.IGNORE_CASE
     )
 

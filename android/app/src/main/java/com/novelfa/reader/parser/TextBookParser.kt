@@ -55,22 +55,15 @@ object TextBookParser {
         // followed by a blank line, in a document that has more to say.
         // Anything else keeps the file name (the EPUB parser's fallback).
         // Windows parity: the Windows reader claims such a line as the
-        // title unconditionally. Android additionally needs evidence it
-        // IS a title page — either the next block is a heading (the
-        // title-page shape: "My Book" then "فصل ۱") or the line repeats
-        // the file's own name — so a short opening line that is neither
-        // (a dedication, "به نام خدا", a one-line opening) is never
-        // silently deleted from the text: it stays in the body and the
-        // filename is the title.
+        // title unconditionally, so Android does too — the line becomes
+        // the book title and leaves the body (a dedication line like
+        // "به نام خدا" therefore shows as the title, exactly as on
+        // Windows, instead of staying in the body as a paragraph).
         var title = File(fileName).nameWithoutExtension
         var bodyBlocks = blocks
         val first = blocks.first()
-        val titleEvidence = blocks.getOrNull(1)?.let { isHeading(it) } == true ||
-            normalizeTitle(first).equals(
-                normalizeTitle(File(fileName).nameWithoutExtension), ignoreCase = true
-            )
         if (blocks.size >= 3 && first.lines().size == 1 && first.length <= 60 &&
-            first.last() !in ".!؟?،؛:" && !isHeading(first) && titleEvidence
+            first.last() !in ".!؟?،؛:" && !isHeading(first)
         ) {
             title = first.trim()
             bodyBlocks = blocks.drop(1)
@@ -189,10 +182,6 @@ object TextBookParser {
             String(bytes, java.nio.charset.Charset.forName("windows-1252"))
         }.getOrDefault(String(bytes, Charsets.UTF_8))
     }
-
-    /** Persian/Arabic letter variants, so a file named with ي/ك still matches its title line. */
-    private fun normalizeTitle(s: String) =
-        s.trim().replace('ي', 'ی').replace('ك', 'ک')
 
     /** Blank-line paragraphs; with no blank lines, every line is one. */
     private fun splitParagraphs(text: String): List<String> {
@@ -371,6 +360,11 @@ private fun renderMarkdown(raw: String): Pair<String?, List<Pair<String?, String
  */
 private fun finishMarkdownHtml(html: String): String {
     var out = html.replace("\n</code>", "</code>")
+    // Windows parity (TextBookParser.cs MdParser): a loose list item is
+    // a bare <li> — flexmark wraps it in <p>, which adds paragraph
+    // margins between items. Unwrap a single <p> inside an <li>; the
+    // tempered group keeps a multi-paragraph item untouched.
+    out = Regex("<li>\\s*<p>((?:(?!</p>)[\\s\\S])*)</p>\\s*</li>").replace(out, "<li>$1</li>")
     out = Regex("<img\\s[^>]*>").replace(out) { m ->
         val tag = m.value
         val src = Regex("src=\"([^\"]*)\"").find(tag)?.groupValues?.get(1) ?: ""

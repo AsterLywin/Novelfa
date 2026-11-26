@@ -1,6 +1,7 @@
 package com.novelfa.reader.parser
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -27,17 +28,20 @@ class TextBookParserTest {
     }
 
     @Test
-    fun txt_shortFirstLineBeforeBody_isKeptNotDroppedAsTitle() {
+    fun txt_shortFirstLineBeforeBody_isTitleLikeWindows() {
         val text = "به مادرم\n\nداستان از اینجا شروع می‌شود.\n\nادامه‌ی داستان.\n"
         val out = tempFolder.newFolder("out-ded")
         val book = TextBookParser.parseText(
             text.toByteArray(Charsets.UTF_8), "story.txt", out, ::fallback
         )
-        // The dedication line is NOT a title page (no heading follows
-        // it), so it must stay in the body, not vanish as a "title".
+        // Windows parity (2026-11-26): the Windows reader claims a
+        // short first line as the title unconditionally — the
+        // dedication line becomes the title and leaves the body,
+        // exactly as on Windows. (This supersedes the old guard that
+        // kept such a line in the body.)
+        assertEquals("به مادرم", book.title)
         val body = book.chapters.joinToString("") { it.file.readText() }
-        assertTrue(body.contains("به مادرم"))
-        assertEquals("story", book.title)
+        assertFalse(body.contains("به مادرم"))
     }
 
     @Test

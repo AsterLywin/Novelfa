@@ -477,7 +477,7 @@ class PrefsStore(private val context: Context) {
     }
 
     suspend fun getFootnoteDisplay(): String =
-        context.dataStore.data.map { it[FOOTNOTE_DISPLAY] ?: "navigate" }.first()
+        context.dataStore.data.map { it[FOOTNOTE_DISPLAY] ?: "popup" }.first()
 
     suspend fun setFootnoteDisplay(value: String) {
         context.dataStore.edit { it[FOOTNOTE_DISPLAY] = value }

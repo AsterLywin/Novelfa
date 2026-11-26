@@ -950,6 +950,7 @@ fun ReaderScreen(
     val pagerFailedMsg = stringResource(R.string.pager_failed)
     val fontMissingMsg = stringResource(R.string.reader_font_missing)
     val linkTargetMsg = stringResource(R.string.link_target_not_found)
+    val footnoteMissingMsg = stringResource(R.string.footnote_not_found)
     val copiedMsg = stringResource(R.string.copied)
     val highlightRemoveMsg = stringResource(R.string.highlight_remove)
     val imageSavedTemplate = stringResource(R.string.image_saved)
@@ -1543,6 +1544,12 @@ fun ReaderScreen(
     suspend fun handleFootnoteTap(v: ReaderViewModel, href: String, chap: Int, label: String, tap: Offset) {
         val note = v.footnoteFor(href, chap, label)
         if (note == null) {
+            // The tap was on a marked footnote link but the note could
+            // not be found: say so instead of silently navigating, or
+            // the miss looks exactly like "the popup is broken". The
+            // jump still runs as a fallback — the note may be visible
+            // at the destination.
+            snackbar.showSnackbar(footnoteMissingMsg)
             handleInBookLink(v, href, chap)
             return
         }
@@ -3748,14 +3755,14 @@ fun ReaderScreen(
                     scope.launch {
                         try {
                             v.applySpacing(1.8, 24, 0.0)
-                            if (v.footnotePopup) {
-                                applyFootnoteDisplay(v, false)
-                            } else {
-                                webView?.updateSpacingJs(v.spacingCss())
-                                webView?.updatePagedStyleJs(v.pagedCss())
-                                pageHtml = v.html
-                                rev++
-                            }
+                            // A spacing reset must not touch the footnote
+                            // mode: it used to silently turn the popup
+                            // off (and persist "navigate"), which looked
+                            // exactly like "the popup stopped working".
+                            webView?.updateSpacingJs(v.spacingCss())
+                            webView?.updatePagedStyleJs(v.pagedCss())
+                            pageHtml = v.html
+                            rev++
                         } finally {
                             spacingOpen = false
                         }

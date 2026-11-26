@@ -152,7 +152,11 @@ internal fun LazyGridScope.libraryHeaderSpan(
     onQuery: (String) -> Unit,
     useFileNameTitle: Boolean = false
 ) {
-    item(span = { GridItemSpan(maxLineSpan) }) {
+    // Stable keys on every header item: the hero item is conditional
+    // (it vanishes while the user types a query), and without keys
+    // the items below it shift index and Compose disposes the focused
+    // search field — which hides the keyboard on the first keystroke.
+    item(key = "profile", span = { GridItemSpan(maxLineSpan) }) {
         ProfileHeader(
             name = profileName.ifBlank { "…" },
             rankTitle = rankTitle,
@@ -167,14 +171,14 @@ internal fun LazyGridScope.libraryHeaderSpan(
             onRankClick = onRankClick
         )
     }
-    item(span = { GridItemSpan(maxLineSpan) }) {
+    item(key = "greeting", span = { GridItemSpan(maxLineSpan) }) {
         GreetingHeader()
     }
-    item(span = { GridItemSpan(maxLineSpan) }) {
+    item(key = "stats", span = { GridItemSpan(maxLineSpan) }) {
         StatsStrip(total = total, reading = reading, done = done, fav = fav, onPick = onTab)
     }
     if (hero != null) {
-        item(span = { GridItemSpan(maxLineSpan) }) {
+        item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
             HeroCard(
                 book = hero,
                 title = displayTitle(hero, allBooks, useFileNameTitle),
@@ -182,13 +186,13 @@ internal fun LazyGridScope.libraryHeaderSpan(
             )
         }
     }
-    item(span = { GridItemSpan(maxLineSpan) }) {
+    item(key = "sort", span = { GridItemSpan(maxLineSpan) }) {
         SortViewRow(sort = sort, onSort = onSort, gridView = gridView, onView = onView)
     }
-    item(span = { GridItemSpan(maxLineSpan) }) {
+    item(key = "tabs", span = { GridItemSpan(maxLineSpan) }) {
         LibraryTabs(tab = tab, onTab = onTab)
     }
-    item(span = { GridItemSpan(maxLineSpan) }) {
+    item(key = "search", span = { GridItemSpan(maxLineSpan) }) {
         OutlinedTextField(
             value = query,
             onValueChange = onQuery,
@@ -228,7 +232,10 @@ internal fun LazyListScope.libraryHeaderList(
     onQuery: (String) -> Unit,
     useFileNameTitle: Boolean = false
 ) {
-    item {
+    // Stable keys on every header item (see the grid variant above:
+    // the conditional hero item must not shift the search field's
+    // index, or the first keystroke disposes it and hides the keyboard).
+    item(key = "profile") {
         ProfileHeader(
             name = profileName.ifBlank { "…" },
             rankTitle = rankTitle,
@@ -243,12 +250,12 @@ internal fun LazyListScope.libraryHeaderList(
             onRankClick = onRankClick
         )
     }
-    item {
+    item(key = "greeting") {
         GreetingHeader()
     }
-    item { StatsStrip(total = total, reading = reading, done = done, fav = fav, onPick = onTab) }
+    item(key = "stats") { StatsStrip(total = total, reading = reading, done = done, fav = fav, onPick = onTab) }
     if (hero != null) {
-        item {
+        item(key = "hero") {
             HeroCard(
                 book = hero,
                 title = displayTitle(hero, allBooks, useFileNameTitle),
@@ -256,11 +263,11 @@ internal fun LazyListScope.libraryHeaderList(
             )
         }
     }
-    item {
+    item(key = "sort") {
         SortViewRow(sort = sort, onSort = onSort, gridView = gridView, onView = onView)
     }
-    item { LibraryTabs(tab = tab, onTab = onTab) }
-    item {
+    item(key = "tabs") { LibraryTabs(tab = tab, onTab = onTab) }
+    item(key = "search") {
         OutlinedTextField(
             value = query,
             onValueChange = onQuery,
